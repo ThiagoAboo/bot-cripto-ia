@@ -836,8 +836,3 @@ WS     /ws/training/{sessionId}
 | G7 | WebSocket fallback        | Polling se WebSocket indisponível            |
 | G8 | SOLID                     | Arquitetura baseada nos princípios SOLID     |
 | G9 | Testabilidade             | Código preparado para testes unitários       |
-
-
-================================================================================
-FIM DA DOCUMENTAÇÃO
-================================================================================
