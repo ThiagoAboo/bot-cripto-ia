@@ -1,4 +1,3 @@
-import { apiClient } from '../../../shared/services/api.client'
 import type {
   TotalBalance,
   CurrencyBalance,
@@ -89,7 +88,7 @@ const mockBotsStatus: BotStatus[] = [
     id: 'bot1', 
     name: 'Scalper V2', 
     strategy: 'Scalper',
-    description: 'Operações rápidas com pequenos lucros. Analisa volatilidade de curto prazo.',
+    description: 'Operações rápidas com pequenos lucros.',
     currentPair: 'BTC/USDT',
     status: 'online', 
     isPaused: false,
@@ -101,7 +100,7 @@ const mockBotsStatus: BotStatus[] = [
     id: 'bot2', 
     name: 'Momentum Trader', 
     strategy: 'Momentum',
-    description: 'Identifica moedas com forte momentum de alta/baixa.',
+    description: 'Identifica moedas com forte momentum.',
     currentPair: 'ETH/USDT',
     status: 'online', 
     isPaused: true,
@@ -125,7 +124,7 @@ const mockBotsStatus: BotStatus[] = [
     id: 'bot4', 
     name: 'Arbitrage Hunter', 
     strategy: 'Arbitrage',
-    description: 'Identifica oportunidades de arbitragem entre pares.',
+    description: 'Identifica oportunidades de arbitragem.',
     currentPair: 'ADA/USDT',
     status: 'error', 
     isPaused: false,
@@ -185,13 +184,13 @@ export const dashboardService = {
     })
   },
 
-  async pauseBot(botId: string): Promise<void> {
+  async pauseBot(_botId: string): Promise<void> {
     return new Promise((resolve) => {
       setTimeout(() => resolve(), MOCK_DELAY)
     })
   },
 
-  async resumeBot(botId: string): Promise<void> {
+  async resumeBot(_botId: string): Promise<void> {
     return new Promise((resolve) => {
       setTimeout(() => resolve(), MOCK_DELAY)
     })

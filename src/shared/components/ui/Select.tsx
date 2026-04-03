@@ -5,8 +5,8 @@ import { cn } from '../../utils/formatters'
 interface SelectContextType {
   open: boolean
   setOpen: (open: boolean) => void
-  value: string
-  setValue: (value: string) => void
+  selectedValue: string
+  setSelectedValue: (value: string) => void
 }
 
 const SelectContext = createContext<SelectContextType | undefined>(undefined)
@@ -21,7 +21,7 @@ export function Select({ children, value, onValueChange }: SelectProps) {
   const [open, setOpen] = useState(false)
 
   return (
-    <SelectContext.Provider value={{ open, setOpen, value, setValue: onValueChange }}>
+    <SelectContext.Provider value={{ open, setOpen, selectedValue: value, setSelectedValue: onValueChange }}>
       <div className="relative">{children}</div>
     </SelectContext.Provider>
   )
@@ -36,7 +36,7 @@ export function SelectTrigger({ children, className }: SelectTriggerProps) {
   const context = useContext(SelectContext)
   if (!context) throw new Error('SelectTrigger must be used within Select')
 
-  const { open, setOpen, value } = context
+  const { open, setOpen } = context
 
   return (
     <button
@@ -63,9 +63,9 @@ export function SelectValue({ placeholder }: SelectValueProps) {
   const context = useContext(SelectContext)
   if (!context) throw new Error('SelectValue must be used within Select')
 
-  const { value } = context
+  const { selectedValue } = context
 
-  return <span className={cn(!value && 'text-gray-500')}>{value || placeholder}</span>
+  return <span className={cn(!selectedValue && 'text-gray-500')}>{selectedValue || placeholder}</span>
 }
 
 interface SelectContentProps {
@@ -120,14 +120,14 @@ export function SelectItem({ children, value }: SelectItemProps) {
   const context = useContext(SelectContext)
   if (!context) throw new Error('SelectItem must be used within Select')
 
-  const { value: selectedValue, setValue, setOpen } = context
+  const { selectedValue, setSelectedValue, setOpen } = context
   const isSelected = selectedValue === value
 
   return (
     <button
       type="button"
       onClick={() => {
-        setValue(value)
+        setSelectedValue(value)
         setOpen(false)
       }}
       className={cn(

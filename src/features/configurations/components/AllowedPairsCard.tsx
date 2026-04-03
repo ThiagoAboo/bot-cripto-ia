@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '../../../shared/components/ui/Card'
 import { Button } from '../../../shared/components/ui/Button'
 import { Badge } from '../../../shared/components/ui/Badge'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../shared/components/ui/Select'
 import { Search, X, Plus, Coins, ChevronDown } from 'lucide-react'
 import { useAvailablePairs } from '../hooks/useConfigurations'
 import { cn } from '../../../shared/utils/formatters'
@@ -35,7 +34,6 @@ export function AllowedPairsCard({ data, onChange }: AllowedPairsCardProps) {
     setIsDropdownOpen(false)
   }
 
-  // Filtrar moedas disponíveis (excluir as já selecionadas)
   const filteredPairs = availablePairs?.filter(
     (pair) =>
       !data.includes(pair) &&
@@ -92,7 +90,6 @@ export function AllowedPairsCard({ data, onChange }: AllowedPairsCardProps) {
           </label>
           
           <div className="flex gap-2">
-            {/* Select customizado com busca */}
             <div className="relative flex-1">
               <button
                 type="button"
@@ -105,10 +102,8 @@ export function AllowedPairsCard({ data, onChange }: AllowedPairsCardProps) {
                 <ChevronDown className={cn('w-4 h-4 transition-transform', isDropdownOpen && 'rotate-180')} />
               </button>
 
-              {/* Dropdown de moedas */}
               {isDropdownOpen && (
                 <div className="absolute z-50 left-0 right-0 mt-1 rounded-lg border border-dark-400 bg-dark-200 shadow-xl overflow-hidden">
-                  {/* Campo de busca dentro do dropdown */}
                   <div className="p-2 border-b border-dark-400">
                     <div className="relative">
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
@@ -123,7 +118,6 @@ export function AllowedPairsCard({ data, onChange }: AllowedPairsCardProps) {
                     </div>
                   </div>
                   
-                  {/* Lista de moedas */}
                   <div className="max-h-48 overflow-y-auto">
                     {isLoading ? (
                       <div className="p-4 text-center text-gray-500">
@@ -150,11 +144,7 @@ export function AllowedPairsCard({ data, onChange }: AllowedPairsCardProps) {
               )}
             </div>
 
-            <Button
-              onClick={handleAddPair}
-              disabled={!selectedPair}
-              className="shrink-0"
-            >
+            <Button onClick={handleAddPair} disabled={!selectedPair} className="shrink-0">
               <Plus className="w-4 h-4 mr-1" />
               Adicionar
             </Button>
@@ -165,26 +155,14 @@ export function AllowedPairsCard({ data, onChange }: AllowedPairsCardProps) {
           </p>
         </div>
 
-        {/* Botão para selecionar todas */}
         {availablePairs && availablePairs.length > 0 && data.length !== availablePairs.length && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => onChange([...availablePairs])}
-            className="w-full"
-          >
+          <Button variant="outline" size="sm" onClick={() => onChange([...availablePairs])} className="w-full">
             Selecionar todas as moedas
           </Button>
         )}
 
-        {/* Botão para limpar todas */}
         {data.length > 0 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => onChange([])}
-            className="w-full text-error hover:text-error"
-          >
+          <Button variant="ghost" size="sm" onClick={() => onChange([])} className="w-full text-error hover:text-error">
             Limpar todas
           </Button>
         )}

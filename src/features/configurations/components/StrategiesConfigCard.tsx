@@ -3,7 +3,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '../../../shared/compon
 import { Input } from '../../../shared/components/ui/Input'
 import { Label } from '../../../shared/components/ui/Label'
 import { Switch } from '../../../shared/components/ui/Switch'
-import { Button } from '../../../shared/components/ui/Button'
 import { ChevronDown, ChevronRight, Brain, TrendingUp, Activity, Repeat, Target, Zap } from 'lucide-react'
 import { cn } from '../../../shared/utils/formatters'
 import type { StrategyConfig, ScalperParams, MomentumParams, TrendFollowerParams, MeanReversionParams, ArbitrageParams } from '../types/configurations.types'
@@ -42,8 +41,8 @@ export function StrategiesConfigCard({ data, onChange }: StrategiesConfigCardPro
               <Label className="text-xs">Timeframe</Label>
               <select
                 value={scalperParams.timeframe}
-                onChange={(e) => handleParameterChange(strategy.id, { ...scalperParams, timeframe: e.target.value })}
-                className="w-full mt-1 rounded-lg border border-dark-300 bg-dark-300 px-2 py-1 text-sm"
+                onChange={(e) => handleParameterChange(strategy.id, { ...scalperParams, timeframe: e.target.value as '1m' | '5m' | '15m' })}
+                className="w-full mt-1 rounded-lg border border-dark-300 bg-dark-300 px-2 py-1 text-sm text-white"
               >
                 <option value="1m">1 minuto</option>
                 <option value="5m">5 minutos</option>

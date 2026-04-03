@@ -11,12 +11,12 @@ interface RiskManagementCardProps {
 }
 
 export function RiskManagementCard({ data, onChange }: RiskManagementCardProps) {
-  const handleChange = (field: keyof RiskManagement, value: number | string) => {
+  const handleChange = (field: keyof RiskManagement, value: number) => {
     onChange({ ...data, [field]: value })
   }
 
-  const handleUnitChange = (value: 'USDT' | 'percent') => {
-    onChange({ ...data, maxTradeAmountUnit: value })
+  const handleUnitChange = (value: string) => {
+    onChange({ ...data, maxTradeAmountUnit: value as 'USDT' | 'percent' })
   }
 
   return (
@@ -30,7 +30,6 @@ export function RiskManagementCard({ data, onChange }: RiskManagementCardProps) 
       
       <CardContent className="space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Stop Loss */}
           <div className="space-y-2">
             <Label htmlFor="stopLoss" className="flex items-center gap-2">
               <TrendingDown className="w-4 h-4 text-error" />
@@ -50,7 +49,6 @@ export function RiskManagementCard({ data, onChange }: RiskManagementCardProps) 
             </p>
           </div>
 
-          {/* Take Profit */}
           <div className="space-y-2">
             <Label htmlFor="takeProfit" className="flex items-center gap-2">
               <TrendingUp className="w-4 h-4 text-success" />
@@ -72,7 +70,6 @@ export function RiskManagementCard({ data, onChange }: RiskManagementCardProps) 
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Alavancagem */}
           <div className="space-y-2">
             <Label htmlFor="leverage" className="flex items-center gap-2">
               <Gauge className="w-4 h-4 text-warning" />
@@ -92,7 +89,6 @@ export function RiskManagementCard({ data, onChange }: RiskManagementCardProps) 
             </p>
           </div>
 
-          {/* Quantidade máxima por trade */}
           <div className="space-y-2">
             <Label htmlFor="maxTrade" className="flex items-center gap-2">
               <DollarSign className="w-4 h-4 text-primary-500" />
