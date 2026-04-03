@@ -7,16 +7,13 @@ import { RecentTransactionsTable } from './components/RecentTransactionsTable'
 import { BotsStatusList } from './components/BotsStatusList'
 
 export function DashboardPage() {
-  // Dados do dashboard
   const { data: totalBalance, isLoading: isLoadingTotal } = useTotalBalance()
   const { data: currenciesBalance, isLoading: isLoadingCurrencies } = useCurrenciesBalance()
   const { data: recentTransactions, isLoading: isLoadingTransactions } = useRecentTransactions(5)
   const { data: botsStatus, isLoading: isLoadingBots } = useBotsStatus()
   
-  // Performance chart
   const { data: performanceData, isLoading: isLoadingPerformance, selectedPeriod, onPeriodChange } = usePerformanceData('7d')
   
-  // Mutations para controle dos bots
   const { mutate: pauseBot, isPending: isPausing } = usePauseBot()
   const { mutate: resumeBot, isPending: isResuming } = useResumeBot()
   
@@ -25,24 +22,19 @@ export function DashboardPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-white">Dashboard</h1>
-          <p className="text-gray-400 mt-1">Visão geral do portfólio e status dos bots</p>
-        </div>
-        <div className="flex items-center gap-2 text-sm text-gray-500">
-          <div className="w-2 h-2 rounded-full bg-success animate-pulse" />
-          <span>Sistema operacional</span>
-        </div>
+      <div>
+        <h1 className="text-2xl font-bold text-white">Dashboard</h1>
+        <p className="text-gray-400 text-sm mt-1">Visão geral do portfólio e status das estratégias</p>
       </div>
 
-      {/* Cards de Saldo */}
+      {/* Linha 1: Saldo Total + Cards de Moedas */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        <div className="lg:col-span-1">
-          <TotalBalanceCard data={totalBalance} isLoading={isLoadingTotal} />
-        </div>
+        {/* Card Saldo Total */}
+        <TotalBalanceCard data={totalBalance} isLoading={isLoadingTotal} />
+        
+        {/* Cards de Moedas - Grid 3 colunas */}
         <div className="lg:col-span-3">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {isLoadingCurrencies ? (
               <>
                 <CurrencyBalanceCard isLoading={true} />
@@ -51,18 +43,14 @@ export function DashboardPage() {
               </>
             ) : (
               currenciesBalance?.map((currency) => (
-                <CurrencyBalanceCard
-                  key={currency.currency}
-                  data={currency}
-                  isLoading={false}
-                />
+                <CurrencyBalanceCard key={currency.currency} data={currency} isLoading={false} />
               ))
             )}
           </div>
         </div>
       </div>
 
-      {/* Gráfico de Performance */}
+      {/* Linha 2: Gráfico de Performance */}
       <PerformanceChart
         data={performanceData}
         isLoading={isLoadingPerformance}
@@ -70,14 +58,14 @@ export function DashboardPage() {
         onPeriodChange={onPeriodChange}
       />
 
-      {/* Últimas Transações e Status dos Bots */}
+      {/* Linha 3: Últimas Transações + Status das Estratégias */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Últimas Transações */}
         <div className="lg:col-span-2">
-          <RecentTransactionsTable
-            data={recentTransactions}
-            isLoading={isLoadingTransactions}
-          />
+          <RecentTransactionsTable data={recentTransactions} isLoading={isLoadingTransactions} />
         </div>
+        
+        {/* Status das Estratégias */}
         <div className="lg:col-span-1">
           <BotsStatusList
             data={botsStatus}

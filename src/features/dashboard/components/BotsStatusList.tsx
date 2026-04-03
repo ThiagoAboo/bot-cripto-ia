@@ -64,16 +64,9 @@ export function BotsStatusList({
           <CardTitle>Estratégias Ativas</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          {[...Array(4)].map((_, i) => (
+          {[...Array(3)].map((_, i) => (
             <div key={i} className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <Skeleton className="w-10 h-10 rounded-full" />
-                <div>
-                  <Skeleton className="h-4 w-24" />
-                  <Skeleton className="h-3 w-32 mt-1" />
-                </div>
-              </div>
-              <Skeleton className="h-8 w-20" />
+              <Skeleton className="h-12 w-full" />
             </div>
           ))}
         </CardContent>
@@ -109,7 +102,7 @@ export function BotsStatusList({
         </p>
       </CardHeader>
       
-      <CardContent className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
+      <CardContent className="space-y-4 max-h-[500px] overflow-y-auto pr-2">
         {data.map((bot) => {
           const config = statusConfig[bot.status]
           const StatusIcon = config.icon
@@ -122,36 +115,25 @@ export function BotsStatusList({
             <div
               key={bot.id}
               className={cn(
-                'p-3 rounded-lg border transition-all duration-200',
+                'p-4 rounded-lg border transition-all duration-200',
                 config.bg,
                 config.border
               )}
             >
-              {/* Cabeçalho do Bot */}
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3 flex-1">
-                  <div className={cn('w-10 h-10 rounded-full flex items-center justify-center', config.bg)}>
-                    <Bot className={cn('w-5 h-5', config.color)} />
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h4 className="font-medium text-white">{bot.name}</h4>
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-primary-500/20 text-primary-400">
-                        {bot.strategy}
-                      </span>
-                    </div>
-                    <p className="text-xs text-gray-400 mt-0.5">{bot.description}</p>
-                  </div>
+              {/* Nome e Estratégia */}
+              <div className="flex items-start justify-between mb-3">
+                <div>
+                  <h4 className="font-semibold text-white">{bot.name}</h4>
+                  <p className="text-xs text-gray-400 mt-0.5">{bot.description}</p>
                 </div>
                 
-                {/* Botão de Ação */}
+                {/* Botão de ação */}
                 {bot.status === 'online' && (
                   <Button
                     variant={bot.isPaused ? 'primary' : 'secondary'}
                     size="sm"
                     onClick={() => (bot.isPaused ? onResume(bot.id) : onPause(bot.id))}
                     disabled={isMutating}
-                    className="ml-2"
                   >
                     {isMutating ? (
                       <Loader2 className="w-3 h-3 animate-spin" />
@@ -170,34 +152,26 @@ export function BotsStatusList({
                 )}
               </div>
 
-              {/* Status e Informações */}
-              <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1">
-                    {StatusIcon && (
-                      <StatusIcon
-                        className={cn(
-                          'w-3 h-3',
-                          config.color,
-                          bot.status === 'training' && 'animate-spin'
-                        )}
-                      />
-                    )}
+              {/* Status e informações */}
+              <div className="space-y-2 text-sm">
+                {/* Status e moeda */}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <StatusIcon className={cn('w-3 h-3', config.color, bot.status === 'training' && 'animate-spin')} />
                     <span className={cn('font-medium', config.color)}>
                       {config.label}
                       {isOnline && isPaused && ' (Pausado)'}
                     </span>
                   </div>
-                </div>
-                
-                <div className="flex items-center justify-end gap-2">
-                  <span className="text-gray-500">Analisando:</span>
-                  <span className="font-mono text-white">{bot.currentPair || '---'}</span>
+                  <div className="flex items-center gap-1">
+                    <span className="text-gray-500 text-xs">Analisando:</span>
+                    <span className="font-mono text-white text-xs">{bot.currentPair || '---'}</span>
+                  </div>
                 </div>
                 
                 {/* Recomendação */}
                 {bot.status === 'online' && !bot.isPaused && bot.recommendedAction && (
-                  <div className="col-span-2 flex items-center justify-between mt-2 pt-2 border-t border-dark-300">
+                  <div className="flex items-center justify-between pt-2 border-t border-dark-300">
                     <div className="flex items-center gap-2">
                       <div className={cn('px-2 py-0.5 rounded-full flex items-center gap-1', actionConfig[action].bg)}>
                         <ActionIcon className={cn('w-3 h-3', actionConfig[action].color)} />
@@ -206,7 +180,7 @@ export function BotsStatusList({
                         </span>
                       </div>
                       {bot.confidence && (
-                        <span className="text-gray-500">
+                        <span className="text-gray-500 text-xs">
                           Confiança: {bot.confidence}%
                         </span>
                       )}
@@ -219,16 +193,15 @@ export function BotsStatusList({
                   </div>
                 )}
                 
-                {/* Bot offline/error */}
-                {(bot.status === 'offline' || bot.status === 'error') && (
-                  <div className="col-span-2 text-center text-xs text-gray-500 mt-2">
-                    {bot.status === 'offline' ? '⚠️ Desconectado' : '❌ Falha na última execução'}
+                {/* Mensagem de erro/treinamento */}
+                {bot.status === 'error' && (
+                  <div className="text-center text-xs text-error mt-2">
+                    ❌ Falha na última execução
                   </div>
                 )}
                 
-                {/* Bot em treinamento */}
                 {bot.status === 'training' && (
-                  <div className="col-span-2 text-center text-xs text-warning mt-2">
+                  <div className="text-center text-xs text-warning mt-2">
                     🧠 Treinando nova versão da estratégia...
                   </div>
                 )}
