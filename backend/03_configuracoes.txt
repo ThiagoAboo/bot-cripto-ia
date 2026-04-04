@@ -1,0 +1,325 @@
+================================================================================
+TELA: CONFIGURAÇÕES
+================================================================================
+
+-------------------------------------------------------------------------------
+1. API: GET /api/configurations
+-------------------------------------------------------------------------------
+
+Descrição: Carrega todas as configurações do usuário
+
+HEADERS:
+  Authorization: Bearer {token}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "exchangeApiKeys": {
+      "exchange": "binance",
+      "apiKey": "xxxxx",
+      "secretKey": "xxxxx"
+    },
+    "botParameters": {
+      "riskManagement": {
+        "stopLossPercent": 5.0,
+        "takeProfitPercent": 10.0,
+        "leverage": 1,
+        "maxTradeAmount": 1000,
+        "maxTradeAmountUnit": "USDT"
+      },
+      "allowedPairs": ["BTC/USDT", "ETH/USDT", "SOL/USDT"],
+      "fees": {
+        "discountUsdtPercent": 0.075,
+        "discountBnbPercent": 0.075,
+        "minBnbBalance": 0.01
+      },
+      "advanced": {
+        "mode": "spot",
+        "orderType": "market",
+        "slippagePercent": 0.5
+      },
+      "strategies": [
+        {
+          "id": "strategy_scalper",
+          "name": "Scalper V2",
+          "strategyType": "scalper",
+          "isActive": true,
+          "parameters": {
+            "timeframe": "1m",
+            "maxSpread": 0.1,
+            "minVolume": 100000
+          }
+        }
+      ]
+    }
+  }
+}
+
+TABELAS ENVOLVIDAS:
+- Configuration
+
+CAMPOS NA TABELA Configuration (mapeamento):
+
+| Campo Frontend                    | Campo Banco                     |
+|-----------------------------------|---------------------------------|
+| exchangeApiKeys.exchange          | exchange                        |
+| exchangeApiKeys.apiKey            | apiKey                          |
+| exchangeApiKeys.secretKey         | secretKey                       |
+| botParameters.riskManagement.stopLossPercent | stopLossPercent       |
+| botParameters.riskManagement.takeProfitPercent | takeProfitPercent     |
+| botParameters.riskManagement.leverage | leverage                      |
+| botParameters.riskManagement.maxTradeAmount | maxTradeAmount          |
+| botParameters.riskManagement.maxTradeAmountUnit | maxTradeAmountUnit    |
+| botParameters.allowedPairs        | allowedPairs (JSON)             |
+| botParameters.fees.discountUsdtPercent | discountUsdtPercent         |
+| botParameters.fees.discountBnbPercent | discountBnbPercent          |
+| botParameters.fees.minBnbBalance  | minBnbBalance                   |
+| botParameters.advanced.mode       | mode                            |
+| botParameters.advanced.orderType  | orderType                       |
+| botParameters.advanced.slippagePercent | slippagePercent             |
+| botParameters.strategies          | strategies (JSON)               |
+
+-------------------------------------------------------------------------------
+2. API: PUT /api/configurations
+-------------------------------------------------------------------------------
+
+Descrição: Salva todas as configurações do usuário
+
+HEADERS:
+  Authorization: Bearer {token}
+  Content-Type: application/json
+
+REQUEST BODY: (mesma estrutura do GET)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true
+}
+
+RESPONSE (400 - Validação):
+{
+  "success": false,
+  "error": "stopLossPercent deve ser entre 0 e 50"
+}
+
+TABELAS ENVOLVIDAS:
+- Configuration (cria ou atualiza)
+
+CAMPOS ATUALIZADOS:
+- Todos os campos da tabela Configuration
+
+VALIDAÇÕES:
+
+| Campo                    | Validação                                    |
+|--------------------------|----------------------------------------------|
+| stopLossPercent          | 0 < valor ≤ 50                               |
+| takeProfitPercent        | 0 < valor ≤ 100                              |
+| leverage                 | 1 ≤ valor ≤ 125                              |
+| maxTradeAmount           | > 0                                          |
+| discountUsdtPercent      | 0 ≤ valor ≤ 1                                |
+| discountBnbPercent       | 0 ≤ valor ≤ 1                                |
+| minBnbBalance            | ≥ 0                                          |
+| slippagePercent          | 0 ≤ valor ≤ 5                                |
+| allowedPairs             | Array de strings (pares válidos)             |
+| strategies               | Array com estrutura válida                   |
+
+-------------------------------------------------------------------------------
+3. API: POST /api/configurations/test-connection
+-------------------------------------------------------------------------------
+
+Descrição: Testa as credenciais da API com a exchange
+
+HEADERS:
+  Authorization: Bearer {token}
+  Content-Type: application/json
+
+REQUEST BODY:
+{
+  "exchange": "binance",
+  "apiKey": "xxxxx",
+  "secretKey": "xxxxx"
+}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "message": "Conexão estabelecida com sucesso!"
+}
+
+RESPONSE (401 - Falha):
+{
+  "success": false,
+  "message": "Chaves de API inválidas"
+}
+
+TABELAS ENVOLVIDAS:
+- Nenhuma (apenas comunicação com exchange)
+
+FLUXO:
+1. Tentar fazer uma chamada autenticada à exchange (ex: GET /api/v3/account)
+2. Se sucesso, retornar true
+3. Se falha, retornar false com mensagem de erro
+
+-------------------------------------------------------------------------------
+4. API: GET /api/exchange/pairs
+-------------------------------------------------------------------------------
+
+Descrição: Retorna lista de pares disponíveis na exchange
+
+HEADERS:
+  Authorization: Bearer {token}
+
+QUERY PARAMS:
+  quoteAsset: string (opcional, padrão: 'USDT')
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": [
+    "BTC/USDT",
+    "ETH/USDT",
+    "SOL/USDT",
+    "BNB/USDT",
+    "XRP/USDT",
+    "DOGE/USDT",
+    "ADA/USDT",
+    "AVAX/USDT",
+    "DOT/USDT",
+    "LINK/USDT"
+  ]
+}
+
+TABELAS ENVOLVIDAS:
+- Nenhuma (dados da exchange)
+
+OBSERVAÇÃO: Pode ser cacheadado por 5 minutos para evitar chamadas excessivas
+
+-------------------------------------------------------------------------------
+5. MODELO DE DADOS - Configuration
+-------------------------------------------------------------------------------
+
+TABELA: Configuration
+
+CAMPO                    | TIPO    | OBRIG | DESCRIÇÃO
+-------------------------|---------|-------|----------------------------------
+id                       | String  | Sim   | UUID - Chave primária
+userId                   | String  | Sim   | FK para User (unique)
+exchange                 | String  | Sim   | binance/kucoin/bybit
+apiKey                   | String  | Sim   | Chave da API (criptografada)
+secretKey                | String  | Sim   | Chave secreta (criptografada)
+stopLossPercent          | Float   | Sim   | Stop-loss percentual
+takeProfitPercent        | Float   | Sim   | Take-profit percentual
+leverage                 | Int     | Sim   | Alavancagem (1-125)
+maxTradeAmount           | Float   | Sim   | Valor máximo por trade
+maxTradeAmountUnit       | String  | Sim   | USDT ou percent
+allowedPairs             | String  | Sim   | JSON array
+discountUsdtPercent      | Float   | Sim   | Desconto USDT
+discountBnbPercent       | Float   | Sim   | Desconto BNB
+minBnbBalance            | Float   | Sim   | Saldo mínimo BNB
+mode                     | String  | Sim   | spot/futures
+orderType                | String  | Sim   | market/limit
+slippagePercent          | Float   | Sim   | Slippage percentual
+strategies               | String  | Sim   | JSON array
+createdAt                | DateTime| Sim   | Data criação
+updatedAt                | DateTime| Sim   | Data atualização
+
+EXEMPLO DE REGISTRO:
+
+{
+  "id": "cfg_001",
+  "userId": "user_001",
+  "exchange": "binance",
+  "apiKey": "encrypted_key_here",
+  "secretKey": "encrypted_secret_here",
+  "stopLossPercent": 5.0,
+  "takeProfitPercent": 10.0,
+  "leverage": 1,
+  "maxTradeAmount": 1000,
+  "maxTradeAmountUnit": "USDT",
+  "allowedPairs": "[\"BTC/USDT\",\"ETH/USDT\"]",
+  "discountUsdtPercent": 0.075,
+  "discountBnbPercent": 0.075,
+  "minBnbBalance": 0.01,
+  "mode": "spot",
+  "orderType": "market",
+  "slippagePercent": 0.5,
+  "strategies": "[{\"id\":\"strategy_scalper\",\"name\":\"Scalper V2\",\"isActive\":true}]",
+  "createdAt": "2024-01-01T00:00:00Z",
+  "updatedAt": "2024-01-15T10:30:00Z"
+}
+
+-------------------------------------------------------------------------------
+6. ESTRUTURA DO JSON strategies
+-------------------------------------------------------------------------------
+
+EXEMPLO COMPLETO:
+
+[
+  {
+    "id": "strategy_scalper",
+    "name": "Scalper V2",
+    "strategyType": "scalper",
+    "isActive": true,
+    "parameters": {
+      "timeframe": "1m",
+      "maxSpread": 0.1,
+      "minVolume": 100000,
+      "takeProfitTicks": 5,
+      "stopLossTicks": 3
+    }
+  },
+  {
+    "id": "strategy_momentum",
+    "name": "Momentum Trader",
+    "strategyType": "momentum",
+    "isActive": true,
+    "parameters": {
+      "period": 14,
+      "threshold": 2.5,
+      "rsiPeriod": 14,
+      "rsiOverbought": 70,
+      "rsiOversold": 30
+    }
+  },
+  {
+    "id": "strategy_trend",
+    "name": "Trend Follower",
+    "strategyType": "trend_follower",
+    "isActive": true,
+    "parameters": {
+      "fastEma": 20,
+      "slowEma": 50,
+      "adxPeriod": 14,
+      "adxThreshold": 25
+    }
+  },
+  {
+    "id": "strategy_reversion",
+    "name": "Mean Reversion",
+    "strategyType": "mean_reversion",
+    "isActive": true,
+    "parameters": {
+      "bbPeriod": 20,
+      "bbStdDev": 2,
+      "rsiPeriod": 14,
+      "rsiLower": 30,
+      "rsiUpper": 70
+    }
+  },
+  {
+    "id": "strategy_arbitrage",
+    "name": "Arbitrage Hunter",
+    "strategyType": "arbitrage",
+    "isActive": false,
+    "parameters": {
+      "minSpreadPercent": 0.5,
+      "maxLatencyMs": 100,
+      "minLiquidity": 50000
+    }
+  }
+]
+
+================================================================================
+FIM DO ARQUIVO 03_configuracoes.txt
+================================================================================

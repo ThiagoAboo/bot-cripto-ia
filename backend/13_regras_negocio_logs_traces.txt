@@ -1,0 +1,145 @@
+================================================================================
+REGRAS DE NEGÓCIO - LOGS E TRACES
+================================================================================
+
+-------------------------------------------------------------------------------
+RN-LOG-001: Registro de Logs
+-------------------------------------------------------------------------------
+
+QUANDO REGISTRAR:
+
+| Nível | Quando usar | Exemplo |
+|-------|-------------|---------|
+| INFO | Eventos importantes, ações do usuário | "Ordem executada", "Usuário logou", "Treinamento concluído" |
+| WARN | Situações anormais mas não críticas | "Timeout na API, tentando novamente", "Saldo divergente" |
+| ERROR | Erros que afetam execução | "Falha ao conectar na exchange", "Erro ao salvar configuração" |
+
+REGRAS:
+
+1. Todo log deve ter:
+   - timestamp (automático)
+   - level (INFO, WARN, ERROR)
+   - module (origem)
+   - message (descritiva)
+   - userId (do usuário logado)
+
+2. Logs INFO são retidos por 90 dias
+
+3. Logs WARN e ERROR são retidos por 90 dias (ou mais)
+
+4. Logs não devem conter informações sensíveis (senhas, chaves API)
+
+-------------------------------------------------------------------------------
+RN-LOG-002: Registro de Traces
+-------------------------------------------------------------------------------
+
+QUANDO REGISTRAR (REGRAS DE RASTREAMENTO):
+
+| Nível | Quando usar | Exemplo |
+|-------|-------------|---------|
+| TRACE | Entrada/saída de funções principais | "Entrou em executeTrade()", "Saiu de getCurrentPrice()" |
+| DEBUG | Passos intermediários, decisões | "RSI calculado: 65", "Recomendação: COMPRA com 78% confiança" |
+
+REGRAS:
+
+1. Todo trace deve ter:
+   - timestamp (automático)
+   - level (TRACE, DEBUG)
+   - module (origem)
+   - traceId (UUID da execução)
+   - functionName (nome da função)
+   - message
+   - durationMs (tempo desde início da execução)
+   - userId
+
+2. Traces de bots devem incluir adicionalmente:
+   - botId
+   - currentPair (quando aplicável)
+   - recommendedAction (quando aplicável)
+   - confidence (quando aplicável)
+
+3. Trace ID é gerado no início da execução e propagado para todas as chamadas
+
+4. Traces são retidos por 7 dias (volume alto)
+
+5. Traces podem ser desabilitados em produção via feature flag
+
+-------------------------------------------------------------------------------
+RN-LOG-003: Propagação de Trace ID
+-------------------------------------------------------------------------------
+
+REGRAS:
+
+1. No início de cada execução relevante (request HTTP, ciclo de bot):
+   - Gerar traceId único (UUID v4)
+   - Registrar trace TRACE: "Iniciando {funcao}"
+
+2. Para cada chamada subsequente (função interna, API externa):
+   - Passar traceId como parâmetro ou no contexto
+   - Registrar trace com mesmo traceId
+   - parentTraceId = traceId da função chamadora
+
+3. Exemplo de hierarquia:
+
+   traceId: trc_001 (execução principal)
+   ├─ parentTraceId: trc_001 (função A)
+   │  ├─ parentTraceId: trc_001_A (subfunção A1)
+   │  └─ parentTraceId: trc_001_A (subfunção A2)
+   └─ parentTraceId: trc_001 (função B)
+
+4. No frontend, permite visualizar hierarquia (indentação)
+
+-------------------------------------------------------------------------------
+RN-LOG-004: Filtros de Logs
+-------------------------------------------------------------------------------
+
+API: GET /api/logs
+
+REGRAS:
+
+1. Aplicar filtros na query SQL:
+
+   WHERE userId = ?
+   AND (level IN (?) OR ? IS NULL)
+   AND (module IN (?) OR ? IS NULL)
+   AND (date >= ? OR ? IS NULL)
+   AND (date <= ? OR ? IS NULL)
+   AND (message LIKE ? OR ? IS NULL)
+
+2. Paginação:
+   - page: número da página
+   - limit: itens por página (padrão 50, máximo 200)
+
+3. Ordenação padrão: timestamp DESC
+
+-------------------------------------------------------------------------------
+RN-LOG-005: Filtros de Traces
+-------------------------------------------------------------------------------
+
+API: GET /api/traces
+
+REGRAS:
+
+1. Aplicar filtros na query SQL:
+
+   WHERE userId = ?
+   AND (level IN (?) OR ? IS NULL)
+   AND (module IN (?) OR ? IS NULL)
+   AND (traceId = ? OR ? IS NULL)
+   AND (functionName LIKE ? OR ? IS NULL)
+   AND (botId = ? OR ? IS NULL)
+   AND (currentPair = ? OR ? IS NULL)
+   AND (recommendedAction = ? OR ? IS NULL)
+   AND (durationMs >= ? OR ? IS NULL)
+   AND (errorFlag = ? OR ? IS NULL)
+   AND (date >= ? OR ? IS NULL)
+   AND (date <= ? OR ? IS NULL)
+   AND (message LIKE ? OR functionName LIKE ? OR ? IS NULL)
+
+2. Paginação: mesma regra dos logs
+
+3. Ordenação padrão: timestamp ASC (para manter ordem cronológica)
+
+================================================================================
+FIM DO ARQUIVO 13_regras_negocio_logs_traces.txt
+================================================================================

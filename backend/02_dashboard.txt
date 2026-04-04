@@ -1,0 +1,332 @@
+================================================================================
+TELA: DASHBOARD
+================================================================================
+
+-------------------------------------------------------------------------------
+1. API: GET /api/dashboard/total-balance
+-------------------------------------------------------------------------------
+
+Descrição: Retorna saldo total e indicadores gerais
+
+HEADERS:
+  Authorization: Bearer {token}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "totalBrl": 45230.75,
+    "dailyProfitBrl": 1250.30,
+    "dailyProfitPercent": 2.84,
+    "totalPnlBrl": 10230.75,
+    "totalPnlPercent": 29.2,
+    "hitRate": 68.5,
+    "usdtBrlRate": 5.85,
+    "lastUpdate": "2024-01-15T10:30:00Z"
+  }
+}
+
+TABELAS ENVOLVIDAS:
+- Balance (para saldos)
+- Transaction (para lucros e acertos)
+- API externa (para cotação USDT/BRL)
+
+CAMPOS UTILIZADOS:
+
+Balance:
+- currency
+- available
+
+Transaction:
+- profitBrl
+- profitPercent
+- date
+- status
+
+CÁLCULOS:
+
+1. totalBrl:
+   SELECT SUM(b.available * taxa_conversao) FROM Balance b
+   WHERE taxa_conversao = cotacao USDT->BRL
+
+2. dailyProfitBrl:
+   SELECT SUM(profitBrl) FROM Transaction 
+   WHERE date >= datetime('now', '-1 day') AND status = 'executed'
+
+3. dailyProfitPercent:
+   (dailyProfitBrl / totalBrl_anterior) * 100
+
+4. totalPnlBrl:
+   SELECT SUM(profitBrl) FROM Transaction WHERE status = 'executed'
+
+5. totalPnlPercent:
+   (totalPnlBrl / saldo_inicial) * 100
+
+6. hitRate:
+   SELECT (COUNT(CASE WHEN profitBrl > 0 THEN 1 END) * 100.0 / COUNT(*)) 
+   FROM Transaction WHERE status = 'executed' LIMIT 100
+
+7. usdtBrlRate:
+   Buscar de API externa (ex: AwesomeAPI, Binance) ou tabela de cotações
+
+-------------------------------------------------------------------------------
+2. API: GET /api/dashboard/currencies-balance
+-------------------------------------------------------------------------------
+
+Descrição: Retorna saldo detalhado por moeda
+
+HEADERS:
+  Authorization: Bearer {token}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": [
+    {
+      "currency": "BTC",
+      "balanceBrl": 28900.00,
+      "dailyProfitBrl": 890.50,
+      "dailyProfitPercent": 3.18,
+      "totalPnlBrl": 8500.00,
+      "totalPnlPercent": 41.7,
+      "hitRate": 72.0,
+      "usdtBrlRate": 5.85
+    },
+    {
+      "currency": "ETH",
+      "balanceBrl": 12300.00,
+      "dailyProfitBrl": 310.20,
+      "dailyProfitPercent": 2.59,
+      "totalPnlBrl": 2100.00,
+      "totalPnlPercent": 20.6,
+      "hitRate": 65.0,
+      "usdtBrlRate": 5.85
+    }
+  ]
+}
+
+TABELAS ENVOLVIDAS:
+- Balance
+- Transaction
+
+CAMPOS UTILIZADOS:
+
+Balance:
+- currency
+- available
+
+Transaction:
+- pair (extrair moeda base)
+- profitBrl
+- profitPercent
+- date
+- status
+
+CÁLCULOS POR MOEDA:
+
+1. balanceBrl:
+   balance.available * cotacao USDT->BRL
+
+2. dailyProfitBrl:
+   SELECT SUM(profitBrl) FROM Transaction 
+   WHERE date >= datetime('now', '-1 day') 
+   AND status = 'executed'
+   AND pair LIKE '{currency}/%'
+
+3. totalPnlBrl:
+   SELECT SUM(profitBrl) FROM Transaction 
+   WHERE status = 'executed'
+   AND pair LIKE '{currency}/%'
+
+4. hitRate:
+   SELECT (COUNT(CASE WHEN profitBrl > 0 THEN 1 END) * 100.0 / COUNT(*)) 
+   FROM Transaction WHERE status = 'executed' AND pair LIKE '{currency}/%'
+
+-------------------------------------------------------------------------------
+3. API: GET /api/dashboard/transactions/recent
+-------------------------------------------------------------------------------
+
+Descrição: Retorna as últimas N transações
+
+HEADERS:
+  Authorization: Bearer {token}
+
+QUERY PARAMS:
+  limit: number (padrão: 5)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": [
+    {
+      "id": "tx_001",
+      "date": "2024-01-15T10:30:00Z",
+      "pair": "BTC/USDT",
+      "type": "buy",
+      "entryPrice": 62000,
+      "exitPrice": 63500,
+      "amount": 0.05,
+      "fee": 12.50,
+      "profitBrl": 4387.50,
+      "profitPercent": 2.42
+    }
+  ]
+}
+
+TABELAS ENVOLVIDAS:
+- Transaction
+
+CAMPOS RETORNADOS:
+- id
+- date
+- pair
+- type
+- entryPrice (preço de compra)
+- exitPrice (preço de venda)
+- amount (quantity)
+- fee
+- profitBrl
+- profitPercent
+
+OBSERVAÇÃO: Para operações fechadas, entryPrice e exitPrice vêm da mesma transação
+ou de duas transações relacionadas (compra e venda).
+
+-------------------------------------------------------------------------------
+4. API: GET /api/dashboard/bots-status
+-------------------------------------------------------------------------------
+
+Descrição: Retorna status de todos os bots/estratégias
+
+HEADERS:
+  Authorization: Bearer {token}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": [
+    {
+      "id": "bot1",
+      "name": "Scalper V2",
+      "strategy": "scalper",
+      "description": "Operações rápidas com pequenos lucros",
+      "currentPair": "BTC/USDT",
+      "status": "online",
+      "isPaused": false,
+      "recommendedAction": "buy",
+      "confidence": 78,
+      "lastAnalysis": "2024-01-15T10:30:00Z"
+    }
+  ]
+}
+
+TABELAS ENVOLVIDAS:
+- Bot
+
+CAMPOS RETORNADOS:
+- id
+- name
+- strategyType → strategy
+- description
+- currentPair
+- status
+- isPaused
+- recommendedAction
+- confidence
+- lastAnalysis
+
+-------------------------------------------------------------------------------
+5. API: PUT /api/dashboard/bots/{id}/pause
+-------------------------------------------------------------------------------
+
+Descrição: Pausa a execução de um bot
+
+HEADERS:
+  Authorization: Bearer {token}
+
+PATH PARAMS:
+  id: string (ID do bot)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true
+}
+
+TABELAS ENVOLVIDAS:
+- Bot (atualização)
+
+CAMPOS ATUALIZADOS:
+- isPaused = true
+- updatedAt
+
+-------------------------------------------------------------------------------
+6. API: PUT /api/dashboard/bots/{id}/resume
+-------------------------------------------------------------------------------
+
+Descrição: Retoma a execução de um bot
+
+HEADERS:
+  Authorization: Bearer {token}
+
+PATH PARAMS:
+  id: string (ID do bot)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true
+}
+
+TABELAS ENVOLVIDAS:
+- Bot (atualização)
+
+CAMPOS ATUALIZADOS:
+- isPaused = false
+- updatedAt
+
+-------------------------------------------------------------------------------
+7. API: GET /api/dashboard/performance
+-------------------------------------------------------------------------------
+
+Descrição: Retorna dados para o gráfico de performance
+
+HEADERS:
+  Authorization: Bearer {token}
+
+QUERY PARAMS:
+  period: string ('24h' | '7d' | '30d' | 'total')
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "period": "7d",
+    "data": [
+      { "timestamp": "2024-01-08T00:00:00Z", "balance": 42000 },
+      { "timestamp": "2024-01-09T00:00:00Z", "balance": 43500 },
+      { "timestamp": "2024-01-10T00:00:00Z", "balance": 45230.75 }
+    ]
+  }
+}
+
+TABELAS ENVOLVIDAS:
+- BalanceHistory (recomendado criar)
+
+CAMPOS UTILIZADOS:
+- timestamp
+- totalBrl
+
+ESTRUTURA DA TABELA BalanceHistory:
+- id (PK)
+- userId (FK)
+- timestamp (datetime)
+- totalBrl (float)
+
+LÓGICA PARA CADA PERÍODO:
+
+24h: pontos a cada 1 hora (últimas 24 horas)
+7d: pontos a cada 1 dia (últimos 7 dias)
+30d: pontos a cada 1 dia (últimos 30 dias)
+total: pontos mensais ou semanais (desde o início)
+
+================================================================================
+FIM DO ARQUIVO 02_dashboard.txt
+================================================================================

@@ -1,0 +1,342 @@
+================================================================================
+TELA: LOG / TRACE GERAL
+================================================================================
+
+-------------------------------------------------------------------------------
+1. API: GET /api/logs
+-------------------------------------------------------------------------------
+
+Descrição: Retorna lista de logs com paginação e filtros
+
+HEADERS:
+  Authorization: Bearer {token}
+
+QUERY PARAMS:
+  page: number (padrão: 1)
+  limit: number (padrão: 50)
+  levels: string (opcional, ex: INFO,WARN,ERROR)
+  modules: string (opcional, ex: dashboard,bot)
+  startDate: string (opcional, ISO date)
+  endDate: string (opcional, ISO date)
+  search: string (opcional)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": "log_001",
+        "timestamp": "2024-01-15T10:30:00Z",
+        "level": "INFO",
+        "module": "bot",
+        "message": "Bot Scalper V2 iniciou análise de mercado",
+        "details": {
+          "strategy": "scalper",
+          "pairs": ["BTC/USDT", "ETH/USDT"]
+        }
+      }
+    ],
+    "total": 1520,
+    "page": 1,
+    "limit": 50,
+    "totalPages": 31
+  }
+}
+
+TABELAS ENVOLVIDAS:
+- Log
+
+CAMPOS RETORNADOS:
+- id
+- timestamp
+- level
+- module
+- message
+- details (JSON)
+
+-------------------------------------------------------------------------------
+2. API: GET /api/traces
+-------------------------------------------------------------------------------
+
+Descrição: Retorna lista de traces com paginação e filtros
+
+HEADERS:
+  Authorization: Bearer {token}
+
+QUERY PARAMS:
+  page: number (padrão: 1)
+  limit: number (padrão: 50)
+  levels: string (opcional, ex: DEBUG,TRACE)
+  modules: string (opcional)
+  traceId: string (opcional)
+  functionName: string (opcional)
+  botId: string (opcional)
+  currentPair: string (opcional)
+  recommendedAction: string (opcional, buy/sell/hold)
+  minDurationMs: number (opcional)
+  onlyErrors: boolean (opcional)
+  startDate: string (opcional)
+  endDate: string (opcional)
+  search: string (opcional)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": "trace_001",
+        "timestamp": "2024-01-15T10:30:00Z",
+        "level": "TRACE",
+        "module": "bot",
+        "traceId": "trc_abc123",
+        "parentTraceId": null,
+        "functionName": "BotScalper.executeAnalysis()",
+        "message": "Iniciando análise de mercado",
+        "durationMs": 0,
+        "botId": "bot1",
+        "currentPair": "BTC/USDT",
+        "recommendedAction": null,
+        "confidence": null,
+        "errorFlag": false
+      }
+    ],
+    "total": 8500,
+    "page": 1,
+    "limit": 50,
+    "totalPages": 170
+  }
+}
+
+TABELAS ENVOLVIDAS:
+- Trace
+
+CAMPOS RETORNADOS:
+- id
+- timestamp
+- level
+- module
+- traceId
+- parentTraceId
+- functionName
+- message
+- durationMs
+- botId
+- currentPair
+- recommendedAction
+- confidence
+- errorFlag
+
+-------------------------------------------------------------------------------
+3. API: GET /api/traces/group/{traceId}
+-------------------------------------------------------------------------------
+
+Descrição: Retorna todos os traces agrupados por traceId
+
+HEADERS:
+  Authorization: Bearer {token}
+
+PATH PARAMS:
+  traceId: string (ID do trace)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "traceId": "trc_abc123",
+    "entries": [
+      {
+        "id": "trace_001",
+        "timestamp": "2024-01-15T10:30:00Z",
+        "level": "TRACE",
+        "functionName": "BotScalper.executeAnalysis()",
+        "message": "Iniciando análise de mercado",
+        "durationMs": 0
+      },
+      {
+        "id": "trace_002",
+        "timestamp": "2024-01-15T10:30:01Z",
+        "level": "DEBUG",
+        "functionName": "BotScalper.getCurrentPrice()",
+        "message": "Chamando API para obter preço do BTC/USDT",
+        "durationMs": 50
+      }
+    ],
+    "startTime": "2024-01-15T10:30:00Z",
+    "endTime": "2024-01-15T10:30:05Z",
+    "totalDurationMs": 5000,
+    "hasError": false,
+    "botId": "bot1",
+    "botName": "Scalper V2"
+  }
+}
+
+TABELAS ENVOLVIDAS:
+- Trace
+
+-------------------------------------------------------------------------------
+4. API: GET /api/logs/export
+-------------------------------------------------------------------------------
+
+Descrição: Exporta logs filtrados em formato CSV
+
+HEADERS:
+  Authorization: Bearer {token}
+
+QUERY PARAMS: (mesmos filtros do GET /api/logs)
+
+RESPONSE:
+  Content-Type: text/csv
+  Content-Disposition: attachment; filename="logs_20240115.csv"
+  (arquivo CSV)
+
+-------------------------------------------------------------------------------
+5. API: GET /api/traces/export
+-------------------------------------------------------------------------------
+
+Descrição: Exporta traces filtrados em formato CSV
+
+HEADERS:
+  Authorization: Bearer {token}
+
+QUERY PARAMS: (mesmos filtros do GET /api/traces)
+
+RESPONSE:
+  Content-Type: text/csv
+  Content-Disposition: attachment; filename="traces_20240115.csv"
+  (arquivo CSV)
+
+-------------------------------------------------------------------------------
+6. API: GET /api/traces/bots
+-------------------------------------------------------------------------------
+
+Descrição: Retorna lista de bots para filtro
+
+HEADERS:
+  Authorization: Bearer {token}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": [
+    { "id": "bot1", "name": "Scalper V2" },
+    { "id": "bot2", "name": "Momentum Trader" },
+    { "id": "bot3", "name": "Trend Follower" }
+  ]
+}
+
+TABELAS ENVOLVIDAS:
+- Bot
+
+-------------------------------------------------------------------------------
+7. MODELO DE DADOS - Log
+-------------------------------------------------------------------------------
+
+TABELA: Log
+
+CAMPO           | TIPO      | OBRIG | DESCRIÇÃO
+----------------|-----------|-------|----------------------------------
+id              | String    | Sim   | UUID - Chave primária
+timestamp       | DateTime  | Sim   | Data/hora do evento
+level           | String    | Sim   | INFO, WARN, ERROR
+module          | String    | Sim   | dashboard/configurations/training/transactions/bot/system/api/database
+message         | String    | Sim   | Mensagem descritiva
+details         | String    | Não   | JSON com detalhes adicionais
+userId          | String    | Sim   | FK para User
+createdAt       | DateTime  | Sim   | Data de criação
+
+EXEMPLO DE REGISTRO:
+
+{
+  "id": "log_001",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "level": "INFO",
+  "module": "bot",
+  "message": "Bot Scalper V2 iniciou análise de mercado",
+  "details": "{\"strategy\":\"scalper\",\"pairs\":[\"BTC/USDT\"]}",
+  "userId": "user_001",
+  "createdAt": "2024-01-15T10:30:00Z"
+}
+
+-------------------------------------------------------------------------------
+8. MODELO DE DADOS - Trace
+-------------------------------------------------------------------------------
+
+TABELA: Trace
+
+CAMPO               | TIPO      | OBRIG | DESCRIÇÃO
+--------------------|-----------|-------|----------------------------------
+id                  | String    | Sim   | UUID - Chave primária
+timestamp           | DateTime  | Sim   | Data/hora do passo
+level               | String    | Sim   | DEBUG, TRACE
+module              | String    | Sim   | Módulo de origem
+traceId             | String    | Sim   | ID único da execução
+parentTraceId       | String    | Não   | ID do trace pai
+functionName        | String    | Sim   | Nome da função/método
+message             | String    | Sim   | Mensagem descritiva
+durationMs          | Float     | Sim   | Duração desde o início (ms)
+botId               | String    | Não   | FK para Bot
+currentPair         | String    | Não   | Moeda sendo analisada
+recommendedAction   | String    | Não   | buy/sell/hold
+confidence          | Float     | Não   | Confiança (0-100)
+errorFlag           | Boolean   | Sim   | Se houve erro
+userId              | String    | Sim   | FK para User
+createdAt           | DateTime  | Sim   | Data de criação
+
+ÍNDICES:
+- INDEX ON (traceId)
+- INDEX ON (timestamp)
+- INDEX ON (botId)
+- INDEX ON (userId)
+
+EXEMPLO DE REGISTRO:
+
+{
+  "id": "trace_001",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "level": "TRACE",
+  "module": "bot",
+  "traceId": "trc_abc123",
+  "parentTraceId": null,
+  "functionName": "BotScalper.executeAnalysis()",
+  "message": "Iniciando análise de mercado",
+  "durationMs": 0,
+  "botId": "bot1",
+  "currentPair": "BTC/USDT",
+  "recommendedAction": null,
+  "confidence": null,
+  "errorFlag": false,
+  "userId": "user_001",
+  "createdAt": "2024-01-15T10:30:00Z"
+}
+
+-------------------------------------------------------------------------------
+9. WEBHOOKS - Atualizações em Tempo Real (WebSocket)
+-------------------------------------------------------------------------------
+
+EVENTO: log:new
+DADOS:
+{
+  "id": "log_002",
+  "timestamp": "2024-01-15T10:30:05Z",
+  "level": "DEBUG",
+  "module": "bot",
+  "message": "Analisando BTC/USDT"
+}
+
+EVENTO: trace:new
+DADOS:
+{
+  "id": "trace_002",
+  "timestamp": "2024-01-15T10:30:01Z",
+  "level": "DEBUG",
+  "traceId": "trc_abc123",
+  "functionName": "BotScalper.getCurrentPrice()",
+  "message": "Preço obtido: 62000",
+  "durationMs": 50
+}
+
+================================================================================
+FIM DO ARQUIVO 06_logs_traces.txt
+================================================================================

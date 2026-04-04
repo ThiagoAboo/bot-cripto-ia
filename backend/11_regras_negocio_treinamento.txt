@@ -1,0 +1,110 @@
+================================================================================
+REGRAS DE NEGÓCIO - TREINAMENTO DA IA
+================================================================================
+
+-------------------------------------------------------------------------------
+RN-TRN-001: Criação de Sessão de Treinamento
+-------------------------------------------------------------------------------
+
+API: POST /api/training/sessions
+
+REGRAS:
+
+1. Validar se bot existe e está ativo
+
+2. Verificar se já existe sessão ativa para este bot:
+   - Se existir sessão com status 'running' ou 'pending' ou 'paused'
+   - Retornar erro: "Já existe um treinamento em andamento para este bot"
+
+3. Criar sessão com status 'pending'
+
+4. Adicionar à fila de processamento (Bull/Redis)
+
+5. Registrar log INFO: "Sessão de treinamento criada para bot {botName}"
+
+6. Registrar trace TRACE: com traceId único
+
+-------------------------------------------------------------------------------
+RN-TRN-002: Processamento de Treinamento
+-------------------------------------------------------------------------------
+
+Processo assíncrono executado pelo worker
+
+REGRAS:
+
+1. Carregar dados históricos:
+   - Período definido na configuração
+   - Pares incluídos
+   - Resolução temporal (timeframe)
+   - Indicadores técnicos
+
+2. Preparar dataset:
+   - Normalizar dados
+   - Dividir em treino (80%) e validação (20%)
+
+3. Criar modelo conforme arquitetura selecionada:
+   - LSTM, CNN, Random Forest, XGBoost, etc.
+
+4. Loop de treinamento (épocas):
+   - Para cada época, calcular loss (treino e validação)
+   - Emitir WebSocket training:metrics a cada época
+   - Registrar log a cada 10 épocas
+   - Salvar checkpoint a cada 10 épocas
+
+5. Early Stopping:
+   - Se ativado e loss de validação não melhorar por N épocas
+   - Interromper treinamento
+
+6. Conclusão:
+   - Salvar melhor modelo (menor loss de validação)
+   - Atualizar sessão com status 'completed'
+   - Registrar log INFO: "Treinamento concluído"
+
+-------------------------------------------------------------------------------
+RN-TRN-003: Backtesting
+-------------------------------------------------------------------------------
+
+API: POST /api/training/sessions/{id}/test
+
+REGRAS:
+
+1. Usar dados posteriores ao período de treinamento
+   - Período de teste: últimos 30 dias após treinamento
+
+2. Executar modelo nos dados de teste:
+   - Para cada candle, gerar previsão
+   - Simular trades baseados nas previsões
+
+3. Calcular métricas:
+   - totalTrades: número total de operações
+   - winRate: (trades com lucro / total trades) * 100
+   - totalProfit: soma dos lucros/perdas
+   - sharpeRatio: (retorno médio - taxa livre de risco) / desvio padrão
+   - maxDrawdown: maior queda percentual
+   - profitFactor: lucro bruto / prejuízo bruto
+
+4. Registrar resultado no banco (tabela BacktestResult)
+
+-------------------------------------------------------------------------------
+RN-TRN-004: Salvamento do Modelo
+-------------------------------------------------------------------------------
+
+API: POST /api/training/sessions/{id}/save
+
+REGRAS:
+
+1. Verificar se sessão está 'completed'
+
+2. Salvar arquivo do modelo (.h5) em disco/S3
+
+3. Atualizar sessão com modelUrl
+
+4. Atualizar bot com nova versão do modelo:
+   - modelVersion = config.modelVersion
+   - modelUrl = url do modelo salvo
+
+5. Registrar log INFO: "Modelo salvo para bot {botName} versão {version}"
+
+================================================================================
+FIM DO ARQUIVO 11_regras_negocio_treinamento.txt
+================================================================================

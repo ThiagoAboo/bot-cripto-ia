@@ -1,0 +1,128 @@
+================================================================================
+REGRAS DE NEGÓCIO - TRANSAÇÕES
+================================================================================
+
+-------------------------------------------------------------------------------
+RN-TRN-001: Criação de Ordem Manual
+-------------------------------------------------------------------------------
+
+API: POST /api/orders
+
+REGRAS:
+
+1. Validar par existe na exchange
+
+2. Validar quantidade:
+   - Deve ser maior que zero
+   - Deve respeitar limites mínimos da exchange
+
+3. Validar saldo disponível:
+   - Para COMPRA: saldo USDT >= quantity * price
+   - Para VENDA: saldo da moeda >= quantity
+
+4. Para ordem LIMIT:
+   - price é obrigatório
+   - price deve ser positivo
+
+5. Para ordem MARKET:
+   - price é ignorado (usado preço atual)
+
+6. Reservar saldo:
+   - Atualizar Balance.reserved
+
+7. Executar ordem (simulação):
+   - Para desenvolvimento: apenas registrar
+   - Para produção: chamar API da exchange
+
+8. Atualizar saldos:
+   - COMPRA: reduz USDT.available, aumenta moeda.available
+   - VENDA: reduz moeda.available, aumenta USDT.available
+
+9. Registrar transação com status 'executed'
+
+10. Calcular profitBrl (se for venda):
+    - profitBrl = (preco_venda - preco_compra) * quantidade
+    - Buscar preço médio de compra do histórico
+
+11. Registrar log INFO: "Ordem manual executada: {type} {quantity} {pair}"
+
+12. Registrar trace DEBUG: com traceId único
+
+13. Emitir WebSocket order:created
+
+-------------------------------------------------------------------------------
+RN-TRN-002: Cálculo de Preço Médio (FIFO)
+-------------------------------------------------------------------------------
+
+Para calcular profitBrl em uma venda:
+
+REGRAS (FIFO - First In, First Out):
+
+1. Buscar todas as compras da moeda ordenadas por data (mais antigas primeiro)
+
+2. Para cada compra, alocar quantidade vendida:
+   - Se quantidade_venda <= quantidade_compra_disponivel
+     - profit = (preco_venda - preco_compra) * quantidade_venda
+   - Senão
+     - profit += (preco_venda - preco_compra) * quantidade_compra_disponivel
+     - quantidade_venda -= quantidade_compra_disponivel
+     - Continuar para próxima compra
+
+3. Somar todos os profits parciais
+
+4. Atualizar quantidade restante das compras
+
+-------------------------------------------------------------------------------
+RN-TRN-003: Filtros do Histórico
+-------------------------------------------------------------------------------
+
+API: GET /api/orders
+
+REGRAS:
+
+1. Aplicar filtros na query SQL:
+
+   WHERE userId = ?
+   AND (pair = ? OR ? IS NULL)
+   AND (type IN (?) OR ? IS NULL)
+   AND (status IN (?) OR ? IS NULL)
+   AND (origin IN (?) OR ? IS NULL)
+   AND (date >= ? OR ? IS NULL)
+   AND (date <= ? OR ? IS NULL)
+   AND (pair LIKE ? OR id LIKE ? OR ? IS NULL)
+
+2. Paginação:
+   - page: número da página (1-indexed)
+   - limit: itens por página (padrão 20, máximo 100)
+   - OFFSET = (page - 1) * limit
+
+3. Ordenação padrão: date DESC
+
+4. Joins:
+   - LEFT JOIN Bot ON Bot.id = Transaction.botId
+   - Para obter botName
+
+-------------------------------------------------------------------------------
+RN-TRN-004: Sincronização de Saldos
+-------------------------------------------------------------------------------
+
+API: POST /api/balance/sync
+
+REGRAS:
+
+1. Buscar saldos reais da exchange (via API)
+
+2. Comparar com saldos no banco
+
+3. Para cada moeda:
+   - Se diferença > tolerância (ex: 0.1%)
+     - Atualizar Balance.available
+     - Registrar log WARN: "Saldo de {currency} divergente. Antes: {old}, Depois: {new}"
+
+4. Registrar trace DEBUG: com detalhes das diferenças
+
+5. Atualizar BalanceHistory com totalBrl atual
+
+================================================================================
+FIM DO ARQUIVO 12_regras_negocio_transacoes.txt
+================================================================================

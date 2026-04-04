@@ -1,0 +1,136 @@
+================================================================================
+TELA: PERFIL
+================================================================================
+
+-------------------------------------------------------------------------------
+1. API: GET /api/profile
+-------------------------------------------------------------------------------
+
+Descrição: Retorna dados do perfil do usuário
+
+HEADERS:
+  Authorization: Bearer {token}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "id": "user_001",
+    "name": "Thiago Aboo",
+    "email": "thiago@email.com",
+    "preferences": {
+      "notificationsEnabled": true,
+      "theme": "dark"
+    },
+    "createdAt": "2024-01-01T00:00:00Z",
+    "updatedAt": "2024-01-15T10:30:00Z"
+  }
+}
+
+TABELAS ENVOLVIDAS:
+- User
+
+CAMPOS RETORNADOS:
+- id
+- name
+- email
+- preferences (JSON)
+- createdAt
+- updatedAt
+
+-------------------------------------------------------------------------------
+2. API: PUT /api/profile
+-------------------------------------------------------------------------------
+
+Descrição: Atualiza dados do perfil do usuário
+
+HEADERS:
+  Authorization: Bearer {token}
+  Content-Type: application/json
+
+REQUEST BODY:
+{
+  "name": "Thiago Aboo",
+  "email": "thiago@email.com"
+}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true
+}
+
+RESPONSE (409 - Email já existe):
+{
+  "success": false,
+  "error": "Email já está em uso"
+}
+
+TABELAS ENVOLVIDAS:
+- User (atualização)
+
+CAMPOS ATUALIZADOS:
+- name
+- email
+- updatedAt
+
+-------------------------------------------------------------------------------
+3. API: PUT /api/profile/preferences
+-------------------------------------------------------------------------------
+
+Descrição: Atualiza preferências do usuário
+
+HEADERS:
+  Authorization: Bearer {token}
+  Content-Type: application/json
+
+REQUEST BODY:
+{
+  "notificationsEnabled": true,
+  "theme": "dark"
+}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true
+}
+
+TABELAS ENVOLVIDAS:
+- User (atualização)
+
+CAMPOS ATUALIZADOS:
+- preferences (JSON)
+- updatedAt
+
+-------------------------------------------------------------------------------
+4. API: PUT /api/auth/change-password
+-------------------------------------------------------------------------------
+
+(Ver detalhes no arquivo 01_autenticacao.txt)
+
+-------------------------------------------------------------------------------
+5. MODELO DE DADOS - User (Preferências)
+-------------------------------------------------------------------------------
+
+CAMPO preferences (JSON):
+
+{
+  "notificationsEnabled": true,    // Notificações push
+  "theme": "dark"                   // dark ou light
+}
+
+EXEMPLO DE REGISTRO COMPLETO:
+
+{
+  "id": "user_001",
+  "email": "thiago@email.com",
+  "passwordHash": "$2a$10$N9qo8uLOickgx2ZMRZoMy.Mr/.cYqF7N",
+  "name": "Thiago Aboo",
+  "preferences": "{\"notificationsEnabled\":true,\"theme\":\"dark\"}",
+  "lastLogin": "2024-01-15T10:30:00Z",
+  "createdAt": "2024-01-01T00:00:00Z",
+  "updatedAt": "2024-01-15T10:30:00Z"
+}
+
+================================================================================
+FIM DO ARQUIVO 07_perfil.txt
+================================================================================

@@ -1,0 +1,123 @@
+================================================================================
+REGRAS DE NEGÓCIO - WEBSOCKET
+================================================================================
+
+-------------------------------------------------------------------------------
+RN-WS-001: Conexão e Autenticação
+-------------------------------------------------------------------------------
+
+REGRAS:
+
+1. Autenticação via token JWT:
+   - Cliente envia token na conexão (auth.token)
+   - Servidor valida token antes de aceitar conexão
+   - Se token inválido, rejeitar conexão com erro 401
+
+2. Timeout:
+   - Conexões inativas por 60 segundos são fechadas
+   - Ping/Pong automático para manter conexão
+
+3. Reconexão:
+   - Cliente deve tentar reconexão automática
+   - Backoff exponencial (1s, 2s, 4s, 8s, max 30s)
+
+-------------------------------------------------------------------------------
+RN-WS-002: Subscrição de Eventos
+-------------------------------------------------------------------------------
+
+REGRAS:
+
+1. Cliente deve se inscrever explicitamente nos eventos desejados
+
+2. Eventos disponíveis:
+   - dashboard:update
+   - order:created, order:updated
+   - log:new
+   - trace:new
+   - training:metrics, training:log, training:status
+
+3. Subscrições são atreladas à sessão do cliente
+
+4. Ao desconectar, todas as subscrições são perdidas
+
+5. Cliente pode cancelar subscrição a qualquer momento
+
+-------------------------------------------------------------------------------
+RN-WS-003: Frequência de Atualizações
+-------------------------------------------------------------------------------
+
+REGRAS:
+
+| Evento | Frequência | Gatilho |
+|--------|------------|---------|
+| dashboard:update | A cada 5-10 segundos | Timer ou mudança nos dados |
+| order:created | Imediato | Ordem criada |
+| order:updated | Imediato | Status da ordem mudou |
+| log:new | Imediato | Novo log gerado |
+| trace:new | Imediato | Novo trace gerado |
+| training:metrics | A cada época | Época de treinamento concluída |
+| training:log | Imediato | Log de treinamento gerado |
+| training:status | Imediato | Status da sessão mudou |
+
+-------------------------------------------------------------------------------
+RN-WS-004: Payloads
+-------------------------------------------------------------------------------
+
+dashboard:update
+{
+  "totalBalance": { "totalBrl": 45230.75, ... },
+  "currenciesBalance": [ { "currency": "BTC", ... } ],
+  "botsStatus": [ { "id": "bot1", "status": "online", ... } ]
+}
+
+order:created
+{ (objeto Transaction completo) }
+
+order:updated
+{ "id": "tx_123", "status": "executed" }
+
+log:new
+{ (objeto Log completo) }
+
+trace:new
+{ (objeto Trace completo) }
+
+training:metrics
+{
+  "sessionId": "session_123",
+  "metrics": { "epoch": 42, "trainLoss": 0.0123, "valLoss": 0.0134 }
+}
+
+training:log
+{
+  "sessionId": "session_123",
+  "log": { "level": "INFO", "message": "Época 42 concluída" }
+}
+
+training:status
+{
+  "sessionId": "session_123",
+  "status": "completed"
+}
+
+-------------------------------------------------------------------------------
+RN-WS-005: Tratamento de Erros
+-------------------------------------------------------------------------------
+
+REGRAS:
+
+1. Erros de conexão:
+   - Enviar evento 'error' para o cliente
+   - Tentar reconectar automaticamente
+
+2. Erros de subscrição:
+   - Se evento não existe, retornar erro
+   - Se não autenticado, retornar erro
+
+3. Rate limiting:
+   - Limitar número de mensagens por segundo por cliente
+   - Excedeu limite: desconectar cliente
+
+================================================================================
+FIM DO ARQUIVO 14_regras_negocio_websocket.txt
+================================================================================

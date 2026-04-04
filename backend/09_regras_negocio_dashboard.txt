@@ -1,0 +1,237 @@
+================================================================================
+REGRAS DE NEGÓCIO - DASHBOARD
+================================================================================
+
+-------------------------------------------------------------------------------
+RN-DASH-001: Cálculo do Saldo Total
+-------------------------------------------------------------------------------
+
+API: GET /api/dashboard/total-balance
+
+REGRAS:
+
+1. totalBrl (Saldo total em reais)
+   - Somar todos os saldos disponíveis (Balance.available)
+   - Converter cada moeda para BRL usando cotação USDT/BRL
+   - Fórmula: SUM(available * taxa_conversao_para_brl)
+
+   SQL:
+   SELECT SUM(b.available * taxa_brl) as totalBrl
+   FROM Balance b
+   LEFT JOIN ExchangeRate e ON e.currency = b.currency
+   WHERE b.userId = ?
+
+   OBS: Para moedas que não são USDT, converter para USDT primeiro, depois para BRL
+
+2. dailyProfitBrl (Lucro/Prejuízo do dia em reais)
+   - Somar profitBrl das últimas 24 horas
+   - Apenas transações com status = 'executed'
+
+   SQL:
+   SELECT COALESCE(SUM(profitBrl), 0) as dailyProfitBrl
+   FROM Transaction
+   WHERE userId = ?
+     AND status = 'executed'
+     AND date >= datetime('now', '-1 day')
+
+3. dailyProfitPercent (Percentual do dia)
+   - Fórmula: (dailyProfitBrl / totalBrl_anterior) * 100
+   - totalBrl_anterior = totalBrl - dailyProfitBrl
+
+4. totalPnlBrl (PnL Total em reais)
+   - Somar profitBrl de todas as transações executadas
+
+   SQL:
+   SELECT COALESCE(SUM(profitBrl), 0) as totalPnlBrl
+   FROM Transaction
+   WHERE userId = ? AND status = 'executed'
+
+5. totalPnlPercent (Percentual total)
+   - Fórmula: (totalPnlBrl / saldo_inicial) * 100
+   - saldo_inicial = totalBrl - totalPnlBrl
+
+6. hitRate (Taxa de acerto %)
+   - Contar trades com lucro (profitBrl > 0)
+   - Dividir pelo total de trades (últimos 100)
+   - Fórmula: (trades_lucro / total_trades) * 100
+
+   SQL:
+   SELECT 
+     (COUNT(CASE WHEN profitBrl > 0 THEN 1 END) * 100.0 / COUNT(*)) as hitRate
+   FROM Transaction
+   WHERE userId = ? 
+     AND status = 'executed'
+   LIMIT 100
+
+7. usdtBrlRate (Cotação USDT/BRL)
+   - Buscar de API externa (ex: AwesomeAPI, Binance)
+   - Cache por 60 segundos para evitar chamadas excessivas
+   - Fallback para última cotação conhecida se API falhar
+
+-------------------------------------------------------------------------------
+RN-DASH-002: Cálculo do Saldo por Moeda
+-------------------------------------------------------------------------------
+
+API: GET /api/dashboard/currencies-balance
+
+REGRAS:
+
+1. balanceBrl (Saldo em reais por moeda)
+   - Balance.available * cotacao_para_brl
+
+2. dailyProfitBrl (Lucro diário por moeda)
+   - Filtrar transações por pair (ex: BTC/USDT -> moeda BTC)
+   - Somar profitBrl das últimas 24h
+
+   SQL:
+   SELECT COALESCE(SUM(profitBrl), 0)
+   FROM Transaction
+   WHERE userId = ?
+     AND pair LIKE 'BTC/%'
+     AND status = 'executed'
+     AND date >= datetime('now', '-1 day')
+
+3. dailyProfitPercent (Percentual diário por moeda)
+   - (dailyProfitBrl / (balanceBrl_anterior)) * 100
+   - balanceBrl_anterior = balanceBrl - dailyProfitBrl
+
+4. totalPnlBrl (PnL total por moeda)
+   - Somar profitBrl de todas as transações da moeda
+
+   SQL:
+   SELECT COALESCE(SUM(profitBrl), 0)
+   FROM Transaction
+   WHERE userId = ? AND pair LIKE 'BTC/%' AND status = 'executed'
+
+5. totalPnlPercent (Percentual total por moeda)
+   - (totalPnlBrl / (balanceBrl - totalPnlBrl)) * 100
+
+6. hitRate (Taxa de acerto por moeda)
+   - Apenas transações da moeda específica
+
+   SQL:
+   SELECT 
+     (COUNT(CASE WHEN profitBrl > 0 THEN 1 END) * 100.0 / COUNT(*))
+   FROM Transaction
+   WHERE userId = ? AND pair LIKE 'BTC/%' AND status = 'executed'
+
+-------------------------------------------------------------------------------
+RN-DASH-003: Dados do Gráfico de Performance
+-------------------------------------------------------------------------------
+
+API: GET /api/dashboard/performance?period={period}
+
+REGRAS:
+
+Para período '24h':
+- Pontos a cada 1 hora (24 pontos)
+- Buscar da tabela BalanceHistory ou calcular em tempo real
+- SQL:
+  SELECT 
+    strftime('%Y-%m-%d %H:00:00', timestamp) as hour,
+    AVG(totalBrl) as balance
+  FROM BalanceHistory
+  WHERE userId = ? 
+    AND timestamp >= datetime('now', '-24 hours')
+  GROUP BY hour
+  ORDER BY hour
+
+Para período '7d':
+- Pontos a cada 1 dia (7 pontos)
+- SQL:
+  SELECT 
+    date(timestamp) as day,
+    AVG(totalBrl) as balance
+  FROM BalanceHistory
+  WHERE userId = ? 
+    AND timestamp >= datetime('now', '-7 days')
+  GROUP BY day
+  ORDER BY day
+
+Para período '30d':
+- Pontos a cada 1 dia (30 pontos)
+- SQL: similar ao 7d com intervalo de -30 days
+
+Para período 'total':
+- Pontos mensais ou semanais
+- SQL:
+  SELECT 
+    date(timestamp, 'start of month') as month,
+    AVG(totalBrl) as balance
+  FROM BalanceHistory
+  WHERE userId = ?
+  GROUP BY month
+  ORDER BY month
+
+-------------------------------------------------------------------------------
+RN-DASH-004: Status dos Bots
+-------------------------------------------------------------------------------
+
+API: GET /api/dashboard/bots-status
+
+REGRAS:
+
+1. Listar todos os bots (estratégias) do sistema
+   - Bots são pré-cadastrados no banco
+   - Cada bot representa uma estratégia de análise
+
+2. Campos retornados:
+   - id: identificador único
+   - name: nome do bot (ex: "Scalper V2")
+   - strategy: strategyType
+   - description: descrição da estratégia
+   - currentPair: última moeda analisada (atualizado pelo bot)
+   - status: online/offline/training/error
+   - isPaused: se o bot está pausado pelo usuário
+   - recommendedAction: última recomendação (buy/sell/hold)
+   - confidence: nível de confiança (0-100)
+   - lastAnalysis: data da última análise
+
+3. Regras de atualização dos bots:
+   - Bot em execução atualiza currentPair e lastAnalysis a cada ciclo
+   - Bot pausado não executa análises
+   - Bot em treinamento não executa operações
+
+-------------------------------------------------------------------------------
+RN-DASH-005: Últimas Transações
+-------------------------------------------------------------------------------
+
+API: GET /api/dashboard/transactions/recent?limit=5
+
+REGRAS:
+
+1. Retornar as N transações mais recentes (padrão: 5)
+
+2. Ordenar por date DESC
+
+3. Apenas transações com status 'executed'
+
+4. Para operações fechadas (compra + venda):
+   - Se o sistema armazena operações fechadas diretamente, usar profitBrl
+   - Se armazena ordens individuais, agrupar por par e período
+
+5. Campos retornados:
+   - id, date, pair, type
+   - entryPrice (preço da compra)
+   - exitPrice (preço da venda)
+   - amount (quantity)
+   - fee
+   - profitBrl, profitPercent
+
+   SQL (operação fechada):
+   SELECT 
+     id, date, pair, type,
+     price as entryPrice,
+     NULL as exitPrice,
+     quantity as amount,
+     fee,
+     profitBrl,
+     profitPercent
+   FROM Transaction
+   WHERE userId = ? AND status = 'executed'
+   ORDER BY date DESC
+   LIMIT ?
+
+================================================================================
+FIM DO ARQUIVO 09_regras_negocio_dashboard.txt
+================================================================================

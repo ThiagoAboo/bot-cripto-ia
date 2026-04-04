@@ -1,0 +1,447 @@
+================================================================================
+TELA: TREINAMENTO DA IA
+================================================================================
+
+-------------------------------------------------------------------------------
+1. API: GET /api/training/strategies
+-------------------------------------------------------------------------------
+
+Descrição: Retorna lista de estratégias disponíveis para treinamento
+
+HEADERS:
+  Authorization: Bearer {token}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": [
+    {
+      "id": "strategy_scalper",
+      "name": "Scalper V2",
+      "strategyType": "scalper",
+      "description": "Operações rápidas com pequenos lucros"
+    },
+    {
+      "id": "strategy_momentum",
+      "name": "Momentum Trader",
+      "strategyType": "momentum",
+      "description": "Identifica moedas com forte momentum"
+    }
+  ]
+}
+
+TABELAS ENVOLVIDAS:
+- Bot (para obter as estratégias disponíveis)
+
+-------------------------------------------------------------------------------
+2. API: GET /api/training/sessions
+-------------------------------------------------------------------------------
+
+Descrição: Retorna histórico de sessões de treinamento
+
+HEADERS:
+  Authorization: Bearer {token}
+
+QUERY PARAMS:
+  botId: string (opcional, filtrar por bot)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": [
+    {
+      "id": "session_1",
+      "botId": "bot1",
+      "strategyId": "strategy_scalper",
+      "strategyName": "Scalper V2",
+      "status": "completed",
+      "startTime": "2024-01-10T10:00:00Z",
+      "endTime": "2024-01-10T11:00:00Z",
+      "bestEpoch": 85,
+      "bestValLoss": 0.0089,
+      "modelUrl": "/models/scalper_v2.h5"
+    }
+  ]
+}
+
+TABELAS ENVOLVIDAS:
+- TrainingSession
+- Bot (para obter strategyName)
+
+-------------------------------------------------------------------------------
+3. API: POST /api/training/sessions
+-------------------------------------------------------------------------------
+
+Descrição: Cria uma nova sessão de treinamento
+
+HEADERS:
+  Authorization: Bearer {token}
+  Content-Type: application/json
+
+REQUEST BODY:
+{
+  "botId": "bot1",
+  "strategyId": "strategy_scalper",
+  "architecture": "lstm",
+  "modelVersion": "v1.0.0",
+  "baseModelId": "session_0",
+  "dataSource": "exchange",
+  "trainingPeriod": {
+    "startDate": "2024-01-01",
+    "endDate": "2024-03-31"
+  },
+  "includedPairs": ["BTC/USDT", "ETH/USDT"],
+  "indicators": ["RSI", "MACD", "SMA"],
+  "timeframe": "1h",
+  "hyperparameters": {
+    "hiddenLayers": 2,
+    "neuronsPerLayer": [64, 32],
+    "dropoutRate": 0.2,
+    "activation": "relu",
+    "batchSize": 32,
+    "epochs": 100,
+    "learningRate": 0.001,
+    "optimizer": "adam",
+    "lossFunction": "mse",
+    "validationSplit": 20,
+    "earlyStopping": {
+      "enabled": true,
+      "patience": 10
+    }
+  }
+}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "id": "session_123",
+    "botId": "bot1",
+    "strategyId": "strategy_scalper",
+    "strategyName": "Scalper V2",
+    "status": "pending",
+    "startTime": "2024-01-15T10:30:00Z",
+    "config": { ... }
+  }
+}
+
+TABELAS ENVOLVIDAS:
+- TrainingSession (criação)
+- Bot (leitura para strategyName)
+
+CAMPOS INSERIDOS:
+- id (UUID)
+- botId
+- status = 'pending'
+- startTime = now()
+- config (JSON com todos os parâmetros)
+
+-------------------------------------------------------------------------------
+4. API: GET /api/training/sessions/{id}
+-------------------------------------------------------------------------------
+
+Descrição: Retorna detalhes de uma sessão específica
+
+HEADERS:
+  Authorization: Bearer {token}
+
+PATH PARAMS:
+  id: string (ID da sessão)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "id": "session_123",
+    "botId": "bot1",
+    "status": "running",
+    "startTime": "2024-01-15T10:30:00Z",
+    "config": { ... },
+    "metrics": [
+      {
+        "epoch": 1,
+        "trainLoss": 0.0234,
+        "valLoss": 0.0256,
+        "learningRate": 0.001,
+        "duration": 1200
+      }
+    ],
+    "logs": [
+      {
+        "timestamp": "2024-01-15T10:30:05Z",
+        "level": "INFO",
+        "message": "Iniciando treinamento",
+        "epoch": null
+      }
+    ],
+    "bestEpoch": null,
+    "bestValLoss": null
+  }
+}
+
+TABELAS ENVOLVIDAS:
+- TrainingSession
+
+-------------------------------------------------------------------------------
+5. API: PUT /api/training/sessions/{id}/pause
+-------------------------------------------------------------------------------
+
+Descrição: Pausa uma sessão de treinamento em execução
+
+HEADERS:
+  Authorization: Bearer {token}
+
+PATH PARAMS:
+  id: string (ID da sessão)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true
+}
+
+TABELAS ENVOLVIDAS:
+- TrainingSession (atualização)
+
+CAMPOS ATUALIZADOS:
+- status = 'paused'
+- updatedAt
+
+-------------------------------------------------------------------------------
+6. API: PUT /api/training/sessions/{id}/resume
+-------------------------------------------------------------------------------
+
+Descrição: Retoma uma sessão de treinamento pausada
+
+HEADERS:
+  Authorization: Bearer {token}
+
+PATH PARAMS:
+  id: string (ID da sessão)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true
+}
+
+TABELAS ENVOLVIDAS:
+- TrainingSession (atualização)
+
+CAMPOS ATUALIZADOS:
+- status = 'running'
+- updatedAt
+
+-------------------------------------------------------------------------------
+7. API: DELETE /api/training/sessions/{id}/cancel
+-------------------------------------------------------------------------------
+
+Descrição: Cancela uma sessão de treinamento
+
+HEADERS:
+  Authorization: Bearer {token}
+
+PATH PARAMS:
+  id: string (ID da sessão)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true
+}
+
+TABELAS ENVOLVIDAS:
+- TrainingSession (atualização)
+
+CAMPOS ATUALIZADOS:
+- status = 'cancelled'
+- endTime = now()
+- updatedAt
+
+-------------------------------------------------------------------------------
+8. API: POST /api/training/sessions/{id}/test
+-------------------------------------------------------------------------------
+
+Descrição: Executa backtesting com o modelo treinado
+
+HEADERS:
+  Authorization: Bearer {token}
+
+PATH PARAMS:
+  id: string (ID da sessão)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "sessionId": "session_123",
+    "testPeriod": {
+      "startDate": "2024-04-01",
+      "endDate": "2024-04-10"
+    },
+    "totalTrades": 145,
+    "winRate": 68.5,
+    "totalProfit": 12500.75,
+    "sharpeRatio": 1.85,
+    "maxDrawdown": -12.5,
+    "profitFactor": 1.92
+  }
+}
+
+TABELAS ENVOLVIDAS:
+- Nenhuma (resultado calculado em tempo real)
+
+-------------------------------------------------------------------------------
+9. API: POST /api/training/sessions/{id}/save
+-------------------------------------------------------------------------------
+
+Descrição: Salva permanentemente o modelo treinado
+
+HEADERS:
+  Authorization: Bearer {token}
+
+PATH PARAMS:
+  id: string (ID da sessão)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "modelUrl": "/models/session_123_final.h5"
+  }
+}
+
+TABELAS ENVOLVIDAS:
+- TrainingSession (atualização)
+- Bot (atualização)
+
+CAMPOS ATUALIZADOS:
+
+TrainingSession:
+- modelUrl
+- updatedAt
+
+Bot:
+- modelVersion
+- modelUrl
+- updatedAt
+
+-------------------------------------------------------------------------------
+10. API: GET /api/training/sessions/{id}/download
+-------------------------------------------------------------------------------
+
+Descrição: Baixa o arquivo do modelo treinado
+
+HEADERS:
+  Authorization: Bearer {token}
+
+PATH PARAMS:
+  id: string (ID da sessão)
+
+RESPONSE:
+  Content-Type: application/octet-stream
+  Content-Disposition: attachment; filename="model_session_123.h5"
+  (arquivo binário)
+
+TABELAS ENVOLVIDAS:
+- TrainingSession (leitura do modelUrl)
+
+-------------------------------------------------------------------------------
+11. API: POST /api/training/upload
+-------------------------------------------------------------------------------
+
+Descrição: Faz upload de arquivo CSV para dataset
+
+HEADERS:
+  Authorization: Bearer {token}
+  Content-Type: multipart/form-data
+
+REQUEST BODY:
+  file: arquivo CSV
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "url": "/uploads/dataset_20240115_103000.csv"
+  }
+}
+
+TABELAS ENVOLVIDAS:
+- Nenhuma (arquivo salvo em disco/S3)
+
+-------------------------------------------------------------------------------
+12. MODELO DE DADOS - TrainingSession
+-------------------------------------------------------------------------------
+
+TABELA: TrainingSession
+
+CAMPO               | TIPO      | OBRIG | DESCRIÇÃO
+--------------------|-----------|-------|----------------------------------
+id                  | String    | Sim   | UUID - Chave primária
+botId               | String    | Sim   | FK para Bot
+status              | String    | Sim   | pending/running/paused/completed/failed/cancelled
+startTime           | DateTime  | Sim   | Data de início
+endTime             | DateTime  | Não   | Data de término
+config              | String    | Sim   | JSON com configuração
+metrics             | String    | Sim   | JSON array de métricas
+bestEpoch           | Int       | Não   | Melhor época
+bestValLoss         | Float     | Não   | Melhor loss de validação
+modelUrl            | String    | Não   | URL do modelo salvo
+createdAt           | DateTime  | Sim   | Data de criação
+updatedAt           | DateTime  | Sim   | Data de atualização
+
+EXEMPLO DE REGISTRO:
+
+{
+  "id": "session_123",
+  "botId": "bot1",
+  "status": "completed",
+  "startTime": "2024-01-15T10:30:00Z",
+  "endTime": "2024-01-15T11:30:00Z",
+  "config": "{\"architecture\":\"lstm\",\"modelVersion\":\"v1.0.0\",...}",
+  "metrics": "[{\"epoch\":1,\"trainLoss\":0.0234,...}]",
+  "bestEpoch": 85,
+  "bestValLoss": 0.0089,
+  "modelUrl": "/models/session_123.h5",
+  "createdAt": "2024-01-15T10:30:00Z",
+  "updatedAt": "2024-01-15T11:30:00Z"
+}
+
+-------------------------------------------------------------------------------
+13. WEBHOOKS - Atualizações em Tempo Real (WebSocket)
+-------------------------------------------------------------------------------
+
+Durante o treinamento, o backend envia atualizações via WebSocket:
+
+EVENTO: training:metrics
+DADOS:
+{
+  "sessionId": "session_123",
+  "metrics": {
+    "epoch": 42,
+    "trainLoss": 0.0123,
+    "valLoss": 0.0134,
+    "learningRate": 0.001,
+    "duration": 50400
+  }
+}
+
+EVENTO: training:log
+DADOS:
+{
+  "sessionId": "session_123",
+  "log": {
+    "timestamp": "2024-01-15T10:35:00Z",
+    "level": "INFO",
+    "message": "Época 42 concluída. Loss: 0.0123"
+  }
+}
+
+EVENTO: training:status
+DADOS:
+{
+  "sessionId": "session_123",
+  "status": "completed"
+}
+
+================================================================================
+FIM DO ARQUIVO 04_treinamento.txt
+================================================================================

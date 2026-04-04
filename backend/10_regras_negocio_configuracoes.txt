@@ -1,0 +1,113 @@
+================================================================================
+REGRAS DE NEGÓCIO - CONFIGURAÇÕES
+================================================================================
+
+-------------------------------------------------------------------------------
+RN-CFG-001: Carregamento de Configurações
+-------------------------------------------------------------------------------
+
+API: GET /api/configurations
+
+REGRAS:
+
+1. Buscar configurações do usuário logado
+   - Uma única linha por usuário (relação 1:1)
+
+2. Se não existir configuração para o usuário:
+   - Criar configuração com valores padrão
+
+3. Valores padrão (defaults):
+   - exchange: "binance"
+   - apiKey: ""
+   - secretKey: ""
+   - stopLossPercent: 5.0
+   - takeProfitPercent: 10.0
+   - leverage: 1
+   - maxTradeAmount: 1000
+   - maxTradeAmountUnit: "USDT"
+   - allowedPairs: "[]"
+   - discountUsdtPercent: 0.075
+   - discountBnbPercent: 0.075
+   - minBnbBalance: 0.01
+   - mode: "spot"
+   - orderType: "market"
+   - slippagePercent: 0.5
+   - strategies: (JSON com estratégias padrão)
+
+4. Estratégias padrão:
+   [
+     { id: "strategy_scalper", name: "Scalper V2", strategyType: "scalper", isActive: true, parameters: {...} },
+     { id: "strategy_momentum", name: "Momentum Trader", strategyType: "momentum", isActive: true, parameters: {...} },
+     { id: "strategy_trend", name: "Trend Follower", strategyType: "trend_follower", isActive: true, parameters: {...} },
+     { id: "strategy_reversion", name: "Mean Reversion", strategyType: "mean_reversion", isActive: true, parameters: {...} },
+     { id: "strategy_arbitrage", name: "Arbitrage Hunter", strategyType: "arbitrage", isActive: false, parameters: {...} }
+   ]
+
+-------------------------------------------------------------------------------
+RN-CFG-002: Validação de Parâmetros
+-------------------------------------------------------------------------------
+
+API: PUT /api/configurations
+
+REGRAS DE VALIDAÇÃO:
+
+| Campo | Regra | Erro |
+|-------|-------|------|
+| stopLossPercent | 0 < valor <= 50 | "Stop-loss deve ser entre 0 e 50%" |
+| takeProfitPercent | 0 < valor <= 100 | "Take-profit deve ser entre 0 e 100%" |
+| leverage | 1 <= valor <= 125 | "Alavancagem deve ser entre 1 e 125x" |
+| maxTradeAmount | > 0 | "Valor máximo deve ser positivo" |
+| discountUsdtPercent | 0 <= valor <= 1 | "Desconto USDT deve ser entre 0 e 1%" |
+| discountBnbPercent | 0 <= valor <= 1 | "Desconto BNB deve ser entre 0 e 1%" |
+| minBnbBalance | >= 0 | "Saldo mínimo BNB não pode ser negativo" |
+| slippagePercent | 0 <= valor <= 5 | "Slippage deve ser entre 0 e 5%" |
+| allowedPairs | Array de strings válidas | "Pares inválidos" |
+| strategies | JSON válido com estrutura correta | "Estratégias inválidas" |
+
+-------------------------------------------------------------------------------
+RN-CFG-003: Teste de Conexão com Exchange
+-------------------------------------------------------------------------------
+
+API: POST /api/configurations/test-connection
+
+REGRAS:
+
+1. Validar credenciais com a exchange selecionada
+
+2. Para Binance:
+   - Endpoint: GET /api/v3/account
+   - Headers: { 'X-MBX-APIKEY': apiKey }
+   - Assinar requisição com secretKey
+
+3. Critério de sucesso:
+   - Resposta 200 da exchange
+   - Retornou dados da conta
+
+4. Critério de falha:
+   - Timeout (30 segundos)
+   - Resposta 401/403 (chave inválida)
+   - Resposta 4xx/5xx (erro na exchange)
+
+5. Armazenar chaves apenas se salvar configuração (não no teste)
+
+-------------------------------------------------------------------------------
+RN-CFG-004: Carregamento de Pares Disponíveis
+-------------------------------------------------------------------------------
+
+API: GET /api/exchange/pairs
+
+REGRAS:
+
+1. Buscar pares disponíveis na exchange (ex: Binance)
+
+2. Filtrar apenas pares com quoteAsset = 'USDT'
+
+3. Cache por 5 minutos para evitar chamadas excessivas
+
+4. Ordenar alfabeticamente
+
+5. Formato de retorno: ["BTC/USDT", "ETH/USDT", ...]
+
+================================================================================
+FIM DO ARQUIVO 10_regras_negocio_configuracoes.txt
+================================================================================

@@ -1,0 +1,243 @@
+================================================================================
+WEBSOCKET - COMUNICAÇÃO EM TEMPO REAL
+================================================================================
+
+1. CONEXÃO
+===============================================================================
+
+URL: ws://localhost:3001 (ou a mesma porta do backend)
+
+HEADERS:
+  - Precisa autenticar via token
+
+EXEMPLO DE CONEXÃO (Socket.io):
+
+const socket = io('http://localhost:3001', {
+  auth: { token: localStorage.getItem('auth_token') }
+})
+
+
+2. EVENTOS (Cliente -> Servidor)
+===============================================================================
+
+2.1 subscribe:dashboard
+Descrição: Inscreve para receber atualizações do dashboard
+Payload: {}
+
+2.2 subscribe:orders
+Descrição: Inscreve para receber atualizações de ordens
+Payload: {}
+
+2.3 subscribe:logs
+Descrição: Inscreve para receber novos logs
+Payload: {}
+
+2.4 subscribe:traces
+Descrição: Inscreve para receber novos traces
+Payload: {}
+
+2.5 subscribe:training:{sessionId}
+Descrição: Inscreve para receber atualizações de uma sessão de treinamento
+Payload: {}
+
+2.6 unsubscribe:dashboard
+Descrição: Cancela inscrição das atualizações do dashboard
+Payload: {}
+
+2.7 unsubscribe:orders
+Descrição: Cancela inscrição das atualizações de ordens
+Payload: {}
+
+2.8 unsubscribe:logs
+Descrição: Cancela inscrição dos logs
+Payload: {}
+
+2.9 unsubscribe:traces
+Descrição: Cancela inscrição dos traces
+Payload: {}
+
+2.10 unsubscribe:training:{sessionId}
+Descrição: Cancela inscrição da sessão de treinamento
+Payload: {}
+
+
+3. EVENTOS (Servidor -> Cliente)
+===============================================================================
+
+3.1 dashboard:update
+Descrição: Atualização dos dados do dashboard
+Frequência: A cada 5-10 segundos
+Payload:
+{
+  "totalBalance": { ... },
+  "currenciesBalance": [ ... ],
+  "botsStatus": [ ... ]
+}
+
+3.2 order:created
+Descrição: Nova ordem criada
+Payload: Transaction (objeto completo)
+
+3.3 order:updated
+Descrição: Ordem atualizada (status mudou)
+Payload: { "id": "tx_123", "status": "executed" }
+
+3.4 log:new
+Descrição: Novo log gerado
+Payload: Log (objeto completo)
+
+3.5 trace:new
+Descrição: Novo trace gerado
+Payload: Trace (objeto completo)
+
+3.6 training:metrics
+Descrição: Novas métricas de treinamento
+Frequência: A cada época
+Payload:
+{
+  "sessionId": "session_123",
+  "metrics": {
+    "epoch": 42,
+    "trainLoss": 0.0123,
+    "valLoss": 0.0134,
+    "learningRate": 0.001,
+    "duration": 50400
+  }
+}
+
+3.7 training:log
+Descrição: Novo log de treinamento
+Payload:
+{
+  "sessionId": "session_123",
+  "log": {
+    "timestamp": "2024-01-15T10:35:00Z",
+    "level": "INFO",
+    "message": "Epoca 42 concluida"
+  }
+}
+
+3.8 training:status
+Descrição: Mudança de status do treinamento
+Payload:
+{
+  "sessionId": "session_123",
+  "status": "completed"
+}
+
+3.9 connected
+Descrição: Conexão estabelecida
+Payload: { "message": "connected" }
+
+3.10 error
+Descrição: Erro na conexão ou subscrição
+Payload: { "error": "Mensagem de erro" }
+
+
+4. FLUXO TÍPICO (Frontend)
+===============================================================================
+
+1. Conectar ao WebSocket:
+   socket = io(WS_URL, { auth: { token } })
+
+2. Inscrever para eventos necessarios:
+   socket.emit('subscribe:dashboard')
+   socket.emit('subscribe:orders')
+   socket.emit('subscribe:logs')
+   socket.emit('subscribe:traces')
+
+3. Receber atualizacoes:
+   socket.on('dashboard:update', (data) => {
+     atualizarDashboard(data)
+   })
+
+   socket.on('order:created', (order) => {
+     adicionarOrdemNaLista(order)
+   })
+
+   socket.on('log:new', (log) => {
+     adicionarLogNoTerminal(log)
+   })
+
+4. Ao trocar de tela ou sair, cancelar inscricoes:
+   socket.emit('unsubscribe:dashboard')
+   socket.emit('unsubscribe:orders')
+   socket.emit('unsubscribe:logs')
+   socket.emit('unsubscribe:traces')
+
+5. Ao desconectar:
+   socket.disconnect()
+
+
+5. EXEMPLO DE IMPLEMENTACAO (Frontend)
+===============================================================================
+
+Hook useWebSocket em TypeScript:
+
+import { useEffect, useState } from 'react'
+import { io, Socket } from 'socket.io-client'
+
+export function useWebSocket() {
+  const [socket, setSocket] = useState<Socket | null>(null)
+  const [isConnected, setIsConnected] = useState(false)
+
+  useEffect(() => {
+    const token = localStorage.getItem('auth_token')
+    const newSocket = io('http://localhost:3001', {
+      auth: { token }
+    })
+
+    newSocket.on('connect', () => {
+      console.log('WebSocket connected')
+      setIsConnected(true)
+      // Inscrever para eventos
+      newSocket.emit('subscribe:dashboard')
+      newSocket.emit('subscribe:orders')
+      newSocket.emit('subscribe:logs')
+      newSocket.emit('subscribe:traces')
+    })
+
+    newSocket.on('disconnect', () => {
+      console.log('WebSocket disconnected')
+      setIsConnected(false)
+    })
+
+    setSocket(newSocket)
+
+    return () => {
+      newSocket.disconnect()
+    }
+  }, [])
+
+  return { socket, isConnected }
+}
+
+
+6. TABELA DE REFERENCIA RAPIDA
+===============================================================================
+
+| EVENTO (Cliente)              | DESCRICAO                              |
+|-------------------------------|----------------------------------------|
+| subscribe:dashboard           | Receber atualizacoes do dashboard      |
+| subscribe:orders              | Receber atualizacoes de ordens         |
+| subscribe:logs                | Receber novos logs                     |
+| subscribe:traces              | Receber novos traces                   |
+| subscribe:training:{id}       | Receber atualizacoes de treinamento    |
+| unsubscribe:*                 | Cancelar inscricao                      |
+
+| EVENTO (Servidor)             | DESCRICAO                              |
+|-------------------------------|----------------------------------------|
+| dashboard:update              | Dados do dashboard atualizados         |
+| order:created                 | Nova ordem criada                      |
+| order:updated                 | Ordem atualizada                       |
+| log:new                       | Novo log gerado                        |
+| trace:new                     | Novo trace gerado                      |
+| training:metrics              | Novas metricas de treinamento          |
+| training:log                  | Novo log de treinamento                |
+| training:status               | Status do treinamento mudou            |
+| connected                     | Conexao estabelecida                   |
+| error                         | Erro ocorrido                          |
+
+================================================================================
+FIM DO ARQUIVO 08_websocket.txt
+================================================================================

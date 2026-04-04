@@ -1,0 +1,402 @@
+================================================================================
+TELA: TRANSAÇÕES
+================================================================================
+
+-------------------------------------------------------------------------------
+1. API: GET /api/exchange/rate
+-------------------------------------------------------------------------------
+
+Descrição: Retorna cotação entre duas moedas
+
+HEADERS:
+  Authorization: Bearer {token}
+
+QUERY PARAMS:
+  from: string (ex: USDT)
+  to: string (ex: BRL)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "from": "USDT",
+    "to": "BRL",
+    "rate": 5.85,
+    "lastUpdate": "2024-01-15T10:30:00Z"
+  }
+}
+
+TABELAS ENVOLVIDAS:
+- Cache interno ou API externa
+
+-------------------------------------------------------------------------------
+2. API: GET /api/exchange/candles
+-------------------------------------------------------------------------------
+
+Descrição: Retorna dados de velas para gráfico
+
+HEADERS:
+  Authorization: Bearer {token}
+
+QUERY PARAMS:
+  pair: string (ex: BTC/USDT)
+  period: string (15m, 30m, 1h, 4h, 1d, 1w)
+  limit: number (padrão: 100)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": [
+    {
+      "timestamp": "2024-01-15T10:00:00Z",
+      "open": 62000,
+      "high": 62500,
+      "low": 61800,
+      "close": 62300,
+      "volume": 1250.5
+    },
+    {
+      "timestamp": "2024-01-15T11:00:00Z",
+      "open": 62300,
+      "high": 63500,
+      "low": 62200,
+      "close": 63400,
+      "volume": 2100.3
+    }
+  ]
+}
+
+TABELAS ENVOLVIDAS:
+- API externa (exchange)
+
+-------------------------------------------------------------------------------
+3. API: GET /api/balance
+-------------------------------------------------------------------------------
+
+Descrição: Retorna saldo disponível por moeda
+
+HEADERS:
+  Authorization: Bearer {token}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": [
+    {
+      "currency": "USDT",
+      "available": 12500,
+      "reserved": 500,
+      "total": 13000
+    },
+    {
+      "currency": "BTC",
+      "available": 0.5,
+      "reserved": 0,
+      "total": 0.5
+    },
+    {
+      "currency": "ETH",
+      "available": 3.2,
+      "reserved": 0.2,
+      "total": 3.4
+    }
+  ]
+}
+
+TABELAS ENVOLVIDAS:
+- Balance
+
+CAMPOS RETORNADOS:
+- currency
+- available
+- reserved
+- total
+
+-------------------------------------------------------------------------------
+4. API: GET /api/orders
+-------------------------------------------------------------------------------
+
+Descrição: Lista transações com paginação e filtros
+
+HEADERS:
+  Authorization: Bearer {token}
+
+QUERY PARAMS:
+  page: number (padrão: 1)
+  limit: number (padrão: 20)
+  pair: string (opcional)
+  types: string (opcional, ex: buy,sell)
+  statuses: string (opcional, ex: executed,pending,cancelled)
+  origins: string (opcional, ex: manual,bot)
+  startDate: string (opcional, ISO date)
+  endDate: string (opcional, ISO date)
+  search: string (opcional)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "id": "tx_001",
+        "date": "2024-01-15T10:30:00Z",
+        "pair": "BTC/USDT",
+        "origin": "bot",
+        "botId": "bot1",
+        "botName": "Scalper V2",
+        "type": "buy",
+        "quantity": 0.05,
+        "price": 62000,
+        "total": 3100,
+        "fee": 12.50,
+        "status": "executed",
+        "profitBrl": 4387.50,
+        "profitPercent": 2.42
+      }
+    ],
+    "total": 145,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 8
+  }
+}
+
+TABELAS ENVOLVIDAS:
+- Transaction
+- Bot (para botName)
+
+CAMPOS RETORNADOS:
+- id
+- date
+- pair
+- origin
+- botId
+- botName (join com Bot.name)
+- type
+- quantity
+- price
+- total
+- fee
+- status
+- profitBrl
+- profitPercent
+
+-------------------------------------------------------------------------------
+5. API: POST /api/orders
+-------------------------------------------------------------------------------
+
+Descrição: Cria uma ordem manual
+
+HEADERS:
+  Authorization: Bearer {token}
+  Content-Type: application/json
+
+REQUEST BODY:
+{
+  "pair": "BTC/USDT",
+  "type": "buy",
+  "quantity": 0.05,
+  "orderType": "limit",
+  "price": 62000
+}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "id": "tx_123",
+    "date": "2024-01-15T10:35:00Z",
+    "pair": "BTC/USDT",
+    "origin": "manual",
+    "type": "buy",
+    "quantity": 0.05,
+    "price": 62000,
+    "total": 3100,
+    "fee": 12.50,
+    "status": "executed"
+  }
+}
+
+TABELAS ENVOLVIDAS:
+- Transaction (criação)
+- Balance (atualização)
+
+CAMPOS INSERIDOS (Transaction):
+- id (UUID)
+- date = now()
+- pair
+- origin = 'manual'
+- type
+- quantity
+- price
+- total = quantity * price
+- fee = total * 0.001 (0.1%)
+- status = 'executed'
+
+CAMPOS ATUALIZADOS (Balance):
+- Para compra: decrease available, increase reserved
+- Para venda: increase available, decrease reserved
+
+FLUXO:
+1. Validar se há saldo suficiente
+2. Reservar saldo (atualizar Balance.reserved)
+3. Executar ordem (simular ou real)
+4. Atualizar saldos
+5. Registrar transação
+6. Registrar log INFO
+7. Registrar trace DEBUG
+8. Emitir WebSocket order:created
+
+-------------------------------------------------------------------------------
+6. API: DELETE /api/orders/{id}/cancel
+-------------------------------------------------------------------------------
+
+Descrição: Cancela uma ordem pendente
+
+HEADERS:
+  Authorization: Bearer {token}
+
+PATH PARAMS:
+  id: string (ID da ordem)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true
+}
+
+TABELAS ENVOLVIDAS:
+- Transaction (atualização)
+- Balance (atualização)
+
+CAMPOS ATUALIZADOS (Transaction):
+- status = 'cancelled'
+
+CAMPOS ATUALIZADOS (Balance):
+- Liberar saldo reservado
+
+-------------------------------------------------------------------------------
+7. MODELO DE DADOS - Transaction
+-------------------------------------------------------------------------------
+
+TABELA: Transaction
+
+CAMPO           | TIPO      | OBRIG | DESCRIÇÃO
+----------------|-----------|-------|----------------------------------
+id              | String    | Sim   | UUID - Chave primária
+date            | DateTime  | Sim   | Data da transação
+pair            | String    | Sim   | Par negociado (ex: BTC/USDT)
+origin          | String    | Sim   | manual ou bot
+botId           | String    | Não   | FK para Bot (se origin=bot)
+type            | String    | Sim   | buy ou sell
+quantity        | Float     | Sim   | Quantidade negociada
+price           | Float     | Sim   | Preço da transação
+total           | Float     | Sim   | Valor total (quantity * price)
+fee             | Float     | Sim   | Taxa da transação
+status          | String    | Sim   | executed/pending/cancelled
+profitBrl       | Float     | Não   | Lucro/perda em reais
+profitPercent   | Float     | Não   | Percentual de lucro/perda
+userId          | String    | Sim   | FK para User
+createdAt       | DateTime  | Sim   | Data de criação
+
+EXEMPLO DE REGISTRO:
+
+{
+  "id": "tx_123",
+  "date": "2024-01-15T10:35:00Z",
+  "pair": "BTC/USDT",
+  "origin": "manual",
+  "botId": null,
+  "type": "buy",
+  "quantity": 0.05,
+  "price": 62000,
+  "total": 3100,
+  "fee": 3.10,
+  "status": "executed",
+  "profitBrl": null,
+  "profitPercent": null,
+  "userId": "user_001",
+  "createdAt": "2024-01-15T10:35:00Z"
+}
+
+-------------------------------------------------------------------------------
+8. MODELO DE DADOS - Balance
+-------------------------------------------------------------------------------
+
+TABELA: Balance
+
+CAMPO           | TIPO      | OBRIG | DESCRIÇÃO
+----------------|-----------|-------|----------------------------------
+id              | String    | Sim   | UUID - Chave primária
+currency        | String    | Sim   | Moeda (USDT, BTC, ETH, SOL)
+available       | Float     | Sim   | Saldo disponível para trading
+reserved        | Float     | Sim   | Saldo reservado em ordens
+total           | Float     | Sim   | Saldo total (available + reserved)
+userId          | String    | Sim   | FK para User
+updatedAt       | DateTime  | Sim   | Data da última atualização
+
+EXEMPLO DE REGISTRO:
+
+{
+  "id": "bal_001",
+  "currency": "USDT",
+  "available": 12500,
+  "reserved": 500,
+  "total": 13000,
+  "userId": "user_001",
+  "updatedAt": "2024-01-15T10:35:00Z"
+}
+
+-------------------------------------------------------------------------------
+9. SEQUÊNCIA DE CHAMADAS (Frontend)
+-------------------------------------------------------------------------------
+
+1. Ao carregar a página:
+   - GET /api/balance (saldo disponível)
+   - GET /api/exchange/rate?from=USDT&to=BRL (cotação)
+   - GET /api/exchange/candles?pair=BTC/USDT&period=1h (gráfico)
+   - GET /api/orders?page=1&limit=20 (histórico)
+
+2. Ao mudar a moeda de exibição:
+   - GET /api/exchange/rate?from=USDT&to={moeda}
+
+3. Ao mudar o par no gráfico:
+   - GET /api/exchange/candles?pair={par}&period={periodo}
+
+4. Ao aplicar filtros no histórico:
+   - GET /api/orders?{filtros}
+
+5. Ao enviar ordem manual:
+   - POST /api/orders (com dados da ordem)
+
+6. Ao cancelar ordem:
+   - DELETE /api/orders/{id}/cancel
+
+-------------------------------------------------------------------------------
+10. WEBHOOKS - Atualizações em Tempo Real (WebSocket)
+-------------------------------------------------------------------------------
+
+EVENTO: order:created
+DADOS:
+{
+  "id": "tx_123",
+  "date": "2024-01-15T10:35:00Z",
+  "pair": "BTC/USDT",
+  "origin": "manual",
+  "type": "buy",
+  "quantity": 0.05,
+  "price": 62000,
+  "total": 3100,
+  "fee": 3.10,
+  "status": "executed"
+}
+
+EVENTO: order:updated
+DADOS:
+{
+  "id": "tx_123",
+  "status": "executed"
+}
+
+================================================================================
+FIM DO ARQUIVO 05_transacoes.txt
+================================================================================
