@@ -1,6 +1,6 @@
 ================================================================================
 DOCUMENTAÇÃO COMPLETA DO PROJETO – BOT DE CRIPTOMOEDAS COM IA (FRONTEND)
-VERSÃO 2.0 - ARQUITETURA DE BOTS POR ESTRATÉGIA
+VERSÃO FINAL
 ================================================================================
 
 ÍNDICE
@@ -8,91 +8,77 @@ VERSÃO 2.0 - ARQUITETURA DE BOTS POR ESTRATÉGIA
 1. VISÃO GERAL
 2. ARQUITETURA E PRINCÍPIOS SOLID
 3. STACK TÉCNICA
-4. MODELOS DE DADOS PRINCIPAIS
-5. ESPECIFICAÇÃO DAS TELAS
-   5.1 Dashboard
-   5.2 Configurações
-   5.3 Treinamento da IA
-   5.4 Transações
-   5.5 Log / Trace Geral
-6. API ENDPOINTS
-7. DIFERENCIAIS DA ARQUITETURA
-8. PRÓXIMOS PASSOS
+4. ESTRUTURA DE PASTAS
+5. MODELOS DE DADOS PRINCIPAIS
+6. ESPECIFICAÇÃO DAS TELAS
+   6.1 Dashboard
+   6.2 Configurações
+   6.3 Treinamento da IA
+   6.4 Transações
+   6.5 Log / Trace Geral
+   6.6 Login
+   6.7 Perfil
+7. API ENDPOINTS
+8. DIFERENCIAIS DA ARQUITETURA
+9. CONSIDERAÇÕES GERAIS
+10. PRÓXIMOS PASSOS
 
 
 1. VISÃO GERAL
 ===============================================================================
 
 O projeto consiste em uma interface web para um sistema de trading automatizado
-utilizando inteligência artificial. O frontend será desenvolvido com foco em
-apenas frontend, utilizando dados mockados inicialmente, mas preparado para
-consumir APIs reais no futuro.
+utilizando inteligência artificial. O frontend foi desenvolvido com React +
+TypeScript, utilizando dados mockados inicialmente, mas preparado para consumir
+APIs reais no futuro.
 
 CONCEITO FUNDAMENTAL DOS BOTS:
 
-Diferencial da Arquitetura:
 - Cada bot é especializado em um tipo de análise/estratégia
-  (ex: Scalper, Momentum, Trend Follower, Arbitrage, Mean Reversion)
+  (Scalper, Momentum, Trend Follower, Arbitrage, Mean Reversion)
 - O bot analisa dinamicamente qualquer moeda disponível no mercado
 - O bot decide automaticamente qual moeda negociar com base em seus indicadores
 - Não existe bot fixo por moeda; todos os bots podem operar qualquer moeda
 
-Exemplo de funcionamento:
-- Bot "Scalper" → Analisa BTC, ETH, SOL, DOGE... e decide qual tem o melhor
-  setup para scalping no momento
-- Bot "Momentum" → Analisa todas as moedas e identifica qual está com maior
-  momentum
-- Cada bot tem autonomia para trocar de moeda a qualquer momento conforme
-  sua análise
+TELAS DO SISTEMA:
 
-TELAS DEFINIDAS:
-1. Dashboard – visão geral do portfólio e status das estratégias
-2. Configurações – parâmetros dos bots e integrações
-3. Treinamento da IA – configuração e monitoramento dos modelos por estratégia
-4. Transações – histórico e execução manual de ordens
-5. Log / Trace Geral – auditoria completa do sistema
+1. Login – Autenticação de usuário
+2. Dashboard – Visão geral do portfólio e status das estratégias
+3. Configurações – Parâmetros dos bots e integrações com exchanges
+4. Treinamento da IA – Configuração e monitoramento dos modelos por estratégia
+5. Transações – Histórico e execução manual de ordens
+6. Log / Trace Geral – Auditoria completa com rastreamento de execução
+7. Perfil – Gerenciamento de informações do usuário
 
 
 2. ARQUITETURA E PRINCÍPIOS SOLID
 ===============================================================================
 
-A arquitetura do frontend será baseada nos princípios SOLID, garantindo um
-código modular, testável e de fácil manutenção.
+A arquitetura do frontend é baseada nos princípios SOLID:
 
-2.1 S – Single Responsibility Principle (Responsabilidade Única)
+S – Single Responsibility Principle
+- Components: Renderizam UI e delegam ações
+- Hooks: Gerenciam lógica de negócio
+- Services: Realizam requisições HTTP/WebSocket
+- Stores: Gerenciam estado de UI
+- Utils: Funções puras (formatação, validação)
 
-| Camada       | Responsabilidade Útica                                    |
-|--------------|-----------------------------------------------------------|
-| Components   | Renderizar UI e delegar ações para hooks/stores          |
-| Hooks        | Gerenciar lógica de negócio e chamadas à API             |
-| Services     | Realizar requisições HTTP e WebSocket                    |
-| Stores       | Gerenciar estado de UI (loading, filtros, modais)        |
-| Utils        | Funções puras: formatação, validação, conversão          |
-| Types        | Definir contratos de dados                               |
+O – Open/Closed Principle
+- Componentes abertos para extensão via props
+- Fechados para modificação direta
+- Composição sobre herança
 
-2.2 O – Open/Closed Principle (Aberto-Fechado)
+L – Liskov Substitution Principle
+- Interfaces bem definidas com TypeScript
+- Tipagem forte para substituição segura
 
-- Componentes abertos para extensão (props, children, composition)
-- Fechados para modificação
-- Utilizar composição ao invés de herança
-- Criar componentes base que podem ser estendidos via props
+I – Interface Segregation Principle
+- Interfaces pequenas e específicas
+- Componentes não dependem de métodos que não usam
 
-2.3 L – Liskov Substitution Principle (Substituição de Liskov)
-
-- Componentes que herdam devem ser substituíveis sem quebrar a aplicação
-- Utilizar interfaces bem definidas e tipagem forte com TypeScript
-- Evitar herança profunda; preferir composição
-
-2.4 I – Interface Segregation Principle (Segregação de Interfaces)
-
-- Criar interfaces pequenas e específicas
-- Um componente não deve depender de métodos que não utiliza
-
-2.5 D – Dependency Inversion Principle (Inversão de Dependência)
-
-- Módulos de alto nível não dependem de módulos de baixo nível
-- Ambos dependem de abstrações (interfaces, hooks)
-- Utilizar injeção de dependência via React Context ou hooks customizados
+D – Dependency Inversion Principle
+- Módulos dependem de abstrações
+- Injeção de dependência via React Context e hooks
 
 
 3. STACK TÉCNICA
@@ -100,46 +86,101 @@ código modular, testável e de fácil manutenção.
 
 | Camada                       | Tecnologia                               |
 |------------------------------|------------------------------------------|
-| Framework                    | React + TypeScript                       |
+| Framework                    | React 18 + TypeScript                    |
 | Build tool                   | Vite                                     |
-| Estilização                  | TailwindCSS                              |
+| Estilização                  | TailwindCSS + CSS Variables              |
 | Roteamento                   | React Router v6                          |
 | Gerenciamento de estado (UI) | Zustand                                  |
 | Requisições HTTP             | Axios + React Query                      |
 | Gráficos                     | Recharts + lightweight-charts            |
 | Formulários                  | React Hook Form + Zod                    |
 | Comunicação real-time        | Socket.io-client                         |
-| Mock de API                  | JSON Server ou MSW                       |
+| Mock de API                  | JSON Server                              |
 | Testes                       | Vitest + React Testing Library           |
+| Ícones                       | Lucide React                             |
 
 
-4. MODELOS DE DADOS PRINCIPAIS
+4. ESTRUTURA DE PASTAS
 ===============================================================================
 
-4.1 Bot Status (Estratégia)
+src/
+├── features/                    # Organização por features (Domain-driven)
+│   ├── auth/                    # Autenticação
+│   │   └── LoginPage.tsx
+│   ├── dashboard/               # Dashboard
+│   │   ├── components/
+│   │   ├── hooks/
+│   │   ├── services/
+│   │   ├── types/
+│   │   └── DashboardPage.tsx
+│   ├── configurations/          # Configurações
+│   │   ├── components/
+│   │   ├── hooks/
+│   │   ├── services/
+│   │   ├── types/
+│   │   └── ConfiguracoesPage.tsx
+│   ├── training/                # Treinamento da IA
+│   │   ├── components/
+│   │   ├── hooks/
+│   │   ├── services/
+│   │   ├── types/
+│   │   └── TreinamentoPage.tsx
+│   ├── transactions/            # Transações
+│   │   ├── components/
+│   │   ├── hooks/
+│   │   ├── services/
+│   │   ├── types/
+│   │   └── TransacoesPage.tsx
+│   ├── logs/                    # Log / Trace
+│   │   ├── components/
+│   │   ├── hooks/
+│   │   ├── services/
+│   │   ├── types/
+│   │   └── LogsPage.tsx
+│   └── profile/                 # Perfil do usuário
+│       └── ProfilePage.tsx
+├── shared/                      # Código compartilhado
+│   ├── components/              # UI components
+│   │   ├── ui/                  # Button, Card, Input, Table, Modal, etc.
+│   │   ├── layout/              # Header, Sidebar, Footer
+│   │   └── charts/              # AreaChart, CandlestickChart
+│   ├── hooks/                   # Hooks genéricos
+│   ├── services/                # API e WebSocket clients
+│   ├── utils/                   # Funções puras
+│   └── types/                   # Tipos globais
+└── app/                         # Configuração da aplicação
+    ├── providers/               # ThemeProvider, QueryProvider, WebSocketProvider
+    ├── store/                   # Zustand stores
+    └── routes.tsx               # Rotas da aplicação
+
+
+5. MODELOS DE DADOS PRINCIPAIS
+===============================================================================
+
+5.1 Bot Status (Estratégia)
 
 interface BotStatus {
   id: string
   name: string                    // Nome do bot (ex: "Scalper V2")
-  strategy: string                // Tipo de estratégia (ex: "Scalper", "Momentum")
+  strategy: string                // Tipo de estratégia
   description?: string            // Descrição da estratégia
-  currentPair?: string            // Moeda sendo analisada no momento (dinâmico)
+  currentPair?: string            // Moeda sendo analisada (dinâmico)
   status: 'online' | 'offline' | 'training' | 'error'
   isPaused: boolean
-  lastAnalysis?: string           // Última análise realizada
+  lastAnalysis?: string
   recommendedAction?: 'buy' | 'sell' | 'hold'
-  confidence?: number             // Confiança da recomendação (0-100)
+  confidence?: number             // 0-100%
 }
 
-4.2 Transação
+5.2 Transação
 
 interface Transaction {
   id: string
   date: string
-  pair: string                    // Moeda negociada
+  pair: string
   origin: 'manual' | 'bot'
-  botId?: string                  // Qual bot executou
-  botName?: string                // Nome do bot
+  botId?: string
+  botName?: string
   type: 'buy' | 'sell'
   quantity: number
   price: number
@@ -150,364 +191,274 @@ interface Transaction {
   profitPercent?: number
 }
 
-4.3 Saldo Total
+5.3 Configurações do Bot
 
-interface TotalBalance {
-  totalBrl: number
-  dailyProfitBrl: number
-  dailyProfitPercent: number
-  totalPnlBrl: number
-  totalPnlPercent: number
-  hitRate: number
-  usdtBrlRate: number
+interface BotParameters {
+  riskManagement: {
+    stopLossPercent: number
+    takeProfitPercent: number
+    leverage: number
+    maxTradeAmount: number
+    maxTradeAmountUnit: 'USDT' | 'percent'
+  }
+  allowedPairs: string[]
+  fees: {
+    discountUsdtPercent: number
+    discountBnbPercent: number
+    minBnbBalance: number
+  }
+  advanced: {
+    mode: 'spot' | 'futures'
+    orderType: 'market' | 'limit'
+    slippagePercent: number
+  }
+  strategies: StrategyConfig[]
 }
 
-4.4 Saldo por Moeda
+5.4 Log e Trace
 
-interface CurrencyBalance {
-  currency: string
-  balanceBrl: number
-  dailyProfitBrl: number
-  dailyProfitPercent: number
-  totalPnlBrl: number
-  totalPnlPercent: number
-  hitRate: number
-  usdtBrlRate: number
+interface LogEntry {
+  id: string
+  timestamp: string
+  level: 'INFO' | 'WARN' | 'ERROR'
+  module: string
+  message: string
+  details?: Record<string, any>
+}
+
+interface TraceEntry {
+  id: string
+  timestamp: string
+  level: 'DEBUG' | 'TRACE'
+  module: string
+  traceId: string
+  parentTraceId?: string
+  functionName: string
+  message: string
+  durationMs: number
+  botId?: string
+  botName?: string
+  currentPair?: string
+  recommendedAction?: 'buy' | 'sell' | 'hold'
+  confidence?: number
+  errorFlag?: boolean
 }
 
 
-5. ESPECIFICAÇÃO DAS TELAS
+6. ESPECIFICAÇÃO DAS TELAS
 ===============================================================================
 
-5.1 DASHBOARD
+6.1 LOGIN
 -------------------------------------------------------------------------------
 
-OBJETIVO: Apresentar um resumo completo do portfólio e do status das estratégias.
+OBJETIVO: Autenticar usuários no sistema.
 
-ORGANIZAÇÃO DA TELA:
+CREDENCIAIS DE TESTE:
+- Email: admin@botcrypto.com
+- Senha: admin123
+
+COMPONENTES:
+- Formulário com campos de email e senha
+- Botão de mostrar/ocultar senha
+- Loading durante autenticação
+
+COMPORTAMENTO:
+- Ao logar, armazena token no localStorage
+- Redireciona para o Dashboard
+- Rotas protegidas redirecionam para login se não autenticado
+
+
+6.2 DASHBOARD
+-------------------------------------------------------------------------------
+
+OBJETIVO: Visão geral do portfólio e status das estratégias.
+
+COMPONENTES:
 1. Card de Saldo Total
-2. Cards de Saldo por Moeda (grid dinâmico)
+   - Saldo total em R$
+   - Cotação USDT/BRL
+   - Lucro/Prejuízo do dia
+   - % de acerto
+   - PnL Total
+
+2. Cards de Saldo por Moeda
+   - Saldo por moeda (BTC, ETH, SOL, etc.)
+   - Lucro/Prejuízo do dia
+   - % de acerto específico
+   - PnL Total
+
 3. Gráfico de Performance
-4. Últimas Transações (tabela com identificação do bot)
-5. Status das Estratégias (lista de bots por tipo de análise)
+   - Períodos: 24h, 7d, 30d, Total
+   - Gráfico de área interativo
 
-CARD DE SALDO TOTAL:
-| Campo                | Descrição                              | Formato              |
-|----------------------|----------------------------------------|----------------------|
-| Saldo total          | Valor total em R$                      | R$ 45.230,75         |
-| Cotação USDT/BRL     | Taxa de câmbio atual                   | R$ 5,85              |
-| Lucro/Prejuízo dia   | Variação do dia                        | +R$ 1.250,30 (+2,84%)|
-| % de acerto          | Percentual de operações vencedoras     | 68,5%                |
-| PnL Total            | Lucro/Prejuízo acumulado               | +R$ 10.230,75 (+29,2%)|
+4. Últimas Transações
+   - Tabela com as 5 operações mais recentes
+   - Colunas: Data/Hora, Par, Tipo, Valor Compra, Valor Venda, Taxa, Ganho
 
-CARDS DE SALDO POR MOEDA:
-| Campo                | Descrição                              |
-|----------------------|----------------------------------------|
-| Moeda                | BTC, ETH, SOL, etc.                    |
-| Saldo em R$          | Valor convertido                       |
-| Cotação USDT/BRL     | Taxa de câmbio atual                   |
-| Lucro/Prejuízo dia   | Variação do dia                        |
-| % de acerto          | Percentual específico da moeda         |
-| PnL Total            | Lucro/Prejuízo acumulado               |
-
-GRÁFICO DE PERFORMANCE:
-| Período              | Descrição                              |
-|----------------------|----------------------------------------|
-| 24h                  | Últimas 24 horas                       |
-| 7d                   | Últimos 7 dias                         |
-| 30d                  | Últimos 30 dias                        |
-| Total                | Desde o início da operação             |
-
-ÚLTIMAS TRANSAÇÕES (Tabela):
-| Coluna               | Descrição                              |
-|----------------------|----------------------------------------|
-| Data/Hora            | ISO formatada                          |
-| Par                  | Moeda negociada                        |
-| Bot                  | Nome do bot que executou               |
-| Tipo                 | Compra/Venda                           |
-| Quantidade           | Quantidade negociada                   |
-| Preço                | Preço da ordem                         |
-| Taxa                 | Taxa paga                              |
-| Ganho                | Lucro/Prejuízo                         |
-
-STATUS DAS ESTRATÉGIAS (Bots):
-| Campo                | Descrição                              |
-|----------------------|----------------------------------------|
-| Nome do bot          | Identificador da estratégia            |
-| Estratégia           | Tipo de análise (Scalper, Momentum)    |
-| Analisando           | Moeda atual sendo analisada (dinâmico) |
-| Status               | Online/Offline/Treinando/Erro          |
-| Recomendação         | Compra/Venda/Aguardar                  |
-| Confiança            | Nível de confiança da análise          |
-| Ação                 | Pausar/Retomar                         |
-
-REQUISITOS OBRIGATÓRIOS – DASHBOARD:
-R1: Bots por estratégia (especializados em tipo de análise, não em moeda fixa)
-R2: Moeda dinâmica (cada bot pode mudar a moeda analisada a qualquer momento)
-R3: Recomendação por bot (cada bot exibe sua recomendação atual buy/sell/hold)
-R4: Conversão automática de USDT para BRL
-R5: Atualização em tempo real via WebSocket/polling
-R6: Responsividade (desktop, tablet, mobile)
+5. Status das Estratégias
+   - Lista de bots com status, recomendação e confiança
+   - Botões de Pausar/Retomar
 
 
-5.2 CONFIGURAÇÕES
+6.3 CONFIGURAÇÕES
 -------------------------------------------------------------------------------
 
-OBJETIVO: Permitir ao usuário configurar o comportamento dos bots e integrações.
+OBJETIVO: Configurar bots, APIs e parâmetros.
 
-ORGANIZAÇÃO DA TELA:
+SEÇÕES:
 1. Chaves de API
-2. Parâmetros Globais
-3. Configuração por Estratégia (cada bot tem seus parâmetros)
-4. Pares Permitidos (moedas que os bots podem analisar)
-5. Taxas e Descontos
+   - Exchange (Binance, KuCoin, Bybit)
+   - API Key e Secret Key
+   - Teste de conexão
 
-CHAVES DE API:
-| Campo        | Descrição                    | Tipo         | Obrigatório |
-|--------------|------------------------------|--------------|-------------|
-| Exchange     | Seletor de exchanges         | dropdown     | Sim         |
-| API Key      | Chave pública                | texto masc.  | Sim         |
-| Secret Key   | Chave privada                | password     | Sim         |
+2. Gerenciamento de Risco
+   - Stop-loss (%)
+   - Take-profit (%)
+   - Alavancagem
+   - Quantidade máxima por trade
 
-PARÂMETROS GLOBAIS:
-| Campo                        | Descrição                    | Tipo   | Padrão |
-|------------------------------|------------------------------|--------|--------|
-| Stop-loss (%)                | Perda máxima global          | number | 5.0    |
-| Take-profit (%)              | Lucro alvo global            | number | 10.0   |
-| Alavancagem                  | Multiplicador de capital     | number | 1      |
-| Quantidade máxima por trade  | Montante máximo              | number | 1000   |
+3. Moedas Permitidas
+   - Multi-select com busca
+   - Lista de moedas disponíveis da Binance
 
-CONFIGURAÇÃO POR ESTRATÉGIA:
+4. Taxas e Descontos
+   - Desconto USDT (%)
+   - Desconto BNB (%)
+   - Saldo mínimo BNB
 
-Cada bot/estratégia pode ter parâmetros específicos:
+5. Opções Avançadas
+   - Modo (Spot/Futuros)
+   - Tipo de ordem (Market/Limit)
+   - Slippage tolerado (%)
 
-| Estratégia       | Parâmetros específicos                           |
-|------------------|--------------------------------------------------|
-| Scalper          | Timeframe (1m,5m), Spread máximo, Volume mínimo |
-| Momentum         | Período de análise (14,21), Threshold de momentum|
-| Trend Follower   | Médias móveis (20,50,200), ADX threshold        |
-| Mean Reversion   | Bandas (20,2), RSI threshold (30/70)            |
-| Arbitrage        | Spread mínimo, Latência máxima                  |
-
-PARES PERMITIDOS (MOEDAS):
-| Campo               | Descrição                            | Tipo                 |
-|---------------------|--------------------------------------|----------------------|
-| Moedas permitidas   | Lista de moedas que os bots podem    | multi-select com busca|
-|                     | analisar                             |                      |
-
-TAXAS E DESCONTOS:
-| Campo                    | Descrição                    | Tipo   | Padrão |
-|--------------------------|------------------------------|--------|--------|
-| Desconto USDT (%)        | Taxa base em USDT            | number | 0.075  |
-| Desconto BNB (%)         | Taxa com desconto em BNB     | number | 0.075  |
-| Saldo mínimo BNB         | Reserva mínima de BNB        | number | 0.01   |
-
-REQUISITOS OBRIGATÓRIOS – CONFIGURAÇÕES:
-R1: Configuração por estratégia (cada bot pode ter parâmetros específicos)
-R2: Moedas permitidas (lista de moedas que os bots podem analisar)
-R3: Validação com Zod
-R4: Persistência das configurações no back-end
-R5: Carregamento automático das configurações
+6. Configuração por Estratégia
+   - Parâmetros específicos para cada tipo de estratégia
 
 
-5.3 TREINAMENTO DA IA
+6.4 TREINAMENTO DA IA
 -------------------------------------------------------------------------------
 
-OBJETIVO: Configurar, executar e monitorar o treinamento dos modelos de IA
-por estratégia.
+OBJETIVO: Treinar modelos de IA por estratégia.
 
-ORGANIZAÇÃO DA TELA:
-1. Seleção da Estratégia/Bot
-2. Configuração do Dataset (moedas, período, indicadores)
+COMPONENTES:
+1. Seleção do Modelo
+   - Bot alvo
+   - Estratégia
+   - Arquitetura (LSTM, CNN, Random Forest, etc.)
+   - Versão do modelo
+
+2. Configuração do Dataset
+   - Origem dos dados (Exchange/Sintético/Upload)
+   - Período de treinamento
+   - Pares incluídos
+   - Indicadores técnicos
+   - Resolução temporal
+
 3. Parâmetros de Treinamento
+   - Arquitetura da rede (camadas, neurônios, dropout)
+   - Hiperparâmetros (batch size, épocas, learning rate)
+   - Validação e Early Stopping
+
 4. Controles de Execução
+   - Iniciar, Pausar, Retomar, Cancelar
+   - Testar com dados atuais
+   - Salvar e Exportar modelo
+
 5. Métricas e Visualizações
+   - Gráfico de Loss por época
+   - Gráfico de Acurácia (quando aplicável)
+
 6. Log de Treinamento
-
-SELEÇÃO DA ESTRATÉGIA/BOT:
-| Campo             | Descrição                        | Tipo     |
-|-------------------|----------------------------------|----------|
-| Estratégia alvo   | Lista de estratégias disponíveis | dropdown |
-| Arquitetura       | LSTM, CNN, Random Forest, etc.   | dropdown |
-| Versão do modelo  | Identificador da versão          | texto    |
-| Baseado em        | Modelo pré-treinado              | dropdown |
-
-CONFIGURAÇÃO DO DATASET:
-| Campo                 | Descrição                        | Tipo            |
-|-----------------------|----------------------------------|-----------------|
-| Moedas treinamento    | Quais moedas serão usadas        | multi-select    |
-| Período treinamento   | Data inicial e final             | date range      |
-| Indicadores técnicos  | SMA, EMA, RSI, MACD, etc.        | checkbox group  |
-| Resolução temporal    | 1m, 5m, 15m, 1h, 4h, 1d         | dropdown        |
-
-PARÂMETROS DE TREINAMENTO:
-| Parâmetro            | Descrição                    | Tipo   | Padrão |
-|----------------------|------------------------------|--------|--------|
-| Camadas ocultas      | Número de camadas LSTM       | number | 2      |
-| Neurônios por camada | Quantidade por camada        | number | 64     |
-| Dropout rate         | Taxa de dropout              | number | 0.2    |
-| Batch size           | Amostras por lote            | number | 32     |
-| Épocas               | Passagens pelo dataset       | number | 100    |
-| Learning rate        | Taxa de aprendizado          | number | 0.001  |
-
-MÉTRICAS DE AVALIAÇÃO POR ESTRATÉGIA:
-
-| Estratégia       | Métricas específicas                             |
-|------------------|--------------------------------------------------|
-| Scalper          | Taxa de acerto por trade, Tempo médio por trade  |
-| Momentum         | Acerto em tendências fortes, Sharpe ratio        |
-| Trend Follower   | Drawdown máximo, Fator de lucro                  |
-| Mean Reversion   | Acerto em reversões, Tempo de reversão médio     |
-
-REQUISITOS OBRIGATÓRIOS – TREINAMENTO:
-R1: Treinamento por estratégia (cada bot tem seu próprio modelo)
-R2: Dataset multi-moedas (modelo aprende com múltiplas moedas)
-R3: Transfer learning baseado em modelos anteriores
-R4: Backtesting com dados recentes
-R5: Visualização em tempo real via WebSocket
-R6: Persistência total no back-end
+   - Terminal com mensagens em tempo real
 
 
-5.4 TRANSAÇÕES
+6.5 TRANSAÇÕES
 -------------------------------------------------------------------------------
 
-OBJETIVO: Visualizar histórico e executar ordens manuais.
+OBJETIVO: Histórico e execução de ordens.
 
-ORGANIZAÇÃO DA TELA:
+COMPONENTES:
 1. Seletor de Moeda de Exibição
+   - Opções: BRL, USDT, EUR, BTC, ETH
+   - Conversão automática via API
+
 2. Gráfico do Par
+   - Candlestick com lightweight-charts
+   - Períodos: 15m, 30m, 1h, 4h, 1d, 1w
+   - Auto-refresh a cada 5 segundos
+
 3. Saldo Disponível
+   - Saldo por moeda
+   - Valores disponíveis e reservados
+
 4. Formulário de Ordem Manual
-5. Filtros e Busca
-6. Tabela de Histórico de Transações
+   - Par, Tipo (Compra/Venda)
+   - Quantidade
+   - Tipo de ordem (Market/Limit)
+   - Preço (para Limit)
 
-SELETOR DE MOEDA DE EXIBIÇÃO:
-| Campo                | Descrição                    | Opções                      |
-|----------------------|------------------------------|-----------------------------|
-| Moeda de exibição    | Moeda para conversão         | BRL, USDT, EUR, BTC, ETH    |
+5. Filtros
+   - Par, Tipo, Origem, Status
+   - Data inicial/final
+   - Busca textual
 
-GRÁFICO DO PAR:
-| Elemento             | Descrição                    |
-|----------------------|------------------------------|
-| Seletor de par       | Dropdown com moedas          |
-| Seletor de período   | 15m, 30m, 1h, 4h, 1d, 1w    |
-| Gráfico              | Candlestick (velas)          |
-| Atualização          | A cada 5 segundos            |
-
-FORMULÁRIO DE ORDEM MANUAL:
-| Campo                | Tipo         | Validação                    |
-|----------------------|--------------|------------------------------|
-| Par (Moeda)          | dropdown     | Disponível na lista          |
-| Tipo                 | radio        | Compra/Venda                 |
-| Quantidade           | number       | >0 e ≤ saldo                 |
-| Tipo de ordem        | dropdown     | Market/Limit                 |
-
-TABELA DE HISTÓRICO DE TRANSAÇÕES:
-| Coluna               | Descrição                              |
-|----------------------|----------------------------------------|
-| Data/Hora            | ISO formatada                          |
-| Par                  | Moeda negociada                        |
-| Origem               | Manual / Bot (qual estratégia)         |
-| Tipo                 | Compra/Venda                           |
-| Quantidade           | Quantidade negociada                   |
-| Preço                | Convertido para moeda selecionada      |
-| Taxa                 | Convertido                             |
-| Ganho                | Lucro/Prejuízo                         |
-
-FILTROS ESPECÍFICOS:
-| Filtro               | Opções                                       |
-|----------------------|----------------------------------------------|
-| Origem               | Manual, Scalper, Momentum, Trend Follower    |
-| Par (Moeda)          | Lista de moedas                              |
-| Status               | Executada, Pendente, Cancelada               |
-
-REQUISITOS OBRIGATÓRIOS – TRANSAÇÕES:
-R1: Identificação do bot na tabela (qual estratégia executou)
-R2: Filtro por estratégia específica
-R3: Múltiplas moedas com conversão via API
-R4: Gráfico candlestick atualizado a cada 5 segundos
-R5: Histórico unificado (manuais + automáticas)
-R6: Validação de saldo antes de enviar ordem
+6. Tabela de Histórico
+   - Todas as transações (manuais e automáticas)
+   - Paginação
+   - Exportação para CSV
 
 
-5.5 LOG / TRACE GERAL
+6.6 LOG / TRACE GERAL
 -------------------------------------------------------------------------------
 
-OBJETIVO: Auditoria completa com dois níveis: Log (eventos relevantes) e
-Trace ("passei por aqui" - rastreamento detalhado).
+OBJETIVO: Auditoria completa do sistema.
 
-ORGANIZAÇÃO DA TELA:
-1. Seletor de Modo (Log / Trace)
-2. Filtros e Busca
-3. Terminal de Exibição
+MODOS:
+1. Logs
+   - Eventos relevantes (INFO, WARN, ERROR)
+   - Filtros por nível, módulo, data
+   - Exportação CSV
 
-SELETOR DE MODO:
-| Modo     | Descrição                                    | Uso                |
-|----------|----------------------------------------------|--------------------|
-| Log      | Eventos relevantes, erros, ações do usuário | Monitoramento      |
-| Trace    | Cada passo da execução ("passei por aqui")  | Depuração avançada |
+2. Traces
+   - Rastreamento detalhado ("passei por aqui")
+   - Níveis: DEBUG, TRACE
+   - Agrupamento por Trace ID
+   - Visualização hierárquica
+   - Filtros por bot, função, duração, erros
 
-FILTROS COMUNS (Log e Trace):
-- Nível (Log: INFO/WARN/ERROR | Trace: DEBUG/TRACE)
-- Módulo (Dashboard, Configurações, Treinamento, Bot, Sistema)
-- Data inicial e final
-- Busca textual
-
-FILTROS ESPECÍFICOS PARA TRACE (BOTS):
-| Filtro               | Descrição                                    |
-|----------------------|----------------------------------------------|
-| Estratégia/Bot ID    | Filtrar traces de um bot específico         |
-| Moeda analisada      | Filtrar por moeda que estava sendo analisada|
-| Ação recomendada     | Filtrar por buy/sell/hold                   |
-| Confiança mínima     | Traces com confiança acima do valor         |
-
-REGRAS DE TRACE PARA BOTS:
-
-Cada passo da análise do bot deve gerar um registro de Trace:
-
-| Passo                    | Exemplo de Trace                                   |
-|--------------------------|----------------------------------------------------|
-| Início da análise        | [TRACE] Bot Scalper - Iniciando análise de mercado|
-| Seleção de moedas        | [DEBUG] Analisando candidatas: BTC, ETH, SOL      |
-| Cálculo de indicadores   | [DEBUG] BTC - RSI: 65, MACD: positivo             |
-| Decisão                  | [INFO] Decisão: COMPRA BTC com confiança 78%      |
-| Envio de ordem           | [INFO] Ordem enviada: COMPRA 0.05 BTC             |
-
-TERMINAL DE EXIBIÇÃO:
-
-MODO LOG:
-| Coluna      | Descrição                    |
-|-------------|------------------------------|
-| Timestamp   | dd/mm/aaaa hh:mm:ss.ms       |
-| Nível       | INFO/WARN/ERROR com ícone    |
-| Módulo      | Origem do log                |
-| Mensagem    | Descrição do evento          |
-
-MODO TRACE:
-| Coluna      | Descrição                    |
-|-------------|------------------------------|
-| Timestamp   | dd/mm/aaaa hh:mm:ss.ms       |
-| Trace ID    | UUID para correlação         |
-| Nível       | DEBUG/TRACE                  |
-| Módulo      | Origem do trace              |
-| Estratégia  | Nome do bot/estratégia       |
-| Moeda       | Moeda sendo analisada        |
-| Mensagem    | "Passei por aqui"            |
-| Duração (ms)| Tempo decorrido              |
-
-REQUISITOS OBRIGATÓRIOS – LOG / TRACE:
-R1: Distinção Log vs Trace com seletor de modo
-R2: Trace ID obrigatório para correlação
-R3: Registro de cada passo da análise do bot
-R4: Filtro por estratégia/bot específico
-R5: Filtro por moeda analisada
-R6: Filtro por ação recomendada (buy/sell/hold)
-R7: Atualização em tempo real via WebSocket
-R8: Exportação em CSV/JSON
+REGRAS DE TRACE:
+- Cada passo da análise do bot gera um registro
+- Trace ID único para correlação
+- Registro de entrada/saída de funções
+- Chamadas externas (API, banco)
+- Decisões do bot com confiança
 
 
-6. API ENDPOINTS
+6.7 PERFIL
+-------------------------------------------------------------------------------
+
+OBJETIVO: Gerenciar informações do usuário.
+
+SEÇÕES:
+1. Informações Pessoais
+   - Nome, Sobrenome, Email
+
+2. Segurança
+   - Alteração de senha
+
+3. Preferências
+   - Notificações push
+   - Tema (claro/escuro)
+
+
+7. API ENDPOINTS
 ===============================================================================
+
+AUTH:
+-------------------------------------------------------------------------------
+POST   /api/auth/login
+POST   /api/auth/logout
+GET    /api/auth/me
 
 DASHBOARD:
 -------------------------------------------------------------------------------
@@ -515,7 +466,7 @@ GET    /api/dashboard/total-balance
 GET    /api/dashboard/currencies-balance
 GET    /api/dashboard/transactions/recent
 GET    /api/dashboard/bots-status
-GET    /api/dashboard/performance?period={period}
+GET    /api/dashboard/performance
 PUT    /api/dashboard/bots/{id}/pause
 PUT    /api/dashboard/bots/{id}/resume
 
@@ -523,13 +474,13 @@ CONFIGURAÇÕES:
 -------------------------------------------------------------------------------
 GET    /api/configurations
 PUT    /api/configurations
-GET    /api/configurations/strategies
-PUT    /api/configurations/strategies/{id}
+POST   /api/configurations/test-connection
 GET    /api/exchange/pairs
 
 TREINAMENTO:
 -------------------------------------------------------------------------------
-GET    /api/training/sessions?strategyId={id}
+GET    /api/training/strategies
+GET    /api/training/sessions
 POST   /api/training/sessions
 GET    /api/training/sessions/{id}
 PUT    /api/training/sessions/{id}/pause
@@ -537,23 +488,21 @@ PUT    /api/training/sessions/{id}/resume
 DELETE /api/training/sessions/{id}/cancel
 POST   /api/training/sessions/{id}/test
 POST   /api/training/sessions/{id}/save
+GET    /api/training/sessions/{id}/download
 
 TRANSAÇÕES:
 -------------------------------------------------------------------------------
-GET    /api/exchange/rate?from={from}&to={to}
-GET    /api/exchange/candles?pair={pair}&period={period}
-GET    /api/orders?botId={id}
-GET    /api/orders?pair={pair}
+GET    /api/orders
 POST   /api/orders
 DELETE /api/orders/{id}/cancel
 GET    /api/balance
-GET    /api/orders/export
+GET    /api/exchange/rate
+GET    /api/exchange/candles
 
 LOGS:
 -------------------------------------------------------------------------------
-GET    /api/logs?botId={id}
-GET    /api/traces?botId={id}
-GET    /api/traces?pair={pair}
+GET    /api/logs
+GET    /api/traces
 GET    /api/traces/group/{traceId}
 GET    /api/logs/export
 GET    /api/traces/export
@@ -567,7 +516,7 @@ WS     /ws/traces
 WS     /ws/training/{sessionId}
 
 
-7. DIFERENCIAIS DA ARQUITETURA
+8. DIFERENCIAIS DA ARQUITETURA
 ===============================================================================
 
 | Característica          | Descrição                                          |
@@ -579,22 +528,66 @@ WS     /ws/training/{sessionId}
 | Treinamento por Estratégia | Modelos de IA específicos por tipo de análise   |
 | Traces com Contexto     | Registro completo das decisões do bot             |
 | Moeda Dinâmica          | Bot pode trocar de moeda a qualquer momento       |
+| Tema Claro/Escuro       | Suporte completo a ambos os temas                 |
+| Responsividade          | Interface adaptável a todos os dispositivos       |
 
 
-8. PRÓXIMOS PASSOS
+9. CONSIDERAÇÕES GERAIS
+===============================================================================
+
+| #  | Requisito                 | Descrição                                    |
+|----|---------------------------|----------------------------------------------|
+| G1 | Tema escuro/claro         | Suporte a troca de tema via CSS Variables    |
+| G2 | Responsividade            | Funciona em desktop, tablet e mobile         |
+| G3 | Tratamento de erros       | Mensagens amigáveis via react-hot-toast      |
+| G4 | Loading states            | Skeletons durante carregamento               |
+| G5 | Cache local               | Dados estáticos cacheados com React Query    |
+| G6 | Rotas protegidas          | Login necessário para acessar o sistema      |
+| G7 | WebSocket fallback        | Polling quando WebSocket indisponível        |
+| G8 | SOLID                     | Arquitetura baseada nos princípios SOLID     |
+| G9 | TypeScript                | Tipagem forte em todo o código               |
+
+
+10. PRÓXIMOS PASSOS
 ===============================================================================
 
 1. [OK] Configurar projeto com Vite + React + TypeScript
 2. [OK] Criar estrutura de pastas
 3. [OK] Implementar componentes shared
-4. [OK] Implementar Dashboard com bots por estratégia
-5. [ ] Implementar Configurações
-6. [ ] Implementar Treinamento da IA
-7. [ ] Implementar Transações
-8. [ ] Implementar Log / Trace Geral
-9. [ ] Adicionar mock de API (JSON Server)
-10. [ ] Refinar UI/UX com tooltips e feedback visual
-11. [ ] Escrever testes unitários
+4. [OK] Implementar Dashboard
+5. [OK] Implementar Configurações
+6. [OK] Implementar Treinamento da IA
+7. [OK] Implementar Transações
+8. [OK] Implementar Log / Trace Geral
+9. [OK] Implementar Login e Perfil
+10. [ ] Integrar com backend real
+11. [ ] Implementar testes unitários
+12. [ ] Otimizar chunks para produção
+
+
+================================================================================
+CREDENCIAIS DE ACESSO (MODO MOCK)
+===============================================================================
+
+Email: admin@botcrypto.com
+Senha: admin123
+
+
+================================================================================
+COMANDOS PARA EXECUTAR O PROJETO
+===============================================================================
+
+# Instalar dependências
+npm install
+
+# Rodar em desenvolvimento
+npm run dev
+
+# Build para produção
+npm run build
+
+# Rodar mock da API (em outro terminal)
+npm run mock-api
 
 
 ================================================================================
