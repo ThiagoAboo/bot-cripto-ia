@@ -1,7 +1,7 @@
 import { Response } from 'express'
 import { AuthRequest } from '../middleware/auth.middleware'
 import { prisma } from '../config/database'
-import { logger } from '../utils/logger'
+import { getSystemLogUserId, logger } from '../utils/logger'
 import { startTrace, endTrace } from '../utils/tracer'
 import { z } from 'zod'
 
@@ -32,31 +32,53 @@ const traceFiltersSchema = z.object({
   search: z.string().optional()
 })
 
+function buildLogsWhere(userId: string, systemLogUserId: string) {
+  return {
+    OR: [
+      { userId },
+      { userId: systemLogUserId },
+    ],
+  } as Record<string, unknown>
+}
+
+function parseDetails(details: string | null): unknown {
+  if (!details) {
+    return null
+  }
+
+  try {
+    return JSON.parse(details)
+  } catch {
+    return details
+  }
+}
+
 export async function getLogs(req: AuthRequest, res: Response) {
-  const traceId = startTrace(req.userId!, 'getLogs', 'logs')
-  
+  startTrace(req.userId!, 'getLogs', 'logs')
+
   try {
     const validation = logFiltersSchema.safeParse(req.query)
     if (!validation.success) {
       endTrace('getLogs')
-      return res.status(400).json({ 
-        success: false, 
+      return res.status(400).json({
+        success: false,
         error: validation.error.errors.map(e => e.message).join(', ')
       })
     }
-    
+
     const { page, limit, levels, modules, startDate, endDate, search } = validation.data
     const userId = req.userId!
+    const systemLogUserId = await getSystemLogUserId()
     const skip = (page - 1) * limit
-    
-    const where: any = { userId }
-    
+
+    const where: any = buildLogsWhere(userId, systemLogUserId)
+
     if (levels) where.level = { in: levels.split(',') }
     if (modules) where.module = { in: modules.split(',') }
     if (startDate) where.timestamp = { ...where.timestamp, gte: new Date(startDate) }
     if (endDate) where.timestamp = { ...where.timestamp, lte: new Date(endDate) }
     if (search) where.message = { contains: search }
-    
+
     const [logs, total] = await Promise.all([
       prisma.log.findMany({
         where,
@@ -66,18 +88,19 @@ export async function getLogs(req: AuthRequest, res: Response) {
       }),
       prisma.log.count({ where })
     ])
-    
+
     const items = logs.map((log: any) => ({
       id: log.id,
       timestamp: log.timestamp,
       level: log.level,
       module: log.module,
       message: log.message,
-      details: log.details ? JSON.parse(log.details) : null
+      details: parseDetails(log.details),
+      isSystem: log.userId === systemLogUserId,
     }))
-    
+
     endTrace('getLogs')
-    
+
     return res.json({
       success: true,
       data: {
@@ -90,34 +113,34 @@ export async function getLogs(req: AuthRequest, res: Response) {
     })
   } catch (error) {
     logger.error('Erro ao buscar logs:', error)
-    endTrace('getLogs')
+    endTrace('getLogs', { errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }
 
 export async function getTraces(req: AuthRequest, res: Response) {
-  const traceId = startTrace(req.userId!, 'getTraces', 'logs')
-  
+  startTrace(req.userId!, 'getTraces', 'logs')
+
   try {
     const validation = traceFiltersSchema.safeParse(req.query)
     if (!validation.success) {
       endTrace('getTraces')
-      return res.status(400).json({ 
-        success: false, 
+      return res.status(400).json({
+        success: false,
         error: validation.error.errors.map(e => e.message).join(', ')
       })
     }
-    
-    const { 
-      page, limit, levels, modules, traceId: traceIdFilter, 
-      functionName, botId, currentPair, recommendedAction, 
-      minDurationMs, onlyErrors, startDate, endDate, search 
+
+    const {
+      page, limit, levels, modules, traceId: traceIdFilter,
+      functionName, botId, currentPair, recommendedAction,
+      minDurationMs, onlyErrors, startDate, endDate, search
     } = validation.data
     const userId = req.userId!
     const skip = (page - 1) * limit
-    
+
     const where: any = { userId }
-    
+
     if (levels) where.level = { in: levels.split(',') }
     if (modules) where.module = { in: modules.split(',') }
     if (traceIdFilter) where.traceId = traceIdFilter
@@ -135,7 +158,7 @@ export async function getTraces(req: AuthRequest, res: Response) {
         { functionName: { contains: search } }
       ]
     }
-    
+
     const [traces, total] = await Promise.all([
       prisma.trace.findMany({
         where,
@@ -150,7 +173,7 @@ export async function getTraces(req: AuthRequest, res: Response) {
       }),
       prisma.trace.count({ where })
     ])
-    
+
     const items = traces.map((trace: any) => ({
       id: trace.id,
       timestamp: trace.timestamp,
@@ -168,9 +191,9 @@ export async function getTraces(req: AuthRequest, res: Response) {
       confidence: trace.confidence,
       errorFlag: trace.errorFlag
     }))
-    
+
     endTrace('getTraces')
-    
+
     return res.json({
       success: true,
       data: {
@@ -183,18 +206,18 @@ export async function getTraces(req: AuthRequest, res: Response) {
     })
   } catch (error) {
     logger.error('Erro ao buscar traces:', error)
-    endTrace('getTraces')
+    endTrace('getTraces', { errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }
 
 export async function getTraceGroup(req: AuthRequest, res: Response) {
-  const traceId = startTrace(req.userId!, 'getTraceGroup', 'logs')
-  
+  startTrace(req.userId!, 'getTraceGroup', 'logs')
+
   try {
     const { traceId: traceIdParam } = req.params
     const userId = req.userId!
-    
+
     const traces = await prisma.trace.findMany({
       where: {
         userId,
@@ -207,12 +230,12 @@ export async function getTraceGroup(req: AuthRequest, res: Response) {
         }
       }
     })
-    
+
     if (traces.length === 0) {
       endTrace('getTraceGroup')
       return res.status(404).json({ success: false, error: 'Trace não encontrado' })
     }
-    
+
     const entries = traces.map((trace: any) => ({
       id: trace.id,
       timestamp: trace.timestamp,
@@ -224,7 +247,7 @@ export async function getTraceGroup(req: AuthRequest, res: Response) {
       recommendedAction: trace.recommendedAction,
       confidence: trace.confidence
     }))
-    
+
     const result = {
       traceId: traceIdParam,
       entries,
@@ -235,96 +258,98 @@ export async function getTraceGroup(req: AuthRequest, res: Response) {
       botId: traces[0].botId,
       botName: traces[0].bot?.name
     }
-    
+
     endTrace('getTraceGroup')
-    
+
     return res.json({
       success: true,
       data: result
     })
   } catch (error) {
     logger.error('Erro ao buscar grupo de traces:', error)
-    endTrace('getTraceGroup')
+    endTrace('getTraceGroup', { errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }
 
 export async function exportLogs(req: AuthRequest, res: Response) {
-  const traceId = startTrace(req.userId!, 'exportLogs', 'logs')
-  
+  startTrace(req.userId!, 'exportLogs', 'logs')
+
   try {
     const validation = logFiltersSchema.safeParse(req.query)
     if (!validation.success) {
       endTrace('exportLogs')
-      return res.status(400).json({ 
-        success: false, 
+      return res.status(400).json({
+        success: false,
         error: validation.error.errors.map(e => e.message).join(', ')
       })
     }
-    
+
     const { levels, modules, startDate, endDate, search } = validation.data
     const userId = req.userId!
-    
-    const where: any = { userId }
-    
+    const systemLogUserId = await getSystemLogUserId()
+
+    const where: any = buildLogsWhere(userId, systemLogUserId)
+
     if (levels) where.level = { in: levels.split(',') }
     if (modules) where.module = { in: modules.split(',') }
     if (startDate) where.timestamp = { ...where.timestamp, gte: new Date(startDate) }
     if (endDate) where.timestamp = { ...where.timestamp, lte: new Date(endDate) }
     if (search) where.message = { contains: search }
-    
+
     const logs = await prisma.log.findMany({
       where,
       orderBy: { timestamp: 'desc' }
     })
-    
-    const headers = ['timestamp', 'level', 'module', 'message', 'details']
+
+    const headers = ['timestamp', 'level', 'module', 'message', 'details', 'isSystem']
     const csvRows = [headers.join(',')]
-    
+
     for (const log of logs) {
       const row = [
         log.timestamp.toISOString(),
         log.level,
         log.module,
         `"${log.message.replace(/"/g, '""')}"`,
-        log.details ? `"${log.details.replace(/"/g, '""')}"` : ''
+        log.details ? `"${log.details.replace(/"/g, '""')}"` : '',
+        log.userId === systemLogUserId,
       ]
       csvRows.push(row.join(','))
     }
-    
+
     const csv = csvRows.join('\n')
-    
+
     res.setHeader('Content-Type', 'text/csv')
     res.setHeader('Content-Disposition', `attachment; filename=logs_${Date.now()}.csv`)
-    
+
     endTrace('exportLogs')
-    
+
     return res.send(csv)
   } catch (error) {
     logger.error('Erro ao exportar logs:', error)
-    endTrace('exportLogs')
+    endTrace('exportLogs', { errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }
 
 export async function exportTraces(req: AuthRequest, res: Response) {
-  const traceId = startTrace(req.userId!, 'exportTraces', 'logs')
-  
+  startTrace(req.userId!, 'exportTraces', 'logs')
+
   try {
     const validation = traceFiltersSchema.safeParse(req.query)
     if (!validation.success) {
       endTrace('exportTraces')
-      return res.status(400).json({ 
-        success: false, 
+      return res.status(400).json({
+        success: false,
         error: validation.error.errors.map(e => e.message).join(', ')
       })
     }
-    
+
     const { levels, modules, traceId: traceIdFilter, functionName, botId, startDate, endDate, search } = validation.data
     const userId = req.userId!
-    
+
     const where: any = { userId }
-    
+
     if (levels) where.level = { in: levels.split(',') }
     if (modules) where.module = { in: modules.split(',') }
     if (traceIdFilter) where.traceId = traceIdFilter
@@ -338,15 +363,15 @@ export async function exportTraces(req: AuthRequest, res: Response) {
         { functionName: { contains: search } }
       ]
     }
-    
+
     const traces = await prisma.trace.findMany({
       where,
       orderBy: { timestamp: 'asc' }
     })
-    
+
     const headers = ['timestamp', 'level', 'module', 'traceId', 'functionName', 'message', 'durationMs', 'botId', 'currentPair', 'recommendedAction', 'confidence', 'errorFlag']
     const csvRows = [headers.join(',')]
-    
+
     for (const trace of traces) {
       const row = [
         trace.timestamp.toISOString(),
@@ -364,25 +389,25 @@ export async function exportTraces(req: AuthRequest, res: Response) {
       ]
       csvRows.push(row.join(','))
     }
-    
+
     const csv = csvRows.join('\n')
-    
+
     res.setHeader('Content-Type', 'text/csv')
     res.setHeader('Content-Disposition', `attachment; filename=traces_${Date.now()}.csv`)
-    
+
     endTrace('exportTraces')
-    
+
     return res.send(csv)
   } catch (error) {
     logger.error('Erro ao exportar traces:', error)
-    endTrace('exportTraces')
+    endTrace('exportTraces', { errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }
 
 export async function getBotsForFilter(req: AuthRequest, res: Response) {
-  const traceId = startTrace(req.userId!, 'getBotsForFilter', 'logs')
-  
+  startTrace(req.userId!, 'getBotsForFilter', 'logs')
+
   try {
     const bots = await prisma.bot.findMany({
       select: {
@@ -390,16 +415,16 @@ export async function getBotsForFilter(req: AuthRequest, res: Response) {
         name: true
       }
     })
-    
+
     endTrace('getBotsForFilter')
-    
+
     return res.json({
       success: true,
       data: bots
     })
   } catch (error) {
     logger.error('Erro ao buscar bots:', error)
-    endTrace('getBotsForFilter')
+    endTrace('getBotsForFilter', { errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }

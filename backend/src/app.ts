@@ -6,7 +6,7 @@ import dotenv from 'dotenv'
 import { createServer } from 'http'
 import { Server } from 'socket.io'
 import { authMiddleware } from './middleware/auth.middleware'
-import { logger } from './utils/logger'
+import { installConsoleCapture, logger } from './utils/logger'
 
 // Import controllers
 import * as authController from './controllers/auth.controller'
@@ -18,6 +18,7 @@ import * as logsController from './controllers/logs.controller'
 import * as profileController from './controllers/profile.controller'
 
 dotenv.config()
+installConsoleCapture()
 
 const app = express()
 const httpServer = createServer(app)

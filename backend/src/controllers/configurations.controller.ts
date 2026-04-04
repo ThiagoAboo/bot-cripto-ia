@@ -205,6 +205,12 @@ export async function putConfigurations(req: AuthRequest, res: Response) {
 
     const validation = configurationsSchema.safeParse(req.body)
     if (!validation.success) {
+      logger.warn('[configurations] Validação falhou ao salvar configurações', {
+        module: 'configurations',
+        userId: req.userId!,
+        event: 'configuration_validation_failed',
+        errors: validation.error.errors,
+      })
       trace('DEBUG', 'configurations', 'putConfigurations', 'Validação falhou', 0, { errors: validation.error.errors })
       endTrace('putConfigurations')
       return res.status(400).json({
@@ -261,7 +267,24 @@ export async function putConfigurations(req: AuthRequest, res: Response) {
     })
 
     trace('DEBUG', 'configurations', 'putConfigurations', 'Configurações salvas no banco com sucesso', 0)
-    logger.info(`Configurações salvas para usuário: ${userId}`)
+    logger.info('[configurations] Configurações salvas com sucesso', {
+      module: 'configurations',
+      userId,
+      event: 'configuration_saved',
+      exchange: exchangeApiKeys.exchange,
+      mode: botParameters.advanced.mode,
+      orderType: botParameters.advanced.orderType,
+      leverage: botParameters.riskManagement.leverage,
+      maxTradeAmount: botParameters.riskManagement.maxTradeAmount,
+      maxTradeAmountUnit: botParameters.riskManagement.maxTradeAmountUnit,
+      allowedPairsCount: botParameters.allowedPairs.length,
+      strategiesCount: botParameters.strategies.length,
+      fees: {
+        discountUsdtPercent: botParameters.fees.discountUsdtPercent,
+        discountBnbPercent: botParameters.fees.discountBnbPercent,
+        minBnbBalance: botParameters.fees.minBnbBalance,
+      },
+    })
     endTrace('putConfigurations')
 
     return res.json({ success: true })
