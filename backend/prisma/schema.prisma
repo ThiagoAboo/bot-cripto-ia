@@ -1,0 +1,214 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==============================
+// USUÁRIO
+// ==============================
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  preferences  String   @default("{}")
+  lastLogin    DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  configurations  Configuration?
+  transactions    Transaction[]
+  balances        Balance[]
+  logs            Log[]
+  traces          Trace[]
+  trainingSessions TrainingSession[]
+  balanceHistory  BalanceHistory[]
+}
+
+// ==============================
+// CONFIGURAÇÕES
+// ==============================
+model Configuration {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  exchange     String   @default("binance")
+  apiKey       String   @default("")
+  secretKey    String   @default("")
+  
+  stopLossPercent      Float  @default(5.0)
+  takeProfitPercent    Float  @default(10.0)
+  leverage             Int    @default(1)
+  maxTradeAmount       Float  @default(1000)
+  maxTradeAmountUnit   String @default("USDT")
+  
+  allowedPairs         String @default("[]")
+  
+  discountUsdtPercent  Float  @default(0.075)
+  discountBnbPercent   Float  @default(0.075)
+  minBnbBalance        Float  @default(0.01)
+  
+  mode                 String @default("spot")
+  orderType            String @default("market")
+  slippagePercent      Float  @default(0.5)
+  
+  strategies           String @default("[]")
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ==============================
+// BOT
+// ==============================
+model Bot {
+  id               String   @id @default(cuid())
+  name             String
+  strategyType     String
+  description      String?
+  status           String   @default("offline")
+  isPaused         Boolean  @default(false)
+  currentPair      String?
+  lastAnalysis     DateTime?
+  recommendedAction String?
+  confidence       Float?
+  modelVersion     String   @default("v1.0.0")
+  modelUrl         String?
+  parameters       String   @default("{}")
+  
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  transactions     Transaction[]
+  trainingSessions TrainingSession[]
+  traces           Trace[]
+}
+
+// ==============================
+// TRANSAÇÃO
+// ==============================
+model Transaction {
+  id         String   @id @default(cuid())
+  date       DateTime @default(now())
+  pair       String
+  origin     String
+  botId      String?
+  bot        Bot?     @relation(fields: [botId], references: [id])
+  type       String
+  quantity   Float
+  price      Float
+  total      Float
+  fee        Float
+  status     String
+  profitBrl  Float?
+  profitPercent Float?
+  
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt  DateTime @default(now())
+}
+
+// ==============================
+// SALDO
+// ==============================
+model Balance {
+  id         String   @id @default(cuid())
+  currency   String
+  available  Float
+  reserved   Float
+  total      Float
+  updatedAt  DateTime @updatedAt
+  
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, currency])
+}
+
+// ==============================
+// HISTÓRICO DE SALDO
+// ==============================
+model BalanceHistory {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  timestamp  DateTime @default(now())
+  totalBrl   Float
+  
+  @@index([userId, timestamp])
+}
+
+// ==============================
+// SESSÃO DE TREINAMENTO
+// ==============================
+model TrainingSession {
+  id           String   @id @default(cuid())
+  botId        String
+  bot          Bot      @relation(fields: [botId], references: [id])
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status       String   @default("pending")
+  startTime    DateTime @default(now())
+  endTime      DateTime?
+  
+  config       String   @default("{}")
+  metrics      String   @default("[]")
+  bestEpoch    Int?
+  bestValLoss  Float?
+  modelUrl     String?
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// ==============================
+// LOG
+// ==============================
+model Log {
+  id         String   @id @default(cuid())
+  timestamp  DateTime @default(now())
+  level      String
+  module     String
+  message    String
+  details    String?
+  
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([timestamp])
+  @@index([userId])
+}
+
+// ==============================
+// TRACE
+// ==============================
+model Trace {
+  id                String   @id @default(cuid())
+  timestamp         DateTime @default(now())
+  level             String
+  module            String
+  traceId           String
+  parentTraceId     String?
+  functionName      String
+  message           String
+  durationMs        Float
+  botId             String?
+  bot               Bot?     @relation(fields: [botId], references: [id])
+  currentPair       String?
+  recommendedAction String?
+  confidence        Float?
+  errorFlag         Boolean  @default(false)
+  
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([traceId])
+  @@index([timestamp])
+  @@index([userId])
+}

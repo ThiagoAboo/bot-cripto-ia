@@ -5,6 +5,7 @@ import { Input } from '../../shared/components/ui/Input'
 import { Button } from '../../shared/components/ui/Button'
 import { Label } from '../../shared/components/ui/Label'
 import { Bot, Mail, Lock, Eye, EyeOff } from 'lucide-react'
+import { apiClient } from '../../shared/services/api.client'
 import toast from 'react-hot-toast'
 
 export default function LoginPage() {
@@ -24,17 +25,21 @@ export default function LoginPage() {
 
     setIsLoading(true)
     
-    // Mock de autenticação
-    setTimeout(() => {
-      if (email === 'admin@botcrypto.com' && password === 'admin123') {
-        localStorage.setItem('auth_token', 'mock_token_123')
+    try {
+      const response = await apiClient.post('/auth/login', { email, password })
+      
+      if (response.success) {
+        localStorage.setItem('auth_token', response.token)
         toast.success('Login realizado com sucesso!')
         navigate('/dashboard')
       } else {
-        toast.error('Email ou senha inválidos')
+        toast.error(response.error || 'Email ou senha inválidos')
       }
+    } catch (error: any) {
+      toast.error(error.response?.data?.error || 'Erro ao fazer login')
+    } finally {
       setIsLoading(false)
-    }, 1000)
+    }
   }
 
   return (

@@ -1,0 +1,18 @@
+# Parar os containers
+docker-compose down -v
+
+# Remover a pasta node_modules e reinstalar (opcional)
+rm -rf node_modules
+npm install
+
+# Gerar Prisma client
+npx prisma generate
+
+# Executar novamente
+docker-compose up -d --build
+
+# Executar migrations
+npx prisma migrate dev --name init
+
+# Popular o banco
+npm run seed

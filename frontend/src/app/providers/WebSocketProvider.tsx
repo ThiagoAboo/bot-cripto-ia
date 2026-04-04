@@ -15,7 +15,7 @@ interface WebSocketContextType {
 const WebSocketContext = createContext<WebSocketContextType | undefined>(undefined)
 
 const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:3001'
-const WS_ENABLED = false // Desabilitado por padrão para desenvolvimento sem servidor
+const WS_ENABLED = true // Ativado para conectar ao backend real
 
 export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const [isConnected, setIsConnected] = useState(false)
@@ -24,23 +24,32 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
 
   const connect = () => {
     if (!isEnabled) {
-      console.log('WebSocket desabilitado (modo desenvolvimento)')
+      console.log('WebSocket desabilitado')
       return
     }
 
     if (socketRef.current?.connected) return
 
+    const token = localStorage.getItem('auth_token')
+    
     const socket = io(WS_URL, {
       transports: ['websocket'],
       reconnection: true,
-      reconnectionAttempts: 3,
+      reconnectionAttempts: 5,
       reconnectionDelay: 1000,
       autoConnect: true,
+      auth: { token }
     })
 
     socket.on('connect', () => {
       console.log('WebSocket conectado')
       setIsConnected(true)
+      
+      // Inscrever para eventos padrão
+      socket.emit('subscribe:dashboard')
+      socket.emit('subscribe:orders')
+      socket.emit('subscribe:logs')
+      socket.emit('subscribe:traces')
     })
 
     socket.on('disconnect', () => {
@@ -49,7 +58,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     })
 
     socket.on('connect_error', (error) => {
-      console.warn('WebSocket não disponível (modo desenvolvimento):', error.message)
+      console.warn('WebSocket connection error:', error.message)
       setIsConnected(false)
     })
 
@@ -90,15 +99,11 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   }
 
   useEffect(() => {
-    if (isEnabled) {
-      connect()
-    }
+    connect()
     return () => {
-      if (isEnabled) {
-        disconnect()
-      }
+      disconnect()
     }
-  }, [isEnabled])
+  }, [])
 
   return (
     <WebSocketContext.Provider

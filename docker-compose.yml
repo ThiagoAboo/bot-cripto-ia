@@ -1,0 +1,92 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: bot-crypto-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: botcrypto
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bot-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: bot-crypto-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bot-network
+
+  backend:
+    build: ./backend
+    container_name: bot-crypto-backend
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/botcrypto?schema=public
+      - JWT_SECRET=prod-secret-key-change-this-to-a-secure-value
+      - JWT_EXPIRES_IN=24h
+      - CORS_ORIGIN=http://localhost
+      - LOG_LEVEL=info
+      - TRACE_ENABLED=true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend/uploads:/app/uploads
+      - ./backend/models:/app/models
+    restart: unless-stopped
+    networks:
+      - bot-network
+
+  frontend:
+    build: ./frontend
+    container_name: bot-crypto-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - bot-network
+
+  adminer:
+    image: adminer
+    container_name: bot-crypto-adminer
+    ports:
+      - "8080:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    networks:
+      - bot-network
+
+networks:
+  bot-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

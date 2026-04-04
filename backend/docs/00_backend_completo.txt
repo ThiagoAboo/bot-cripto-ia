@@ -1,0 +1,611 @@
+================================================================================
+DOCUMENTAÇÃO COMPLETA DO BACKEND - BOT DE CRIPTOMOEDAS COM IA
+================================================================================
+VERSÃO 1.0 - PERSISTÊNCIA DE DADOS
+================================================================================
+
+ÍNDICE
+===============================================================================
+1. VISÃO GERAL
+2. STACK TECNOLÓGICA
+3. ESTRUTURA DE PASTAS
+4. MODELOS DE DADOS (PRISMA SCHEMA)
+5. API ENDPOINTS
+6. REGRAS DE NEGÓCIO
+7. WEBHOOKS E WEBSOCKET
+8. SEGURANÇA
+9. VARIÁVEIS DE AMBIENTE
+10. INSTALAÇÃO E CONFIGURAÇÃO
+
+
+1. VISÃO GERAL
+===============================================================================
+
+O backend do Bot Crypto IA é responsável por:
+
+- Gerenciar múltiplos bots especializados por estratégia
+- Persistir todas as configurações do sistema
+- Processar ordens de compra/venda (manuais e automáticas)
+- Gerenciar treinamento de modelos de IA por estratégia
+- Armazenar logs e traces para auditoria completa
+- Fornecer WebSocket para atualizações em tempo real
+
+CONCEITO FUNDAMENTAL:
+
+| Característica | Descrição |
+|----------------|-----------|
+| Bot por Estratégia | Cada bot implementa uma estratégia de análise diferente |
+| Análise Multi-Moeda | Cada bot analisa dinamicamente qualquer moeda disponível |
+| Decisão Autônoma | O bot decide qual moeda negociar no momento |
+| Recomendação com Confiança | Cada ação tem um nível de confiança (0-100%) |
+
+
+2. STACK TECNOLÓGICA
+===============================================================================
+
+| Camada | Tecnologia | Versão |
+|--------|------------|--------|
+| Runtime | Node.js | 20+ |
+| Framework | Express | 4.18+ |
+| Linguagem | TypeScript | 5.0+ |
+| Banco de Dados | SQLite (dev) / PostgreSQL (prod) | - |
+| ORM | Prisma | 5.0+ |
+| Autenticação | JWT + bcrypt | - |
+| Validação | Zod | - |
+| WebSocket | Socket.io | 4.6+ |
+| Logging | Winston | - |
+| Queue | Bull (Redis) | - |
+
+
+3. ESTRUTURA DE PASTAS
+===============================================================================
+
+backend/
+├── prisma/
+│   ├── schema.prisma
+│   └── migrations/
+├── src/
+│   ├── config/
+│   │   ├── database.ts
+│   │   ├── redis.ts
+│   │   └── exchange.ts
+│   ├── controllers/
+│   │   ├── auth.controller.ts
+│   │   ├── dashboard.controller.ts
+│   │   ├── configurations.controller.ts
+│   │   ├── training.controller.ts
+│   │   ├── transactions.controller.ts
+│   │   └── logs.controller.ts
+│   ├── services/
+│   │   ├── auth.service.ts
+│   │   ├── configurations.service.ts
+│   │   ├── training.service.ts
+│   │   ├── transactions.service.ts
+│   │   ├── logs.service.ts
+│   │   └── exchange.service.ts
+│   ├── strategies/
+│   │   ├── base.strategy.ts
+│   │   ├── scalper.strategy.ts
+│   │   ├── momentum.strategy.ts
+│   │   ├── trend-follower.strategy.ts
+│   │   ├── mean-reversion.strategy.ts
+│   │   └── arbitrage.strategy.ts
+│   ├── middleware/
+│   │   ├── auth.middleware.ts
+│   │   ├── rate-limit.middleware.ts
+│   │   └── validation.middleware.ts
+│   ├── schemas/
+│   │   ├── auth.schema.ts
+│   │   ├── configurations.schema.ts
+│   │   ├── training.schema.ts
+│   │   └── transactions.schema.ts
+│   ├── websocket/
+│   │   ├── index.ts
+│   │   └── handlers/
+│   │       ├── dashboard.ws.ts
+│   │       ├── orders.ws.ts
+│   │       ├── logs.ws.ts
+│   │       └── training.ws.ts
+│   ├── utils/
+│   │   ├── logger.ts
+│   │   └── tracer.ts
+│   └── app.ts
+├── .env.example
+├── package.json
+├── tsconfig.json
+└── docker-compose.yml
+
+
+4. MODELOS DE DADOS (PRISMA SCHEMA)
+===============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ==============================
+// USUÁRIO
+// ==============================
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  preferences  String   @default("{}")
+  lastLogin    DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  configurations  Configuration?
+  transactions    Transaction[]
+  balances        Balance[]
+  logs            Log[]
+  traces          Trace[]
+  trainingSessions TrainingSession[]
+}
+
+// ==============================
+// CONFIGURAÇÕES
+// ==============================
+model Configuration {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  user         User     @relation(fields: [userId], references: [id])
+  
+  // Chaves API
+  exchange     String   @default("binance")
+  apiKey       String   @default("")
+  secretKey    String   @default("")
+  
+  // Gerenciamento de Risco
+  stopLossPercent      Float  @default(5.0)
+  takeProfitPercent    Float  @default(10.0)
+  leverage             Int    @default(1)
+  maxTradeAmount       Float  @default(1000)
+  maxTradeAmountUnit   String @default("USDT")
+  
+  // Moedas Permitidas
+  allowedPairs         String @default("[]")
+  
+  // Taxas
+  discountUsdtPercent  Float  @default(0.075)
+  discountBnbPercent   Float  @default(0.075)
+  minBnbBalance        Float  @default(0.01)
+  
+  // Opções Avançadas
+  mode                 String @default("spot")
+  orderType            String @default("market")
+  slippagePercent      Float  @default(0.5)
+  
+  // Estratégias
+  strategies           String @default("[]")
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ==============================
+// BOT (ESTRATÉGIA)
+// ==============================
+model Bot {
+  id               String   @id @default(cuid())
+  name             String
+  strategyType     String
+  description      String?
+  status           String   @default("offline")
+  isPaused         Boolean  @default(false)
+  currentPair      String?
+  lastAnalysis     DateTime?
+  recommendedAction String?
+  confidence       Float?
+  modelVersion     String   @default("v1.0.0")
+  modelUrl         String?
+  parameters       String   @default("{}")
+  
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  transactions     Transaction[]
+  trainingSessions TrainingSession[]
+  traces           Trace[]
+}
+
+// ==============================
+// TRANSAÇÃO
+// ==============================
+model Transaction {
+  id         String   @id @default(cuid())
+  date       DateTime @default(now())
+  pair       String
+  origin     String
+  botId      String?
+  bot        Bot?     @relation(fields: [botId], references: [id])
+  type       String
+  quantity   Float
+  price      Float
+  total      Float
+  fee        Float
+  status     String
+  profitBrl  Float?
+  profitPercent Float?
+  
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  
+  createdAt  DateTime @default(now())
+}
+
+// ==============================
+// SALDO
+// ==============================
+model Balance {
+  id         String   @id @default(cuid())
+  currency   String
+  available  Float
+  reserved   Float
+  total      Float
+  updatedAt  DateTime @updatedAt
+  
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  
+  @@unique([userId, currency])
+}
+
+// ==============================
+// HISTÓRICO DE SALDO
+// ==============================
+model BalanceHistory {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  timestamp  DateTime @default(now())
+  totalBrl   Float
+  
+  @@index([userId, timestamp])
+}
+
+// ==============================
+// SESSÃO DE TREINAMENTO
+// ==============================
+model TrainingSession {
+  id           String   @id @default(cuid())
+  botId        String
+  bot          Bot      @relation(fields: [botId], references: [id])
+  status       String   @default("pending")
+  startTime    DateTime @default(now())
+  endTime      DateTime?
+  
+  config       String   @default("{}")
+  metrics      String   @default("[]")
+  bestEpoch    Int?
+  bestValLoss  Float?
+  modelUrl     String?
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// ==============================
+// LOG
+// ==============================
+model Log {
+  id         String   @id @default(cuid())
+  timestamp  DateTime @default(now())
+  level      String
+  module     String
+  message    String
+  details    String?
+  
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  
+  @@index([timestamp])
+  @@index([userId])
+}
+
+// ==============================
+// TRACE
+// ==============================
+model Trace {
+  id                String   @id @default(cuid())
+  timestamp         DateTime @default(now())
+  level             String
+  module            String
+  traceId           String
+  parentTraceId     String?
+  functionName      String
+  message           String
+  durationMs        Float
+  botId             String?
+  bot               Bot?     @relation(fields: [botId], references: [id])
+  currentPair       String?
+  recommendedAction String?
+  confidence        Float?
+  errorFlag         Boolean  @default(false)
+  
+  userId            String
+  user              User     @relation(fields: [userId], references: [id])
+  
+  @@index([traceId])
+  @@index([timestamp])
+  @@index([userId])
+}
+
+
+5. API ENDPOINTS
+===============================================================================
+
+5.1 AUTENTICAÇÃO
+-------------------------------------------------------------------------------
+
+| Método | Endpoint | Descrição |
+|--------|----------|-----------|
+| POST | /api/auth/login | Login do usuário |
+| POST | /api/auth/logout | Logout |
+| GET | /api/auth/me | Dados do usuário logado |
+| PUT | /api/auth/change-password | Trocar senha |
+
+5.2 DASHBOARD
+-------------------------------------------------------------------------------
+
+| Método | Endpoint | Descrição |
+|--------|----------|-----------|
+| GET | /api/dashboard/total-balance | Saldo total e indicadores |
+| GET | /api/dashboard/currencies-balance | Saldo por moeda |
+| GET | /api/dashboard/transactions/recent | Últimas transações |
+| GET | /api/dashboard/bots-status | Status dos bots |
+| GET | /api/dashboard/performance | Dados do gráfico |
+| PUT | /api/dashboard/bots/{id}/pause | Pausar bot |
+| PUT | /api/dashboard/bots/{id}/resume | Retomar bot |
+
+5.3 CONFIGURAÇÕES
+-------------------------------------------------------------------------------
+
+| Método | Endpoint | Descrição |
+|--------|----------|-----------|
+| GET | /api/configurations | Carregar configurações |
+| PUT | /api/configurations | Salvar configurações |
+| POST | /api/configurations/test-connection | Testar conexão com exchange |
+| GET | /api/exchange/pairs | Listar pares disponíveis |
+
+5.4 TREINAMENTO
+-------------------------------------------------------------------------------
+
+| Método | Endpoint | Descrição |
+|--------|----------|-----------|
+| GET | /api/training/strategies | Listar estratégias |
+| GET | /api/training/sessions | Histórico de sessões |
+| POST | /api/training/sessions | Criar sessão |
+| GET | /api/training/sessions/{id} | Detalhes da sessão |
+| PUT | /api/training/sessions/{id}/pause | Pausar treinamento |
+| PUT | /api/training/sessions/{id}/resume | Retomar treinamento |
+| DELETE | /api/training/sessions/{id}/cancel | Cancelar treinamento |
+| POST | /api/training/sessions/{id}/test | Backtesting |
+| POST | /api/training/sessions/{id}/save | Salvar modelo |
+| GET | /api/training/sessions/{id}/download | Download do modelo |
+
+5.5 TRANSAÇÕES
+-------------------------------------------------------------------------------
+
+| Método | Endpoint | Descrição |
+|--------|----------|-----------|
+| GET | /api/orders | Listar transações |
+| POST | /api/orders | Criar ordem manual |
+| DELETE | /api/orders/{id}/cancel | Cancelar ordem |
+| GET | /api/balance | Saldo disponível |
+| GET | /api/exchange/rate | Cotação |
+| GET | /api/exchange/candles | Dados de velas |
+
+5.6 LOGS E TRACES
+-------------------------------------------------------------------------------
+
+| Método | Endpoint | Descrição |
+|--------|----------|-----------|
+| GET | /api/logs | Listar logs |
+| GET | /api/traces | Listar traces |
+| GET | /api/traces/group/{traceId} | Agrupar traces |
+| GET | /api/logs/export | Exportar logs |
+| GET | /api/traces/export | Exportar traces |
+| GET | /api/traces/bots | Listar bots para filtro |
+
+5.7 PERFIL
+-------------------------------------------------------------------------------
+
+| Método | Endpoint | Descrição |
+|--------|----------|-----------|
+| GET | /api/profile | Dados do perfil |
+| PUT | /api/profile | Atualizar perfil |
+| PUT | /api/profile/preferences | Atualizar preferências |
+
+
+6. WEBSOCKET - EVENTOS
+===============================================================================
+
+6.1 CLIENTE -> SERVIDOR (Subscrições)
+-------------------------------------------------------------------------------
+
+| Evento | Descrição |
+|--------|-----------|
+| subscribe:dashboard | Receber atualizações do dashboard |
+| subscribe:orders | Receber atualizações de ordens |
+| subscribe:logs | Receber novos logs |
+| subscribe:traces | Receber novos traces |
+| subscribe:training:{id} | Receber atualizações de treinamento |
+| unsubscribe:* | Cancelar inscrição |
+
+6.2 SERVIDOR -> CLIENTE (Notificações)
+-------------------------------------------------------------------------------
+
+| Evento | Descrição | Frequência |
+|--------|-----------|------------|
+| dashboard:update | Dados do dashboard atualizados | 5-10 segundos |
+| order:created | Nova ordem criada | Imediato |
+| order:updated | Ordem atualizada | Imediato |
+| log:new | Novo log gerado | Imediato |
+| trace:new | Novo trace gerado | Imediato |
+| training:metrics | Novas métricas | A cada época |
+| training:log | Novo log de treinamento | Imediato |
+| training:status | Status mudou | Imediato |
+
+
+7. REGRAS DE NEGÓCIO PRINCIPAIS
+===============================================================================
+
+7.1 DASHBOARD - Cálculos
+-------------------------------------------------------------------------------
+
+totalBrl = SUM(available * taxa_conversao_para_brl)
+
+dailyProfitBrl = SUM(profitBrl) WHERE date >= now() - 1 day AND status = 'executed'
+
+hitRate = (trades_com_lucro / total_trades) * 100
+
+7.2 TRANSAÇÕES - FIFO para Cálculo de Lucro
+-------------------------------------------------------------------------------
+
+1. Buscar compras da moeda ordenadas por data (mais antigas primeiro)
+2. Para cada compra, alocar quantidade vendida
+3. profit = (preco_venda - preco_compra) * quantidade_alocada
+4. Atualizar quantidade restante das compras
+
+7.3 TREINAMENTO - Early Stopping
+-------------------------------------------------------------------------------
+
+Se early_stopping.enabled = true:
+  - Monitorar loss de validação
+  - Se não melhorar por N épocas (patience)
+  - Interromper treinamento
+
+7.4 LOGS E TRACES - Propagação de Trace ID
+-------------------------------------------------------------------------------
+
+1. Início da execução: gerar traceId único
+2. Cada chamada subsequente: propagar mesmo traceId
+3. parentTraceId = traceId da função chamadora
+4. Permite visualização hierárquica no frontend
+
+
+8. SEGURANÇA
+===============================================================================
+
+| Medida | Descrição |
+|--------|-----------|
+| JWT Authentication | Tokens com expiração (24h) |
+| bcrypt | Hash de senhas (salt 10) |
+| Rate Limiting | Limite de requisições por IP |
+| CORS | Configurado para origem do frontend |
+| Helmet | Headers de segurança |
+| Validação | Zod para validação de inputs |
+| Sanitização | Prevenção XSS/SQL Injection |
+| API Keys | Armazenadas criptografadas |
+
+
+9. VARIÁVEIS DE AMBIENTE
+===============================================================================
+
+# Server
+PORT=3001
+NODE_ENV=development
+
+# Database
+DATABASE_URL="file:./dev.db"
+
+# JWT
+JWT_SECRET=your-super-secret-key
+JWT_EXPIRES_IN=24h
+
+# CORS
+CORS_ORIGIN=http://localhost:3000
+
+# Logging
+LOG_LEVEL=info
+TRACE_ENABLED=true
+TRACE_RETENTION_DAYS=7
+LOG_RETENTION_DAYS=90
+
+# Exchange
+BINANCE_API_KEY=
+BINANCE_SECRET_KEY=
+
+
+10. INSTALAÇÃO E CONFIGURAÇÃO
+===============================================================================
+
+10.1 COMANDOS
+-------------------------------------------------------------------------------
+
+# Instalar dependências
+npm install
+
+# Configurar banco de dados
+npx prisma migrate dev --name init
+npx prisma generate
+
+# Executar seed (cria usuário admin e dados iniciais)
+npm run seed
+
+# Rodar em desenvolvimento
+npm run dev
+
+# Build para produção
+npm run build
+
+# Rodar em produção
+npm start
+
+10.2 CREDENCIAIS DE TESTE
+-------------------------------------------------------------------------------
+
+Email: admin@botcrypto.com
+Senha: admin123
+
+10.3 SCRIPT DE SEED
+-------------------------------------------------------------------------------
+
+Cria automaticamente:
+- Usuário administrador
+- 5 bots (estratégias padrão)
+- Saldos iniciais (USDT, BTC, ETH, SOL)
+- Configurações padrão
+
+
+11. DIAGRAMA DE RELACIONAMENTOS
+===============================================================================
+
+User (1) ---- (1) Configuration
+User (1) ---- (N) Transaction
+User (1) ---- (N) Balance
+User (1) ---- (N) Log
+User (1) ---- (N) Trace
+User (1) ---- (N) BalanceHistory
+
+Bot (1) ---- (N) Transaction
+Bot (1) ---- (N) TrainingSession
+Bot (1) ---- (N) Trace
+
+
+12. PRÓXIMOS PASSOS PARA IMPLEMENTAÇÃO
+===============================================================================
+
+1. [ ] Configurar projeto Node.js + TypeScript
+2. [ ] Configurar Prisma com SQLite
+3. [ ] Implementar autenticação JWT
+4. [ ] Implementar CRUD de configurações
+5. [ ] Implementar endpoints do dashboard
+6. [ ] Implementar WebSocket para tempo real
+7. [ ] Implementar sistema de logs e traces
+8. [ ] Implementar treinamento de IA
+9. [ ] Integrar com exchange real
+10. [ ] Escrever testes
+11. [ ] Documentar com Swagger
+12. [ ] Configurar Docker e deploy
+
+================================================================================
+FIM DA DOCUMENTAÇÃO COMPLETA DO BACKEND
+================================================================================
