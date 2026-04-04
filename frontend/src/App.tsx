@@ -16,18 +16,6 @@ function SharedToaster() {
           border: '1px solid var(--border-color)',
           boxShadow: '0 18px 48px rgba(15, 23, 42, 0.18)',
         },
-        success: {
-          iconTheme: {
-            primary: '#10b981',
-            secondary: '#ffffff',
-          },
-        },
-        error: {
-          iconTheme: {
-            primary: '#ef4444',
-            secondary: '#ffffff',
-          },
-        },
       }}
     />
   )

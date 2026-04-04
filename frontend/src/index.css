@@ -17,6 +17,19 @@
   --chart-grid: rgba(148, 163, 184, 0.12);
   --chart-axis: #94a3b8;
   --tooltip-bg: #0f172a;
+
+  /* aliases para componentes compartilhados */
+  --color-bg: var(--bg-primary);
+  --color-surface: var(--surface-1);
+  --color-surface-muted: var(--surface-2);
+  --color-surface-strong: var(--surface-3);
+  --color-overlay: var(--surface-overlay);
+  --color-text: var(--text-primary);
+  --color-text-muted: var(--text-secondary);
+  --color-text-subtle: var(--text-muted);
+  --color-border: var(--border-color);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--surface-2);
 }
 
 .dark {
@@ -35,6 +48,18 @@
   --chart-grid: rgba(148, 163, 184, 0.12);
   --chart-axis: #94a3b8;
   --tooltip-bg: #0f172a;
+
+  --color-bg: var(--bg-primary);
+  --color-surface: var(--surface-1);
+  --color-surface-muted: var(--surface-2);
+  --color-surface-strong: var(--surface-3);
+  --color-overlay: var(--surface-overlay);
+  --color-text: var(--text-primary);
+  --color-text-muted: var(--text-secondary);
+  --color-text-subtle: var(--text-muted);
+  --color-border: var(--border-color);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--surface-2);
 }
 
 .light {
@@ -53,6 +78,18 @@
   --chart-grid: rgba(15, 23, 42, 0.08);
   --chart-axis: #64748b;
   --tooltip-bg: #ffffff;
+
+  --color-bg: var(--bg-primary);
+  --color-surface: var(--surface-1);
+  --color-surface-muted: var(--surface-2);
+  --color-surface-strong: var(--surface-3);
+  --color-overlay: var(--surface-overlay);
+  --color-text: var(--text-primary);
+  --color-text-muted: var(--text-secondary);
+  --color-text-subtle: var(--text-muted);
+  --color-border: var(--border-color);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--surface-2);
 }
 
 * {
@@ -98,6 +135,28 @@ body {
   .app-page-subtitle {
     color: var(--text-secondary);
   }
+
+  .app-card {
+    background-color: var(--surface-1);
+    border: 1px solid var(--border-color);
+    box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
+  }
+
+  .app-input {
+    background-color: var(--surface-2);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+  }
+
+  .app-input::placeholder {
+    color: var(--text-muted);
+  }
+
+  .app-input:focus {
+    outline: none;
+    border-color: rgba(37, 99, 235, 0.42);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+  }
 }
 
 @layer utilities {
@@ -140,6 +199,52 @@ body {
 
   .hover\:bg-dark-400:hover {
     background-color: var(--surface-3) !important;
+  }
+
+  /* compatibilidade ampla para telas ainda presas ao dark theme */
+  .light .text-white,
+  .light .text-gray-50,
+  .light .text-gray-100,
+  .light .text-gray-200,
+  .light .text-slate-50,
+  .light .text-slate-100,
+  .light .text-slate-200,
+  .light .text-zinc-50,
+  .light .text-zinc-100,
+  .light .text-zinc-200 {
+    color: var(--text-primary) !important;
+  }
+
+  .light .bg-gray-900,
+  .light .bg-gray-800,
+  .light .bg-gray-700,
+  .light .bg-slate-900,
+  .light .bg-slate-800,
+  .light .bg-slate-700,
+  .light .bg-zinc-900,
+  .light .bg-zinc-800,
+  .light .bg-neutral-900,
+  .light .bg-neutral-800 {
+    background-color: var(--surface-2) !important;
+  }
+
+  .light .border-gray-900,
+  .light .border-gray-800,
+  .light .border-gray-700,
+  .light .border-slate-900,
+  .light .border-slate-800,
+  .light .border-slate-700,
+  .light .border-zinc-900,
+  .light .border-zinc-800,
+  .light .border-neutral-900,
+  .light .border-neutral-800,
+  .light .border-neutral-700 {
+    border-color: var(--border-color) !important;
+  }
+
+  .light pre,
+  .light code {
+    color: var(--text-primary);
   }
 
   .light .bg-dark-200.text-white,

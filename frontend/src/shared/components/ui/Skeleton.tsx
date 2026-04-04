@@ -6,10 +6,10 @@ interface SkeletonProps extends React.HTMLAttributes<HTMLDivElement> {
 
 export function Skeleton({ className, variant = 'rectangular', ...props }: SkeletonProps) {
   const variants = {
-    text: 'h-4 rounded',
+    text: 'h-4 rounded-md',
     circular: 'rounded-full',
-    rectangular: 'rounded-2xl',
-  }
+    rectangular: 'rounded-xl',
+  } as const
 
-  return <div className={cn('animate-pulse', variants[variant], className)} style={{ backgroundColor: 'var(--surface-3)' }} {...props} />
+  return <div className={cn('animate-pulse bg-[var(--color-surface-strong)]/80', variants[variant], className)} {...props} />
 }

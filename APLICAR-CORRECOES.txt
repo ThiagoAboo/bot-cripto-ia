@@ -1,8 +1,0 @@
-1. Extraia este ZIP.
-2. Copie a pasta src para a raiz do seu projeto bot-cripto-ia.
-3. Sobrescreva os arquivos existentes.
-4. Rode npm run dev.
-5. Faça um hard refresh no navegador.
-6. Se quiser validar o tema do zero, remova a chave theme do localStorage.
-
-Este pacote foi montado como overlay de correção para aplicar sobre o repositório.

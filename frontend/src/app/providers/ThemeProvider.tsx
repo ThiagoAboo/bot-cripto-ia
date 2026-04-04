@@ -28,12 +28,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const root = document.documentElement
-
     root.classList.remove('dark', 'light')
     root.classList.add(theme)
     root.setAttribute('data-theme', theme)
     root.style.colorScheme = theme
-
     window.localStorage.setItem('theme', theme)
   }, [theme])
 

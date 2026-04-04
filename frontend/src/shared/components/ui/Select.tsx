@@ -1,5 +1,5 @@
-import { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react'
-import { ChevronDown, Check } from 'lucide-react'
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Check, ChevronDown } from 'lucide-react'
 import { cn } from '../../utils/formatters'
 
 interface SelectContextType {
@@ -21,7 +21,14 @@ export function Select({ children, value, onValueChange }: SelectProps) {
   const [open, setOpen] = useState(false)
 
   return (
-    <SelectContext.Provider value={{ open, setOpen, selectedValue: value, setSelectedValue: onValueChange }}>
+    <SelectContext.Provider
+      value={{
+        open,
+        setOpen,
+        selectedValue: value,
+        setSelectedValue: onValueChange,
+      }}
+    >
       <div className="relative">{children}</div>
     </SelectContext.Provider>
   )
@@ -34,7 +41,10 @@ interface SelectTriggerProps {
 
 export function SelectTrigger({ children, className }: SelectTriggerProps) {
   const context = useContext(SelectContext)
-  if (!context) throw new Error('SelectTrigger must be used within Select')
+
+  if (!context) {
+    throw new Error('SelectTrigger must be used within Select')
+  }
 
   const { open, setOpen } = context
 
@@ -42,18 +52,10 @@ export function SelectTrigger({ children, className }: SelectTriggerProps) {
     <button
       type="button"
       onClick={() => setOpen(!open)}
-      className={cn(
-        'flex h-11 w-full items-center justify-between rounded-2xl border px-3 py-2 text-sm outline-none transition-all focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20',
-        className,
-      )}
-      style={{
-        backgroundColor: 'var(--surface-2)',
-        color: 'var(--text-primary)',
-        borderColor: 'var(--border-color)',
-      }}
+      className={cn('app-input flex h-11 w-full items-center justify-between rounded-xl px-3 text-sm shadow-sm', className)}
     >
-      {children}
-      <ChevronDown className={cn('h-4 w-4 shrink-0 opacity-60 transition-transform', open && 'rotate-180')} />
+      <span className="truncate">{children}</span>
+      <ChevronDown className={cn('h-4 w-4 shrink-0 text-[var(--color-text-subtle)] transition-transform', open && 'rotate-180')} />
     </button>
   )
 }
@@ -64,11 +66,14 @@ interface SelectValueProps {
 
 export function SelectValue({ placeholder }: SelectValueProps) {
   const context = useContext(SelectContext)
-  if (!context) throw new Error('SelectValue must be used within Select')
+
+  if (!context) {
+    throw new Error('SelectValue must be used within Select')
+  }
 
   const { selectedValue } = context
 
-  return <span style={{ color: selectedValue ? 'var(--text-primary)' : 'var(--text-muted)' }}>{selectedValue || placeholder}</span>
+  return <span className={cn(selectedValue ? 'text-[var(--color-text)]' : 'text-[var(--color-text-subtle)]')}>{selectedValue || placeholder}</span>
 }
 
 interface SelectContentProps {
@@ -78,10 +83,13 @@ interface SelectContentProps {
 
 export function SelectContent({ children, className }: SelectContentProps) {
   const context = useContext(SelectContext)
-  if (!context) throw new Error('SelectContent must be used within Select')
+  const contentRef = useRef<HTMLDivElement | null>(null)
+
+  if (!context) {
+    throw new Error('SelectContent must be used within Select')
+  }
 
   const { open, setOpen } = context
-  const contentRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -94,16 +102,19 @@ export function SelectContent({ children, className }: SelectContentProps) {
       document.addEventListener('mousedown', handleClickOutside)
     }
 
-    return () => document.removeEventListener('mousedown', handleClickOutside)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
   }, [open, setOpen])
 
-  if (!open) return null
+  if (!open) {
+    return null
+  }
 
   return (
     <div
       ref={contentRef}
-      className={cn('absolute z-50 mt-2 max-h-72 w-full overflow-auto rounded-2xl border p-1 shadow-xl', className)}
-      style={{ backgroundColor: 'var(--surface-1)', borderColor: 'var(--border-color)' }}
+      className={cn('absolute z-50 mt-2 max-h-72 w-full overflow-auto rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-2 shadow-2xl', className)}
     >
       {children}
     </div>
@@ -117,7 +128,10 @@ interface SelectItemProps {
 
 export function SelectItem({ children, value }: SelectItemProps) {
   const context = useContext(SelectContext)
-  if (!context) throw new Error('SelectItem must be used within Select')
+
+  if (!context) {
+    throw new Error('SelectItem must be used within Select')
+  }
 
   const { selectedValue, setSelectedValue, setOpen } = context
   const isSelected = selectedValue === value
@@ -131,9 +145,8 @@ export function SelectItem({ children, value }: SelectItemProps) {
       }}
       className={cn(
         'flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm transition-colors',
-        isSelected && 'bg-primary-500/10 text-primary-500',
+        isSelected ? 'bg-primary-500/10 text-primary-600' : 'text-[var(--color-text)] hover:bg-[var(--color-surface-muted)]',
       )}
-      style={{ color: isSelected ? undefined : 'var(--text-primary)' }}
     >
       <span>{children}</span>
       {isSelected && <Check className="h-4 w-4" />}
