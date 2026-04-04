@@ -93,7 +93,7 @@ export default function TreinamentoPage() {
     })
   }
 
-  const notifyNotImplemented = () => toast.info('Função em desenvolvimento')
+  const notifyNotImplemented = () => toast.custom('Função em desenvolvimento')
 
   const handleTest = () => activeSession && testSession(activeSession.id)
   const handleSave = () => activeSession && saveModel(activeSession.id)
