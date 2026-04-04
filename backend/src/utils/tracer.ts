@@ -1,102 +1,208 @@
 import { v4 as uuidv4 } from 'uuid'
-import { logger } from './logger'
 import { prisma } from '../config/database'
+import {
+  getObservabilityContext,
+  setObservabilityContext,
+  updateObservabilityContext,
+  type ObservabilityContext,
+} from './observability-context'
+import { logger } from './logger'
 
-interface TraceContext {
-  traceId: string
-  parentTraceId?: string
-  startTime: number
-  userId: string
-  module: string
-  functionName: string
+export type TraceLevel = 'TRACE' | 'DEBUG' | 'INFO' | 'WARN' | 'ERROR'
+
+export interface TraceExtra {
+  botId?: string | null
+  currentPair?: string | null
+  recommendedAction?: string | null
+  confidence?: number | null
+  errorFlag?: boolean
+  userId?: string | null
+  [key: string]: unknown
 }
 
-let currentContext: TraceContext | null = null
+function isTraceEnabled(): boolean {
+  return process.env.TRACE_ENABLED !== 'false'
+}
 
-// Salvar trace no banco de dados
 async function saveTrace(
-  level: string,
+  level: TraceLevel,
   module: string,
   functionName: string,
   message: string,
   durationMs: number,
-  extra?: any
-) {
-  if (!currentContext) {
-    logger.warn('Tentativa de salvar trace sem contexto')
+  extra?: TraceExtra,
+): Promise<void> {
+  if (!isTraceEnabled()) {
+    return
+  }
+
+  const context = getObservabilityContext()
+
+  if (!context) {
+    logger.warn('[tracer] Tentativa de salvar trace sem contexto', {
+      module: 'tracer',
+      message,
+      skipPersistence: true,
+    })
+    return
+  }
+
+  const userId = extra?.userId ?? context.userId ?? undefined
+
+  if (!userId) {
+    logger.debug('[tracer] Trace sem userId persistível; mantendo apenas em arquivo/console', {
+      module: 'tracer',
+      traceId: context.traceId,
+      functionName,
+      skipPersistence: true,
+    })
     return
   }
 
   try {
-    const traceData = {
-      traceId: currentContext.traceId,
-      parentTraceId: currentContext.parentTraceId || null,
-      level,
-      module,
-      functionName,
-      message,
-      durationMs,
-      userId: currentContext.userId,
-      botId: extra?.botId || null,
-      currentPair: extra?.currentPair || null,
-      recommendedAction: extra?.recommendedAction || null,
-      confidence: extra?.confidence || null,
-      errorFlag: extra?.errorFlag || false
-    }
-
-    await prisma.trace.create({ data: traceData })
-    logger.debug(`Trace salvo: ${currentContext.traceId} - ${functionName} - ${durationMs}ms`)
+    await prisma.trace.create({
+      data: {
+        traceId: context.traceId,
+        parentTraceId: context.parentTraceId ?? null,
+        level,
+        module,
+        functionName,
+        message,
+        durationMs,
+        userId,
+        botId: extra?.botId ?? null,
+        currentPair: extra?.currentPair ?? null,
+        recommendedAction: extra?.recommendedAction ?? null,
+        confidence: extra?.confidence ?? null,
+        errorFlag: extra?.errorFlag ?? level === 'ERROR',
+      },
+    })
   } catch (error) {
-    logger.error('Erro ao salvar trace:', error)
+    logger.error('[tracer] Erro ao salvar trace no banco', {
+      module: 'tracer',
+      traceId: context.traceId,
+      functionName,
+      error,
+      skipPersistence: true,
+    })
   }
 }
 
-export function startTrace(userId: string, functionName: string, module: string): string {
-  const traceId = uuidv4()
-  currentContext = {
-    traceId,
+export function startTrace(
+  userId: string | null | undefined,
+  functionName: string,
+  module: string,
+): string {
+  const previousContext = getObservabilityContext()
+
+  const context: ObservabilityContext = {
+    traceId: uuidv4(),
+    parentTraceId: previousContext?.traceId ?? null,
     startTime: Date.now(),
-    userId,
+    userId: userId ?? previousContext?.userId ?? null,
     module,
-    functionName
+    functionName,
+    previousContext,
   }
 
-  // Salvar trace inicial sem aguardar
-  saveTrace('TRACE', module, functionName, `Iniciando ${functionName}`, 0).catch(console.error)
+  setObservabilityContext(context)
 
-  logger.info(`[TRACE] Iniciado: ${traceId} - ${functionName} por usuário ${userId}`)
-  return traceId
+  void saveTrace('TRACE', module, functionName, `Iniciando ${functionName}`, 0)
+
+  logger.info(`[${module}] Trace iniciado: ${functionName}`, {
+    module,
+    traceId: context.traceId,
+    parentTraceId: context.parentTraceId ?? null,
+    userId: context.userId ?? undefined,
+    skipPersistence: true,
+  })
+
+  return context.traceId
+}
+
+export function setCurrentTraceUserId(userId: string): void {
+  updateObservabilityContext({ userId })
 }
 
 export function trace(
-  level: 'TRACE' | 'DEBUG',
+  level: TraceLevel,
   module: string,
   functionName: string,
   message: string,
   durationMs: number,
-  extra?: any
-) {
-  if (!currentContext) {
-    logger.warn(`Trace sem contexto: ${message}`)
+  extra?: TraceExtra,
+): void {
+  const context = getObservabilityContext()
+
+  if (!context) {
+    logger.warn(`[${module}] Trace sem contexto: ${message}`, {
+      module,
+      functionName,
+      skipPersistence: true,
+    })
     return
   }
 
-  // Salvar trace sem aguardar
-  saveTrace(level, module, functionName, message, durationMs, extra).catch(console.error)
+  void saveTrace(level, module, functionName, message, durationMs, extra)
 
-  // Log no console para debug
-  const prefix = level === 'DEBUG' ? '🔍' : '📊'
-  logger.debug(`${prefix} [${module}] ${functionName}: ${message} (${durationMs}ms)`)
+  const logMeta = {
+    module,
+    functionName,
+    traceId: context.traceId,
+    durationMs,
+    ...extra,
+    skipPersistence: true,
+  }
+
+  if (level === 'ERROR') {
+    logger.error(`[${module}] ${functionName}: ${message}`, logMeta)
+    return
+  }
+
+  if (level === 'WARN') {
+    logger.warn(`[${module}] ${functionName}: ${message}`, logMeta)
+    return
+  }
+
+  if (level === 'INFO') {
+    logger.info(`[${module}] ${functionName}: ${message}`, logMeta)
+    return
+  }
+
+  logger.debug(`[${module}] ${functionName}: ${message}`, logMeta)
 }
 
-export function endTrace(functionName: string) {
-  if (!currentContext) return
+export function endTrace(functionName: string, extra?: TraceExtra): void {
+  const context = getObservabilityContext()
 
-  const duration = Date.now() - currentContext.startTime
-  trace('TRACE', currentContext.module, functionName, `Finalizando ${functionName}`, duration)
-  currentContext = null
+  if (!context) {
+    return
+  }
+
+  const durationMs = Date.now() - context.startTime
+  const finalFunctionName = functionName || context.functionName
+
+  void saveTrace(
+    extra?.errorFlag ? 'ERROR' : 'TRACE',
+    context.module,
+    finalFunctionName,
+    `Finalizando ${finalFunctionName}`,
+    durationMs,
+    extra,
+  )
+
+  logger.info(`[${context.module}] Trace finalizado: ${finalFunctionName}`, {
+    module: context.module,
+    traceId: context.traceId,
+    durationMs,
+    userId: context.userId ?? undefined,
+    errorFlag: extra?.errorFlag ?? false,
+    skipPersistence: true,
+  })
+
+  setObservabilityContext(context.previousContext ?? null)
 }
 
 export function getCurrentTraceId(): string | null {
-  return currentContext?.traceId || null
+  return getObservabilityContext()?.traceId ?? null
 }

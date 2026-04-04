@@ -1,36 +1,50 @@
-import { Request, Response, NextFunction } from 'express'
+import { NextFunction, Request, Response } from 'express'
 import jwt from 'jsonwebtoken'
-import { PrismaClient } from '@prisma/client'
+import { prisma } from '../config/database'
 
-const prisma = new PrismaClient()
 const JWT_SECRET = process.env.JWT_SECRET || 'default-secret'
 
 export interface AuthRequest extends Request {
   userId?: string
-  user?: any
+  user?: {
+    id: string
+    email: string
+    name: string
+  }
+}
+
+interface JwtPayload {
+  userId: string
+  email?: string
 }
 
 export async function authMiddleware(
   req: AuthRequest,
   res: Response,
-  next: NextFunction
+  next: NextFunction,
 ) {
   try {
     const authHeader = req.headers.authorization
+
     if (!authHeader) {
       return res.status(401).json({ success: false, error: 'Token não fornecido' })
     }
 
-    const token = authHeader.split(' ')[1]
-    if (!token) {
+    const [scheme, token] = authHeader.split(' ')
+
+    if (scheme !== 'Bearer' || !token) {
       return res.status(401).json({ success: false, error: 'Token inválido' })
     }
 
-    const decoded = jwt.verify(token, JWT_SECRET) as { userId: string }
-    
+    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload
+
+    if (!decoded.userId) {
+      return res.status(401).json({ success: false, error: 'Token inválido' })
+    }
+
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
-      select: { id: true, email: true, name: true }
+      select: { id: true, email: true, name: true },
     })
 
     if (!user) {
@@ -39,8 +53,9 @@ export async function authMiddleware(
 
     req.userId = user.id
     req.user = user
-    next()
-  } catch (error) {
+
+    return next()
+  } catch {
     return res.status(401).json({ success: false, error: 'Token inválido ou expirado' })
   }
 }
