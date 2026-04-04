@@ -327,8 +327,7 @@ export async function exportLogs(req: AuthRequest, res: Response) {
       csvRows.push(row.join(','))
     }
 
-    const csv = csvRows.join('
-')
+    const csv = csvRows.join('\n')
 
     res.setHeader('Content-Type', 'text/csv')
     res.setHeader('Content-Disposition', `attachment; filename=logs_${Date.now()}.csv`)
@@ -412,8 +411,7 @@ export async function exportTraces(req: AuthRequest, res: Response) {
       csvRows.push(row.join(','))
     }
 
-    const csv = csvRows.join('
-')
+    const csv = csvRows.join('\n')
 
     res.setHeader('Content-Type', 'text/csv')
     res.setHeader('Content-Disposition', `attachment; filename=traces_${Date.now()}.csv`)
