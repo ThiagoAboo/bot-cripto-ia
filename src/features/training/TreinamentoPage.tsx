@@ -8,11 +8,11 @@ import { MetricsChart } from './components/MetricsChart'
 import { TrainingLogTerminal } from './components/TrainingLogTerminal'
 import { Button } from '../../shared/components/ui/Button'
 import { Skeleton } from '../../shared/components/ui/Skeleton'
-import { History, Brain, AlertCircle } from 'lucide-react'
+import { History, Brain, AlertCircle, Play, Pause, Square, Download, Save, TestTube } from 'lucide-react'
 import toast from 'react-hot-toast'
 import type { TrainingConfig, Architecture, DataSource, Timeframe, TrainingSession } from './types/training.types'
 
-// Mock de bots disponíveis (seria carregado da API)
+// Mock de bots disponíveis
 const availableBots = [
   { id: 'bot1', name: 'Scalper V2', strategy: 'scalper' },
   { id: 'bot2', name: 'Momentum Trader', strategy: 'momentum' },
@@ -34,7 +34,6 @@ export default function TreinamentoPage() {
   const [activeSession, setActiveSession] = useState<TrainingSession | null>(null)
   const [showHistory, setShowHistory] = useState(false)
 
-  // Configuração do treinamento
   const [config, setConfig] = useState<Partial<TrainingConfig>>({
     architecture: 'lstm',
     modelVersion: 'v1.0.0',
@@ -64,7 +63,6 @@ export default function TreinamentoPage() {
     },
   })
 
-  // Verificar se há sessão ativa
   useEffect(() => {
     const runningSession = sessions?.find(s => s.status === 'running' || s.status === 'pending' || s.status === 'paused')
     if (runningSession) {
@@ -99,6 +97,27 @@ export default function TreinamentoPage() {
         refetchSessions()
       },
     })
+  }
+
+  const handlePause = () => {
+    if (activeSession) {
+      // TODO: Implement pause
+      toast.info('Função em desenvolvimento')
+    }
+  }
+
+  const handleResume = () => {
+    if (activeSession) {
+      // TODO: Implement resume
+      toast.info('Função em desenvolvimento')
+    }
+  }
+
+  const handleCancel = () => {
+    if (activeSession) {
+      // TODO: Implement cancel
+      toast.info('Função em desenvolvimento')
+    }
   }
 
   const handleTest = () => {
@@ -168,10 +187,10 @@ export default function TreinamentoPage() {
             modelVersion={config.modelVersion!}
             availableBots={availableBots}
             availableStrategies={strategies || []}
-            onBotChange={(value: string) => setSelectedBotId(value)}
-            onStrategyChange={(value: string) => setSelectedStrategyId(value)}
-            onArchitectureChange={(value: Architecture) => setConfig({ ...config, architecture: value })}
-            onVersionChange={(value: string) => setConfig({ ...config, modelVersion: value })}
+            onBotChange={setSelectedBotId}
+            onStrategyChange={setSelectedStrategyId}
+            onArchitectureChange={(value) => setConfig({ ...config, architecture: value })}
+            onVersionChange={(value) => setConfig({ ...config, modelVersion: value })}
           />
           
           <HyperparametersForm
@@ -210,21 +229,36 @@ export default function TreinamentoPage() {
               </p>
             )}
           </div>
-          <TrainingControls
-            status={activeSession?.status || 'completed'}
-            onStart={handleStartTraining}
-            onPause={() => {}}
-            onResume={() => {}}
-            onCancel={() => {}}
-            onTest={handleTest}
-            onSave={handleSave}
-            onDownload={handleDownload}
-            isPending={isCreating}
-            isTesting={isTesting}
-            isSaving={isSaving}
-            isDownloading={isDownloading}
-            hasModel={!!activeSession?.modelUrl}
-          />
+          <div className="flex flex-wrap gap-3">
+            <Button onClick={handleStartTraining} disabled={isCreating}>
+              <Play className="w-4 h-4 mr-2" />
+              Iniciar Treinamento
+            </Button>
+            <Button variant="secondary" onClick={handlePause}>
+              <Pause className="w-4 h-4 mr-2" />
+              Pausar
+            </Button>
+            <Button variant="secondary" onClick={handleResume}>
+              <Play className="w-4 h-4 mr-2" />
+              Retomar
+            </Button>
+            <Button variant="danger" onClick={handleCancel}>
+              <Square className="w-4 h-4 mr-2" />
+              Cancelar
+            </Button>
+            <Button variant="secondary" onClick={handleTest} disabled={isTesting}>
+              <TestTube className="w-4 h-4 mr-2" />
+              Testar
+            </Button>
+            <Button variant="secondary" onClick={handleSave} disabled={isSaving}>
+              <Save className="w-4 h-4 mr-2" />
+              Salvar
+            </Button>
+            <Button variant="outline" onClick={handleDownload} disabled={isDownloading}>
+              <Download className="w-4 h-4 mr-2" />
+              Exportar
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -260,9 +294,9 @@ export default function TreinamentoPage() {
                 </div>
                 <div className="text-right">
                   <span className={`text-sm px-2 py-1 rounded-full ${
-                    session.status === 'completed' ? 'bg-success/20 text-success' :
-                    session.status === 'running' ? 'bg-warning/20 text-warning' :
-                    session.status === 'failed' ? 'bg-error/20 text-error' :
+                    session.status === 'completed' ? 'bg-green-500/20 text-green-500' :
+                    session.status === 'running' ? 'bg-yellow-500/20 text-yellow-500' :
+                    session.status === 'failed' ? 'bg-red-500/20 text-red-500' :
                     'bg-gray-500/20 text-gray-400'
                   }`}>
                     {session.status === 'completed' ? 'Concluído' :
@@ -283,8 +317,8 @@ export default function TreinamentoPage() {
         </div>
       )}
 
-      {/* Aviso se não há sessão ativa */}
-      {!activeSession && (
+      {/* Aviso */}
+      {!activeSession && !showHistory && (
         <div className="flex items-center justify-center gap-2 text-sm text-gray-500 py-8">
           <AlertCircle className="w-4 h-4" />
           Nenhum treinamento em andamento. Configure os parâmetros e clique em "Iniciar Treinamento"

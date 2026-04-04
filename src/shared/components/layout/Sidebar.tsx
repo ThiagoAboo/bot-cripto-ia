@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Bot,
+  User,
 } from 'lucide-react'
 import { cn } from '../../utils/formatters'
 
@@ -22,6 +23,7 @@ const menuItems = [
   { path: '/treinamento', icon: Brain, label: 'Treinamento IA' },
   { path: '/configuracoes', icon: Settings, label: 'Configurações' },
   { path: '/logs', icon: FileText, label: 'Logs' },
+  { path: '/perfil', icon: User, label: 'Perfil' },
 ]
 
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
