@@ -38,6 +38,60 @@ const createTrainingSessionSchema = z.object({
   }),
 })
 
+
+function safeJsonParse<T>(value: string | null | undefined, fallback: T): T {
+  if (!value) {
+    return fallback
+  }
+
+  try {
+    return JSON.parse(value) as T
+  } catch {
+    return fallback
+  }
+}
+
+function normalizeTrainingLogLevel(level: unknown): 'INFO' | 'WARN' | 'ERROR' {
+  if (level === 'WARN') {
+    return 'WARN'
+  }
+
+  if (level === 'ERROR') {
+    return 'ERROR'
+  }
+
+  return 'INFO'
+}
+
+function buildTrainingSessionResponse(session: any) {
+  const config = safeJsonParse<Record<string, unknown>>(session.config, {})
+  const metrics = safeJsonParse<any[]>(session.metrics, [])
+  const logs = Array.isArray(session.logs)
+    ? session.logs.map((entry: any) => ({
+        timestamp: entry?.timestamp ?? new Date().toISOString(),
+        level: normalizeTrainingLogLevel(entry?.level),
+        message: typeof entry?.message === 'string' ? entry.message : 'Log indisponível',
+        epoch: typeof entry?.epoch === 'number' ? entry.epoch : undefined,
+      }))
+    : []
+
+  return {
+    id: session.id,
+    botId: session.botId,
+    strategyId: typeof config.strategyId === 'string' ? config.strategyId : session.bot?.strategyType,
+    strategyName: session.bot?.name ?? (typeof config.strategyId === 'string' ? config.strategyId : ''),
+    status: session.status,
+    startTime: session.startTime,
+    endTime: session.endTime ?? undefined,
+    config,
+    metrics,
+    logs,
+    bestEpoch: session.bestEpoch ?? undefined,
+    bestValLoss: session.bestValLoss ?? undefined,
+    modelUrl: session.modelUrl ?? undefined,
+  }
+}
+
 export async function getStrategies(req: AuthRequest, res: Response): Promise<Response> {
   startTrace(req.userId!, 'getStrategies', 'training')
 
@@ -83,18 +137,7 @@ export async function getTrainingSessions(req: AuthRequest, res: Response): Prom
       include: { bot: { select: { name: true, strategyType: true } } },
     })
 
-    const result = sessions.map((session: any) => ({
-      id: session.id,
-      botId: session.botId,
-      strategyId: session.bot?.strategyType,
-      strategyName: session.bot?.name,
-      status: session.status,
-      startTime: session.startTime,
-      endTime: session.endTime,
-      bestEpoch: session.bestEpoch,
-      bestValLoss: session.bestValLoss,
-      modelUrl: session.modelUrl,
-    }))
+    const result = sessions.map((session: any) => buildTrainingSessionResponse(session))
 
     endTrace('getTrainingSessions', { userId })
     return res.json({ success: true, data: result })
@@ -191,15 +234,10 @@ export async function createTrainingSession(req: AuthRequest, res: Response): Pr
     endTrace('createTrainingSession', { userId, botId: data.botId })
     return res.json({
       success: true,
-      data: {
-        id: session.id,
-        botId: session.botId,
-        strategyId: bot?.strategyType,
-        strategyName: bot?.name,
-        status: session.status,
-        startTime: session.startTime,
-        config: JSON.parse(session.config),
-      },
+      data: buildTrainingSessionResponse({
+        ...session,
+        bot: bot ? { name: bot.name, strategyType: bot.strategyType } : null,
+      }),
     })
   } catch (error) {
     logger.error('[training] Erro ao criar sessão de treinamento', {
@@ -231,20 +269,7 @@ export async function getTrainingSessionById(req: AuthRequest, res: Response): P
       return res.status(404).json({ success: false, error: 'Sessão não encontrada' })
     }
 
-    const result = {
-      id: session.id,
-      botId: session.botId,
-      strategyId: session.bot?.strategyType,
-      strategyName: session.bot?.name,
-      status: session.status,
-      startTime: session.startTime,
-      endTime: session.endTime,
-      config: JSON.parse(session.config),
-      metrics: JSON.parse(session.metrics),
-      bestEpoch: session.bestEpoch,
-      bestValLoss: session.bestValLoss,
-      modelUrl: session.modelUrl,
-    }
+    const result = buildTrainingSessionResponse(session)
 
     endTrace('getTrainingSessionById', { userId, botId: session.botId })
     return res.json({ success: true, data: result })

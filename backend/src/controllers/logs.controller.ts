@@ -57,6 +57,110 @@ function parseDetails(details: string | null): unknown {
   }
 }
 
+
+const frontendLogModules = new Set([
+  'dashboard',
+  'configurations',
+  'training',
+  'transactions',
+  'bot',
+  'system',
+  'api',
+  'database',
+])
+
+const systemBackedModules = ['system', 'app', 'console', 'auth', 'profile', 'logs', 'tracer']
+
+function expandRequestedLogLevels(levels?: string): string[] | undefined {
+  if (!levels) {
+    return undefined
+  }
+
+  const requested = levels.split(',').map((level) => level.trim()).filter(Boolean)
+  const expanded = new Set<string>()
+
+  for (const level of requested) {
+    if (level === 'INFO') {
+      expanded.add('INFO')
+      expanded.add('DEBUG')
+      continue
+    }
+
+    expanded.add(level)
+  }
+
+  return expanded.size > 0 ? Array.from(expanded) : undefined
+}
+
+function expandRequestedTraceLevels(levels?: string): string[] | undefined {
+  if (!levels) {
+    return undefined
+  }
+
+  const requested = levels.split(',').map((level) => level.trim()).filter(Boolean)
+  const expanded = new Set<string>()
+
+  for (const level of requested) {
+    if (level === 'TRACE') {
+      expanded.add('TRACE')
+      expanded.add('INFO')
+      expanded.add('WARN')
+      expanded.add('ERROR')
+      continue
+    }
+
+    expanded.add(level)
+  }
+
+  return expanded.size > 0 ? Array.from(expanded) : undefined
+}
+
+function expandRequestedModules(modules?: string): string[] | undefined {
+  if (!modules) {
+    return undefined
+  }
+
+  const requested = modules.split(',').map((module) => module.trim()).filter(Boolean)
+  const expanded = new Set<string>()
+
+  for (const moduleName of requested) {
+    if (moduleName === 'system') {
+      for (const rawModule of systemBackedModules) {
+        expanded.add(rawModule)
+      }
+      continue
+    }
+
+    expanded.add(moduleName)
+  }
+
+  return expanded.size > 0 ? Array.from(expanded) : undefined
+}
+
+function normalizeLogLevel(level: string): 'INFO' | 'WARN' | 'ERROR' {
+  if (level === 'WARN') {
+    return 'WARN'
+  }
+
+  if (level === 'ERROR') {
+    return 'ERROR'
+  }
+
+  return 'INFO'
+}
+
+function normalizeTraceLevel(level: string): 'DEBUG' | 'TRACE' {
+  return level === 'DEBUG' ? 'DEBUG' : 'TRACE'
+}
+
+function normalizeModule(moduleName: string): 'dashboard' | 'configurations' | 'training' | 'transactions' | 'bot' | 'system' | 'api' | 'database' {
+  if (frontendLogModules.has(moduleName)) {
+    return moduleName as 'dashboard' | 'configurations' | 'training' | 'transactions' | 'bot' | 'system' | 'api' | 'database'
+  }
+
+  return 'system'
+}
+
 export async function getLogs(req: AuthRequest, res: Response) {
   startTrace(req.userId!, 'getLogs', 'logs')
 
@@ -77,8 +181,10 @@ export async function getLogs(req: AuthRequest, res: Response) {
 
     const where: any = buildLogsWhere(userId, systemLogUserId)
 
-    if (levels) where.level = { in: levels.split(',') }
-    if (modules) where.module = { in: modules.split(',') }
+    const expandedLogLevels = expandRequestedLogLevels(levels)
+    if (expandedLogLevels) where.level = { in: expandedLogLevels }
+    const expandedLogModules = expandRequestedModules(modules)
+    if (expandedLogModules) where.module = { in: expandedLogModules }
     if (startDate) where.timestamp = { ...where.timestamp, gte: new Date(startDate) }
     if (endDate) where.timestamp = { ...where.timestamp, lte: new Date(endDate) }
     if (search) where.message = { contains: search }
@@ -96,8 +202,8 @@ export async function getLogs(req: AuthRequest, res: Response) {
     const items = logs.map((log: any) => ({
       id: log.id,
       timestamp: log.timestamp,
-      level: log.level,
-      module: log.module,
+      level: normalizeLogLevel(log.level),
+      module: normalizeModule(log.module),
       message: log.message,
       details: parseDetails(log.details),
       isSystem: systemLogUserId ? log.userId === systemLogUserId : false,
@@ -156,8 +262,10 @@ export async function getTraces(req: AuthRequest, res: Response) {
 
     const where: any = { userId }
 
-    if (levels) where.level = { in: levels.split(',') }
-    if (modules) where.module = { in: modules.split(',') }
+    const expandedTraceLevels = expandRequestedTraceLevels(levels)
+    if (expandedTraceLevels) where.level = { in: expandedTraceLevels }
+    const expandedTraceModules = expandRequestedModules(modules)
+    if (expandedTraceModules) where.module = { in: expandedTraceModules }
     if (traceIdFilter) where.traceId = traceIdFilter
     if (functionName) where.functionName = { contains: functionName }
     if (botId) where.botId = botId
@@ -192,18 +300,18 @@ export async function getTraces(req: AuthRequest, res: Response) {
     const items = traces.map((trace: any) => ({
       id: trace.id,
       timestamp: trace.timestamp,
-      level: trace.level,
-      module: trace.module,
+      level: normalizeTraceLevel(trace.level),
+      module: normalizeModule(trace.module),
       traceId: trace.traceId,
-      parentTraceId: trace.parentTraceId,
+      parentTraceId: trace.parentTraceId ?? undefined,
       functionName: trace.functionName,
       message: trace.message,
       durationMs: trace.durationMs,
-      botId: trace.botId,
-      botName: trace.bot?.name,
-      currentPair: trace.currentPair,
-      recommendedAction: trace.recommendedAction,
-      confidence: trace.confidence,
+      botId: trace.botId ?? undefined,
+      botName: trace.bot?.name ?? undefined,
+      currentPair: trace.currentPair ?? undefined,
+      recommendedAction: trace.recommendedAction ?? undefined,
+      confidence: trace.confidence ?? undefined,
       errorFlag: trace.errorFlag,
     }))
 
@@ -254,13 +362,19 @@ export async function getTraceGroup(req: AuthRequest, res: Response) {
     const entries = traces.map((trace: any) => ({
       id: trace.id,
       timestamp: trace.timestamp,
-      level: trace.level,
+      level: normalizeTraceLevel(trace.level),
+      module: normalizeModule(trace.module),
+      traceId: trace.traceId,
+      parentTraceId: trace.parentTraceId ?? undefined,
       functionName: trace.functionName,
       message: trace.message,
       durationMs: trace.durationMs,
-      currentPair: trace.currentPair,
-      recommendedAction: trace.recommendedAction,
-      confidence: trace.confidence,
+      botId: trace.botId ?? undefined,
+      botName: trace.bot?.name ?? undefined,
+      currentPair: trace.currentPair ?? undefined,
+      recommendedAction: trace.recommendedAction ?? undefined,
+      confidence: trace.confidence ?? undefined,
+      errorFlag: trace.errorFlag,
     }))
 
     const result = {
@@ -301,8 +415,10 @@ export async function exportLogs(req: AuthRequest, res: Response) {
     const systemLogUserId = await getSystemLogUserId()
     const where: any = buildLogsWhere(userId, systemLogUserId)
 
-    if (levels) where.level = { in: levels.split(',') }
-    if (modules) where.module = { in: modules.split(',') }
+    const expandedLogLevels = expandRequestedLogLevels(levels)
+    if (expandedLogLevels) where.level = { in: expandedLogLevels }
+    const expandedLogModules = expandRequestedModules(modules)
+    if (expandedLogModules) where.module = { in: expandedLogModules }
     if (startDate) where.timestamp = { ...where.timestamp, gte: new Date(startDate) }
     if (endDate) where.timestamp = { ...where.timestamp, lte: new Date(endDate) }
     if (search) where.message = { contains: search }
@@ -318,8 +434,8 @@ export async function exportLogs(req: AuthRequest, res: Response) {
     for (const log of logs) {
       const row = [
         log.timestamp.toISOString(),
-        log.level,
-        log.module,
+        normalizeLogLevel(log.level),
+        normalizeModule(log.module),
         `"${log.message.replace(/"/g, '""')}"`,
         log.details ? `"${log.details.replace(/"/g, '""')}"` : '',
         systemLogUserId ? log.userId === systemLogUserId : false,
@@ -358,8 +474,10 @@ export async function exportTraces(req: AuthRequest, res: Response) {
     const userId = req.userId!
     const where: any = { userId }
 
-    if (levels) where.level = { in: levels.split(',') }
-    if (modules) where.module = { in: modules.split(',') }
+    const expandedTraceLevels = expandRequestedTraceLevels(levels)
+    if (expandedTraceLevels) where.level = { in: expandedTraceLevels }
+    const expandedTraceModules = expandRequestedModules(modules)
+    if (expandedTraceModules) where.module = { in: expandedTraceModules }
     if (traceIdFilter) where.traceId = traceIdFilter
     if (functionName) where.functionName = { contains: functionName }
     if (botId) where.botId = botId
@@ -396,8 +514,8 @@ export async function exportTraces(req: AuthRequest, res: Response) {
     for (const trace of traces) {
       const row = [
         trace.timestamp.toISOString(),
-        trace.level,
-        trace.module,
+        normalizeTraceLevel(trace.level),
+        normalizeModule(trace.module),
         trace.traceId,
         `"${trace.functionName.replace(/"/g, '""')}"`,
         `"${trace.message.replace(/"/g, '""')}"`,

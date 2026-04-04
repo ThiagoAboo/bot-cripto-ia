@@ -168,6 +168,11 @@ export async function getRecentTransactions(req: AuthRequest, res: Response): Pr
       where: { userId, status: 'executed' },
       orderBy: { date: 'desc' },
       take: limit,
+      include: {
+        bot: {
+          select: { name: true },
+        },
+      },
     })
 
     const result = transactions.map((transaction: any) => ({
@@ -175,12 +180,14 @@ export async function getRecentTransactions(req: AuthRequest, res: Response): Pr
       date: transaction.date,
       pair: transaction.pair,
       type: transaction.type,
-      entryPrice: transaction.type === 'buy' ? transaction.price : null,
-      exitPrice: transaction.type === 'sell' ? transaction.price : null,
+      entryPrice: Number(transaction.price ?? 0),
+      exitPrice: Number(transaction.price ?? 0),
       amount: transaction.quantity,
       fee: transaction.fee,
-      profitBrl: transaction.profitBrl,
-      profitPercent: transaction.profitPercent,
+      profitBrl: transaction.profitBrl ?? 0,
+      profitPercent: transaction.profitPercent ?? 0,
+      botId: transaction.botId ?? undefined,
+      botName: transaction.bot?.name ?? undefined,
     }))
 
     endTrace('getRecentTransactions', { userId })
