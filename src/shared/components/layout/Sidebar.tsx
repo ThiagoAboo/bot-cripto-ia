@@ -30,63 +30,92 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   return (
     <aside
       className={cn(
-        'fixed left-0 top-0 h-full bg-dark-200 border-r border-dark-300 transition-all duration-300 z-40',
-        collapsed ? 'w-20' : 'w-64'
+        'sticky top-0 hidden h-screen shrink-0 flex-col border-r transition-[width] duration-300 lg:flex',
+        collapsed ? 'w-20' : 'w-72',
       )}
+      style={{
+        backgroundColor: 'var(--surface-1)',
+        borderColor: 'var(--border-color)',
+      }}
     >
-      {/* Logo */}
-      <div className={cn(
-        'flex items-center h-16 px-4 border-b border-dark-300',
-        collapsed ? 'justify-center' : 'justify-between'
-      )}>
-        {!collapsed && (
-          <div className="flex items-center gap-2">
-            <Bot className="w-6 h-6 text-primary-500" />
-            <span className="font-bold text-white">CryptoBot</span>
+      <div
+        className={cn(
+          'flex min-h-[88px] items-center border-b px-5',
+          collapsed ? 'justify-center' : 'justify-between',
+        )}
+        style={{ borderColor: 'var(--border-color)' }}
+      >
+        {collapsed ? (
+          <Bot className="h-7 w-7 text-primary-500" />
+        ) : (
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary-600/15">
+              <Bot className="h-6 w-6 text-primary-500" />
+            </div>
+            <div>
+              <p className="text-[1.05rem] font-bold" style={{ color: 'var(--text-primary)' }}>
+                CryptoBot
+              </p>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                Trading automatizado
+              </p>
+            </div>
           </div>
         )}
-        {collapsed && (
-          <Bot className="w-6 h-6 text-primary-500" />
+
+        {!collapsed && (
+          <button
+            type="button"
+            onClick={onToggle}
+            className="rounded-xl p-2"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </button>
         )}
-        <button
-          onClick={onToggle}
-          className="p-1 rounded-lg hover:bg-dark-300 transition-colors"
-        >
-          {collapsed ? (
-            <ChevronRight className="w-4 h-4 text-gray-400" />
-          ) : (
-            <ChevronLeft className="w-4 h-4 text-gray-400" />
-          )}
-        </button>
+
+        {collapsed && (
+          <button
+            type="button"
+            onClick={onToggle}
+            className="absolute top-8 right-2 rounded-xl p-1.5"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
-      {/* Menu */}
-      <nav className="p-3">
+      <nav className="flex-1 space-y-1 p-3">
         {menuItems.map((item) => (
           <NavLink
             key={item.path}
             to={item.path}
+            title={collapsed ? item.label : undefined}
             className={({ isActive }) =>
               cn(
-                'flex items-center gap-3 px-3 py-2 rounded-lg mb-1 transition-all duration-200',
-                isActive
-                  ? 'bg-primary-600 text-white'
-                  : 'text-gray-400 hover:bg-dark-300 hover:text-white',
-                collapsed && 'justify-center'
+                'flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium transition-all duration-200',
+                collapsed && 'justify-center px-0',
+                isActive && 'bg-primary-600 text-white shadow-lg shadow-primary-600/20',
               )
             }
-            title={collapsed ? item.label : undefined}
+            style={({ isActive }) =>
+              isActive
+                ? undefined
+                : {
+                    color: 'var(--text-secondary)',
+                  }
+            }
           >
-            <item.icon className="w-5 h-5" />
+            <item.icon className="h-5 w-5 shrink-0" />
             {!collapsed && <span>{item.label}</span>}
           </NavLink>
         ))}
       </nav>
 
-      {/* Footer */}
       {!collapsed && (
-        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-dark-300">
-          <div className="text-xs text-gray-500 text-center">
+        <div className="mt-auto border-t px-5 py-4" style={{ borderColor: 'var(--border-color)' }}>
+          <div className="text-center text-xs" style={{ color: 'var(--text-muted)' }}>
             <p>Versão 0.1.0</p>
             <p className="mt-1">IA Trading Bot</p>
           </div>

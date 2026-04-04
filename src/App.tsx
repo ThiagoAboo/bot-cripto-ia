@@ -3,6 +3,36 @@ import { Toaster } from 'react-hot-toast'
 import { AppRoutes } from './routes'
 import { Layout } from './shared/components/layout/Layout'
 
+function SharedToaster() {
+  return (
+    <Toaster
+      position="top-right"
+      toastOptions={{
+        duration: 4000,
+        style: {
+          background: 'var(--surface-1)',
+          color: 'var(--text-primary)',
+          borderRadius: '12px',
+          border: '1px solid var(--border-color)',
+          boxShadow: '0 18px 48px rgba(15, 23, 42, 0.18)',
+        },
+        success: {
+          iconTheme: {
+            primary: '#10b981',
+            secondary: '#ffffff',
+          },
+        },
+        error: {
+          iconTheme: {
+            primary: '#ef4444',
+            secondary: '#ffffff',
+          },
+        },
+      }}
+    />
+  )
+}
+
 function AppContent() {
   const location = useLocation()
   const isLoginPage = location.pathname === '/login'
@@ -11,29 +41,7 @@ function AppContent() {
     return (
       <>
         <AppRoutes />
-        <Toaster
-          position="top-right"
-          toastOptions={{
-            duration: 4000,
-            style: {
-              background: '#2d2d2d',
-              color: '#fff',
-              borderRadius: '8px',
-            },
-            success: {
-              iconTheme: {
-                primary: '#10b981',
-                secondary: '#fff',
-              },
-            },
-            error: {
-              iconTheme: {
-                primary: '#ef4444',
-                secondary: '#fff',
-              },
-            },
-          }}
-        />
+        <SharedToaster />
       </>
     )
   }
@@ -41,29 +49,7 @@ function AppContent() {
   return (
     <Layout>
       <AppRoutes />
-      <Toaster
-        position="top-right"
-        toastOptions={{
-          duration: 4000,
-          style: {
-            background: '#2d2d2d',
-            color: '#fff',
-            borderRadius: '8px',
-          },
-          success: {
-            iconTheme: {
-              primary: '#10b981',
-              secondary: '#fff',
-            },
-          },
-          error: {
-            iconTheme: {
-              primary: '#ef4444',
-              secondary: '#fff',
-            },
-          },
-        }}
-      />
+      <SharedToaster />
     </Layout>
   )
 }

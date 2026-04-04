@@ -19,7 +19,7 @@ const sizes = {
   md: 'max-w-lg',
   lg: 'max-w-2xl',
   xl: 'max-w-4xl',
-}
+} as const
 
 export function Modal({
   isOpen,
@@ -31,11 +31,11 @@ export function Modal({
   showCloseButton = true,
   closeOnOverlayClick = true,
 }: ModalProps) {
-  const overlayRef = useRef<HTMLDivElement>(null)
+  const overlayRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isOpen) {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && isOpen) {
         onClose()
       }
     }
@@ -51,54 +51,50 @@ export function Modal({
     }
   }, [isOpen, onClose])
 
-  const handleOverlayClick = (e: React.MouseEvent) => {
-    if (closeOnOverlayClick && e.target === overlayRef.current) {
-      onClose()
-    }
+  if (!isOpen) {
+    return null
   }
-
-  if (!isOpen) return null
 
   return createPortal(
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm transition-all duration-200"
-      onClick={handleOverlayClick}
+      onClick={(event) => {
+        if (closeOnOverlayClick && event.target === overlayRef.current) {
+          onClose()
+        }
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-overlay)] p-4"
     >
       <div
         className={cn(
-          'relative w-full mx-4 bg-dark-200 rounded-xl shadow-2xl border border-dark-300',
-          sizes[size]
+          'app-card w-full rounded-3xl',
+          sizes[size],
         )}
       >
-        {/* Header */}
         {(title || showCloseButton) && (
-          <div className="flex items-center justify-between p-4 border-b border-dark-300">
-            {title && (
-              <h2 className="text-xl font-semibold text-white">{title}</h2>
-            )}
+          <div className="flex items-start justify-between border-b border-[var(--color-border)] px-6 py-4">
+            {title ? <h2 className="text-lg font-semibold text-[var(--color-text)]">{title}</h2> : <span />}
             {showCloseButton && (
               <button
+                type="button"
                 onClick={onClose}
-                className="p-1 rounded-lg hover:bg-dark-300 transition-colors"
+                className="rounded-xl p-2 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-surface-muted)] hover:text-[var(--color-text)]"
               >
-                <X className="w-5 h-5 text-gray-400" />
+                <X className="h-5 w-5" />
               </button>
             )}
           </div>
         )}
 
-        {/* Content */}
-        <div className="p-4 max-h-[70vh] overflow-y-auto">{children}</div>
+        <div className="px-6 py-5">{children}</div>
 
-        {/* Footer */}
         {footer && (
-          <div className="flex justify-end gap-3 p-4 border-t border-dark-300">
+          <div className="border-t border-[var(--color-border)] px-6 py-4">
             {footer}
           </div>
         )}
       </div>
     </div>,
-    document.body
+    document.body,
   )
 }

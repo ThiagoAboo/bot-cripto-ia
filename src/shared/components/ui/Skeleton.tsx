@@ -8,17 +8,8 @@ export function Skeleton({ className, variant = 'rectangular', ...props }: Skele
   const variants = {
     text: 'h-4 rounded',
     circular: 'rounded-full',
-    rectangular: 'rounded-lg',
+    rectangular: 'rounded-2xl',
   }
 
-  return (
-    <div
-      className={cn(
-        'animate-pulse bg-dark-300',
-        variants[variant],
-        className
-      )}
-      {...props}
-    />
-  )
+  return <div className={cn('animate-pulse', variants[variant], className)} style={{ backgroundColor: 'var(--surface-3)' }} {...props} />
 }

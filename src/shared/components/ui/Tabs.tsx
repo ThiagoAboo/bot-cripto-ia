@@ -37,7 +37,7 @@ interface TabsListProps {
 
 export function TabsList({ children, className }: TabsListProps) {
   return (
-    <div className={cn('flex gap-1 border-b border-dark-300', className)}>
+    <div className={cn('inline-flex flex-wrap gap-2 rounded-2xl border p-1', className)} style={{ backgroundColor: 'var(--surface-2)', borderColor: 'var(--border-color)' }}>
       {children}
     </div>
   )
@@ -57,15 +57,14 @@ export function TabsTrigger({ value, children, className }: TabsTriggerProps) {
 
   return (
     <button
+      type="button"
       onClick={() => context.setValue(value)}
-      className={cn(
-        'px-4 py-2 text-sm font-medium transition-all duration-200',
-        'hover:text-white',
+      className={cn('rounded-xl px-4 py-2 text-sm font-medium transition-all duration-200', className)}
+      style={
         isActive
-          ? 'text-primary-400 border-b-2 border-primary-500'
-          : 'text-gray-500 hover:text-gray-300',
-        className
-      )}
+          ? { backgroundColor: 'var(--surface-1)', color: 'var(--text-primary)' }
+          : { color: 'var(--text-secondary)' }
+      }
     >
       {children}
     </button>

@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '../../../shared/components/ui/Card'
 import { Button } from '../../../shared/components/ui/Button'
 import { Skeleton } from '../../../shared/components/ui/Skeleton'
@@ -16,7 +16,7 @@ const levelColors = {
   INFO: 'text-blue-400',
   WARN: 'text-yellow-400',
   ERROR: 'text-red-400',
-}
+} as const
 
 export function TrainingLogTerminal({ logs, isLoading, onExport }: TrainingLogTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -30,9 +30,7 @@ export function TrainingLogTerminal({ logs, isLoading, onExport }: TrainingLogTe
 
   const handleScroll = () => {
     if (containerRef.current) {
-      const isAtBottom =
-        containerRef.current.scrollHeight - containerRef.current.scrollTop <=
-        containerRef.current.clientHeight + 100
+      const isAtBottom = containerRef.current.scrollHeight - containerRef.current.scrollTop <= containerRef.current.clientHeight + 100
       autoScrollRef.current = isAtBottom
     }
   }
@@ -44,7 +42,7 @@ export function TrainingLogTerminal({ logs, isLoading, onExport }: TrainingLogTe
           <CardTitle>Log de Treinamento</CardTitle>
         </CardHeader>
         <CardContent>
-          <Skeleton className="h-[200px] w-full" />
+          <Skeleton className="h-[220px] w-full" />
         </CardContent>
       </Card>
     )
@@ -52,55 +50,53 @@ export function TrainingLogTerminal({ logs, isLoading, onExport }: TrainingLogTe
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between">
+      <CardHeader className="gap-4 sm:flex-row sm:items-center sm:justify-between">
         <CardTitle className="flex items-center gap-2">
-          <Terminal className="w-5 h-5 text-primary-500" />
+          <Terminal className="h-5 w-5 text-primary-500" />
           Log de Treinamento
         </CardTitle>
         <Button variant="ghost" size="sm" onClick={onExport}>
-          <Download className="w-4 h-4 mr-1" />
+          <Download className="h-4 w-4" />
           Exportar
         </Button>
       </CardHeader>
-      
+
       <CardContent>
         <div
           ref={containerRef}
           onScroll={handleScroll}
-          className="bg-black/50 rounded-lg p-3 font-mono text-xs h-[250px] overflow-y-auto"
+          className="h-[260px] overflow-y-auto rounded-2xl border p-3 font-mono text-xs"
+          style={{ backgroundColor: 'var(--surface-2)', borderColor: 'var(--border-color)' }}
         >
           {logs.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-gray-500">
+            <div className="flex h-full items-center justify-center" style={{ color: 'var(--text-muted)' }}>
               Aguardando início do treinamento...
             </div>
           ) : (
             logs.map((log, index) => (
-              <div key={index} className="mb-1 hover:bg-white/5 px-1 rounded">
-                <span className="text-gray-500">[{log.timestamp}]</span>{' '}
-                <span className={cn('font-semibold', levelColors[log.level])}>
-                  {log.level}
-                </span>{' '}
-                {log.epoch !== undefined && (
-                  <span className="text-purple-400">[Época {log.epoch}]</span>
-                )}{' '}
-                <span className="text-gray-300">{log.message}</span>
+              <div key={index} className="mb-1 rounded px-1 py-0.5 hover:bg-white/5">
+                <span style={{ color: 'var(--text-muted)' }}>[{log.timestamp}]</span>{' '}
+                <span className={cn('font-semibold', levelColors[log.level])}>{log.level}</span>{' '}
+                {log.epoch !== undefined && <span className="text-purple-400">[Época {log.epoch}]</span>}{' '}
+                <span style={{ color: 'var(--text-primary)' }}>{log.message}</span>
               </div>
             ))
           )}
         </div>
-        
-        <div className="flex justify-between items-center mt-3 text-xs text-gray-500">
+
+        <div className="mt-3 flex items-center justify-between text-xs" style={{ color: 'var(--text-muted)' }}>
           <span>{logs.length} registros</span>
           <button
+            type="button"
             onClick={() => {
               if (containerRef.current) {
                 containerRef.current.scrollTop = containerRef.current.scrollHeight
                 autoScrollRef.current = true
               }
             }}
-            className="flex items-center gap-1 hover:text-gray-300 transition-colors"
+            className="flex items-center gap-1 transition-colors hover:text-primary-500"
           >
-            <ChevronDown className="w-3 h-3" />
+            <ChevronDown className="h-3 w-3" />
             Rolar para o fim
           </button>
         </div>

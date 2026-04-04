@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useRef, useEffect, ReactNode } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react'
 import { ChevronDown, Check } from 'lucide-react'
 import { cn } from '../../utils/formatters'
 
@@ -43,14 +43,17 @@ export function SelectTrigger({ children, className }: SelectTriggerProps) {
       type="button"
       onClick={() => setOpen(!open)}
       className={cn(
-        'flex h-10 w-full items-center justify-between rounded-lg border border-dark-300 bg-dark-300 px-3 py-2 text-sm text-white',
-        'focus:outline-none focus:ring-2 focus:ring-primary-500',
-        'disabled:cursor-not-allowed disabled:opacity-50',
-        className
+        'flex h-11 w-full items-center justify-between rounded-2xl border px-3 py-2 text-sm outline-none transition-all focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20',
+        className,
       )}
+      style={{
+        backgroundColor: 'var(--surface-2)',
+        color: 'var(--text-primary)',
+        borderColor: 'var(--border-color)',
+      }}
     >
       {children}
-      <ChevronDown className={cn('h-4 w-4 opacity-50 transition-transform', open && 'rotate-180')} />
+      <ChevronDown className={cn('h-4 w-4 shrink-0 opacity-60 transition-transform', open && 'rotate-180')} />
     </button>
   )
 }
@@ -65,7 +68,7 @@ export function SelectValue({ placeholder }: SelectValueProps) {
 
   const { selectedValue } = context
 
-  return <span className={cn(!selectedValue && 'text-gray-500')}>{selectedValue || placeholder}</span>
+  return <span style={{ color: selectedValue ? 'var(--text-primary)' : 'var(--text-muted)' }}>{selectedValue || placeholder}</span>
 }
 
 interface SelectContentProps {
@@ -91,9 +94,7 @@ export function SelectContent({ children, className }: SelectContentProps) {
       document.addEventListener('mousedown', handleClickOutside)
     }
 
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-    }
+    return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [open, setOpen])
 
   if (!open) return null
@@ -101,10 +102,8 @@ export function SelectContent({ children, className }: SelectContentProps) {
   return (
     <div
       ref={contentRef}
-      className={cn(
-        'absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-lg border border-dark-300 bg-dark-200 py-1 shadow-lg',
-        className
-      )}
+      className={cn('absolute z-50 mt-2 max-h-72 w-full overflow-auto rounded-2xl border p-1 shadow-xl', className)}
+      style={{ backgroundColor: 'var(--surface-1)', borderColor: 'var(--border-color)' }}
     >
       {children}
     </div>
@@ -131,10 +130,10 @@ export function SelectItem({ children, value }: SelectItemProps) {
         setOpen(false)
       }}
       className={cn(
-        'relative flex w-full cursor-pointer select-none items-center justify-between px-3 py-2 text-sm text-white',
-        'hover:bg-dark-300 transition-colors',
-        isSelected && 'bg-primary-500/20 text-primary-400'
+        'flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm transition-colors',
+        isSelected && 'bg-primary-500/10 text-primary-500',
       )}
+      style={{ color: isSelected ? undefined : 'var(--text-primary)' }}
     >
       <span>{children}</span>
       {isSelected && <Check className="h-4 w-4" />}

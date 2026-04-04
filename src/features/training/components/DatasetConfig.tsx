@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import { Calendar, ChevronDown, Database, Search, Upload, X } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '../../../shared/components/ui/Card'
 import { Label } from '../../../shared/components/ui/Label'
 import { Input } from '../../../shared/components/ui/Input'
@@ -6,7 +7,6 @@ import { Button } from '../../../shared/components/ui/Button'
 import { Badge } from '../../../shared/components/ui/Badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../shared/components/ui/Select'
 import { Checkbox } from '../../../shared/components/ui/Checkbox'
-import { Calendar, Upload, Database, Search, X, ChevronDown } from 'lucide-react'
 import { useAvailablePairs } from '../hooks/useTraining'
 import { TIMEFRAMES, TECHNICAL_INDICATORS } from '../types/training.types'
 import { cn } from '../../../shared/utils/formatters'
@@ -27,6 +27,12 @@ interface DatasetConfigProps {
   onTimeframeChange: (value: Timeframe) => void
 }
 
+const dataSources = [
+  { value: 'exchange' as const, label: 'Exchange', icon: Database },
+  { value: 'synthetic' as const, label: 'Sintético', icon: Database },
+  { value: 'upload' as const, label: 'Upload CSV', icon: Upload },
+]
+
 export function DatasetConfig({
   dataSource,
   startDate,
@@ -43,7 +49,16 @@ export function DatasetConfig({
 }: DatasetConfigProps) {
   const [isPairsDropdownOpen, setIsPairsDropdownOpen] = useState(false)
   const [pairSearchTerm, setPairSearchTerm] = useState('')
+
   const { data: availablePairs, isLoading } = useAvailablePairs()
+
+  const filteredPairs = useMemo(
+    () =>
+      (availablePairs ?? []).filter((pair) =>
+        pair.toLowerCase().includes(pairSearchTerm.toLowerCase()),
+      ),
+    [availablePairs, pairSearchTerm],
+  )
 
   const handleAddPair = (pair: string) => {
     if (!includedPairs.includes(pair)) {
@@ -52,7 +67,7 @@ export function DatasetConfig({
   }
 
   const handleRemovePair = (pair: string) => {
-    onPairsChange(includedPairs.filter(p => p !== pair))
+    onPairsChange(includedPairs.filter((item) => item !== pair))
   }
 
   const handleSelectAllPairs = () => {
@@ -67,158 +82,135 @@ export function DatasetConfig({
 
   const handleToggleIndicator = (indicatorValue: string) => {
     if (indicators.includes(indicatorValue)) {
-      onIndicatorsChange(indicators.filter(i => i !== indicatorValue))
-    } else {
-      onIndicatorsChange([...indicators, indicatorValue])
+      onIndicatorsChange(indicators.filter((item) => item !== indicatorValue))
+      return
     }
+
+    onIndicatorsChange([...indicators, indicatorValue])
   }
 
-  const filteredPairs = availablePairs?.filter(
-    (pair) => pair.toLowerCase().includes(pairSearchTerm.toLowerCase())
-  ) || []
-
   return (
-    <Card>
+    <Card variant="hover">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Database className="w-5 h-5 text-primary-500" />
+          <Database className="h-5 w-5 text-primary-500" />
           Configuração do Dataset
         </CardTitle>
       </CardHeader>
-      
-      <CardContent className="space-y-4">
-        {/* Origem dos dados */}
-        <div className="space-y-2">
+
+      <CardContent className="space-y-6">
+        <div>
           <Label>Origem dos dados</Label>
-          <div className="flex gap-3">
-            <button
-              onClick={() => onDataSourceChange('exchange')}
-              className={cn(
-                'flex-1 p-3 rounded-lg border transition-all',
-                dataSource === 'exchange'
-                  ? 'border-primary-500 bg-primary-500/10 text-primary-400'
-                  : 'border-dark-300 bg-dark-300 text-gray-400 hover:border-dark-400'
-              )}
-            >
-              <Database className="w-5 h-5 mx-auto mb-1" />
-              <span className="text-sm">Exchange</span>
-            </button>
-            <button
-              onClick={() => onDataSourceChange('synthetic')}
-              className={cn(
-                'flex-1 p-3 rounded-lg border transition-all',
-                dataSource === 'synthetic'
-                  ? 'border-primary-500 bg-primary-500/10 text-primary-400'
-                  : 'border-dark-300 bg-dark-300 text-gray-400 hover:border-dark-400'
-              )}
-            >
-              <Database className="w-5 h-5 mx-auto mb-1" />
-              <span className="text-sm">Sintético</span>
-            </button>
-            <button
-              onClick={() => onDataSourceChange('upload')}
-              className={cn(
-                'flex-1 p-3 rounded-lg border transition-all',
-                dataSource === 'upload'
-                  ? 'border-primary-500 bg-primary-500/10 text-primary-400'
-                  : 'border-dark-300 bg-dark-300 text-gray-400 hover:border-dark-400'
-              )}
-            >
-              <Upload className="w-5 h-5 mx-auto mb-1" />
-              <span className="text-sm">Upload CSV</span>
-            </button>
+          <div className="grid gap-3 md:grid-cols-3">
+            {dataSources.map((source) => {
+              const Icon = source.icon
+              const isSelected = dataSource === source.value
+
+              return (
+                <button
+                  key={source.value}
+                  type="button"
+                  onClick={() => onDataSourceChange(source.value)}
+                  className={cn(
+                    'flex min-h-[76px] items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-medium transition-all',
+                    isSelected
+                      ? 'border-primary-500 bg-primary-500/10 text-primary-600'
+                      : 'border-[var(--color-border)] bg-[var(--color-surface-muted)] text-[var(--color-text-muted)] hover:border-primary-500/30 hover:text-[var(--color-text)]',
+                  )}
+                >
+                  <Icon className="h-5 w-5" />
+                  <span>{source.label}</span>
+                </button>
+              )
+            })}
           </div>
         </div>
 
-        {/* Período de treinamento */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="space-y-2">
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
             <Label className="flex items-center gap-2">
-              <Calendar className="w-4 h-4" />
+              <Calendar className="h-4 w-4" />
               Data inicial
             </Label>
-            <Input
-              type="date"
-              value={startDate}
-              onChange={(e) => onStartDateChange(e.target.value)}
-            />
+            <Input type="date" value={startDate} onChange={(event) => onStartDateChange(event.target.value)} />
           </div>
-          <div className="space-y-2">
+
+          <div>
             <Label className="flex items-center gap-2">
-              <Calendar className="w-4 h-4" />
+              <Calendar className="h-4 w-4" />
               Data final
             </Label>
-            <Input
-              type="date"
-              value={endDate}
-              onChange={(e) => onEndDateChange(e.target.value)}
-            />
+            <Input type="date" value={endDate} onChange={(event) => onEndDateChange(event.target.value)} />
           </div>
         </div>
 
-        {/* Pares incluídos */}
-        <div className="space-y-2">
+        <div className="space-y-3">
           <Label>Pares incluídos</Label>
-          
-          {/* Moedas selecionadas */}
-          <div className="flex flex-wrap gap-2 min-h-[50px] p-2 rounded-lg bg-dark-300 border border-dark-400">
+
+          <div className="app-card-muted min-h-[84px] rounded-2xl p-3">
             {includedPairs.length === 0 ? (
-              <span className="text-sm text-gray-500">Nenhum par selecionado</span>
+              <p className="text-sm text-[var(--color-text-subtle)]">Nenhum par selecionado</p>
             ) : (
-              includedPairs.map((pair) => (
-                <Badge key={pair} variant="primary" className="flex items-center gap-1">
-                  {pair}
-                  <button onClick={() => handleRemovePair(pair)} className="ml-1 hover:text-error">
-                    <X className="w-3 h-3" />
-                  </button>
-                </Badge>
-              ))
+              <div className="flex flex-wrap gap-2">
+                {includedPairs.map((pair) => (
+                  <Badge key={pair} variant="primary" className="gap-1 pr-1">
+                    {pair}
+                    <button
+                      type="button"
+                      onClick={() => handleRemovePair(pair)}
+                      className="rounded-full p-0.5 text-current transition-colors hover:bg-black/10"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </Badge>
+                ))}
+              </div>
             )}
           </div>
 
-          {/* Select de pares */}
           <div className="relative">
             <button
               type="button"
-              onClick={() => setIsPairsDropdownOpen(!isPairsDropdownOpen)}
-              className="w-full flex items-center justify-between rounded-lg border border-dark-400 bg-dark-300 px-3 py-2 text-sm text-white hover:bg-dark-400 transition-colors"
+              onClick={() => setIsPairsDropdownOpen((current) => !current)}
+              className="app-input flex h-11 w-full items-center justify-between rounded-xl px-3 text-sm shadow-sm"
             >
-              <span className="text-gray-400">Adicionar par...</span>
-              <ChevronDown className={cn('w-4 h-4 transition-transform', isPairsDropdownOpen && 'rotate-180')} />
+              <span className={pairSearchTerm ? 'text-[var(--color-text)]' : 'text-[var(--color-text-subtle)]'}>
+                Adicionar par...
+              </span>
+              <ChevronDown className={cn('h-4 w-4 text-[var(--color-text-subtle)] transition-transform', isPairsDropdownOpen && 'rotate-180')} />
             </button>
 
             {isPairsDropdownOpen && (
-              <div className="absolute z-50 left-0 right-0 mt-1 rounded-lg border border-dark-400 bg-dark-200 shadow-xl overflow-hidden">
-                <div className="p-2 border-b border-dark-400">
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-                    <input
-                      type="text"
-                      placeholder="Buscar par..."
-                      value={pairSearchTerm}
-                      onChange={(e) => setPairSearchTerm(e.target.value)}
-                      className="w-full pl-9 pr-3 py-1.5 text-sm rounded-lg bg-dark-300 border border-dark-400 text-white placeholder:text-gray-500 focus:outline-none focus:border-primary-500"
-                      autoFocus
-                    />
-                  </div>
+              <div className="absolute z-30 mt-2 w-full rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-2 shadow-2xl">
+                <div className="relative mb-2">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--color-text-subtle)]" />
+                  <input
+                    value={pairSearchTerm}
+                    onChange={(event) => setPairSearchTerm(event.target.value)}
+                    className="app-input h-10 w-full rounded-xl py-2 pl-9 pr-3 text-sm"
+                    placeholder="Buscar par..."
+                    autoFocus
+                  />
                 </div>
-                <div className="max-h-48 overflow-y-auto">
+
+                <div className="max-h-60 overflow-auto rounded-xl">
                   {isLoading ? (
-                    <div className="p-4 text-center text-gray-500">Carregando...</div>
+                    <div className="px-3 py-2 text-sm text-[var(--color-text-subtle)]">Carregando...</div>
                   ) : filteredPairs.length === 0 ? (
-                    <div className="p-4 text-center text-gray-500">Nenhum par encontrado</div>
+                    <div className="px-3 py-2 text-sm text-[var(--color-text-subtle)]">Nenhum par encontrado</div>
                   ) : (
                     filteredPairs.map((pair) => (
                       <button
                         key={pair}
+                        type="button"
                         onClick={() => {
                           handleAddPair(pair)
                           setIsPairsDropdownOpen(false)
                           setPairSearchTerm('')
                         }}
-                        className="w-full flex items-center justify-between px-3 py-2 text-sm text-white hover:bg-dark-300 transition-colors border-b border-dark-400 last:border-0"
+                        className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-[var(--color-text)] transition-colors hover:bg-[var(--color-surface-muted)]"
                       >
-                        {pair}
+                        <span>{pair}</span>
                       </button>
                     ))
                   )}
@@ -227,42 +219,40 @@ export function DatasetConfig({
             )}
           </div>
 
-          <div className="flex gap-2 mt-2">
+          <div className="flex flex-wrap gap-3">
             <Button variant="outline" size="sm" onClick={handleSelectAllPairs}>
               Selecionar todos
             </Button>
-            <Button variant="ghost" size="sm" onClick={handleClearPairs} className="text-error">
+            <Button variant="ghost" size="sm" onClick={handleClearPairs}>
               Limpar todos
             </Button>
           </div>
         </div>
 
-        {/* Resolução temporal */}
-        <div className="space-y-2">
+        <div>
           <Label>Resolução temporal</Label>
-          <Select value={timeframe} onValueChange={(v) => onTimeframeChange(v as Timeframe)}>
+          <Select value={timeframe} onValueChange={(value) => onTimeframeChange(value as Timeframe)}>
             <SelectTrigger>
-              <SelectValue />
+              <SelectValue placeholder="Selecione o intervalo" />
             </SelectTrigger>
             <SelectContent>
-              {TIMEFRAMES.map((tf) => (
-                <SelectItem key={tf.value} value={tf.value}>
-                  {tf.label}
+              {TIMEFRAMES.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
 
-        {/* Indicadores técnicos */}
-        <div className="space-y-2">
+        <div>
           <Label>Indicadores técnicos</Label>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-40 overflow-y-auto p-2 rounded-lg bg-dark-300 border border-dark-400">
+          <div className="grid gap-2 md:grid-cols-2">
             {TECHNICAL_INDICATORS.map((indicator) => (
               <Checkbox
                 key={indicator.value}
-                label={indicator.label}
                 checked={indicators.includes(indicator.value)}
+                label={indicator.label}
                 onChange={() => handleToggleIndicator(indicator.value)}
               />
             ))}

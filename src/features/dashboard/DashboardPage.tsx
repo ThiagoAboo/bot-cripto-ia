@@ -11,46 +11,33 @@ export function DashboardPage() {
   const { data: currenciesBalance, isLoading: isLoadingCurrencies } = useCurrenciesBalance()
   const { data: recentTransactions, isLoading: isLoadingTransactions } = useRecentTransactions(5)
   const { data: botsStatus, isLoading: isLoadingBots } = useBotsStatus()
-  
   const { data: performanceData, isLoading: isLoadingPerformance, selectedPeriod, onPeriodChange } = usePerformanceData('7d')
-  
   const { mutate: pauseBot, isPending: isPausing } = usePauseBot()
   const { mutate: resumeBot, isPending: isResuming } = useResumeBot()
-  
+
   const isMutating = isPausing || isResuming
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-white">Dashboard</h1>
-        <p className="text-gray-400 text-sm mt-1">Visão geral do portfólio e status das estratégias</p>
+        <h1 className="app-page-title text-3xl font-bold">Dashboard</h1>
+        <p className="app-page-subtitle mt-2 text-sm">Visão geral do portfólio e status das estratégias</p>
       </div>
 
-      {/* Linha 1: Saldo Total + Cards de Moedas */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        {/* Card Saldo Total */}
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-4">
         <TotalBalanceCard data={totalBalance} isLoading={isLoadingTotal} />
-        
-        {/* Cards de Moedas - Grid 3 colunas */}
-        <div className="lg:col-span-3">
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {isLoadingCurrencies ? (
-              <>
-                <CurrencyBalanceCard isLoading={true} />
-                <CurrencyBalanceCard isLoading={true} />
-                <CurrencyBalanceCard isLoading={true} />
-              </>
-            ) : (
-              currenciesBalance?.map((currency) => (
-                <CurrencyBalanceCard key={currency.currency} data={currency} isLoading={false} />
-              ))
-            )}
+
+        <div className="xl:col-span-3">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
+            {isLoadingCurrencies
+              ? [0, 1, 2].map((index) => <CurrencyBalanceCard key={index} isLoading />)
+              : currenciesBalance?.map((currency) => (
+                  <CurrencyBalanceCard key={currency.currency} data={currency} isLoading={false} />
+                ))}
           </div>
         </div>
       </div>
 
-      {/* Linha 2: Gráfico de Performance */}
       <PerformanceChart
         data={performanceData}
         isLoading={isLoadingPerformance}
@@ -58,15 +45,12 @@ export function DashboardPage() {
         onPeriodChange={onPeriodChange}
       />
 
-      {/* Linha 3: Últimas Transações + Status das Estratégias */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Últimas Transações */}
-        <div className="lg:col-span-2">
+      <div className="grid grid-cols-1 gap-6 2xl:grid-cols-3">
+        <div className="2xl:col-span-2">
           <RecentTransactionsTable data={recentTransactions} isLoading={isLoadingTransactions} />
         </div>
-        
-        {/* Status das Estratégias */}
-        <div className="lg:col-span-1">
+
+        <div className="2xl:col-span-1">
           <BotsStatusList
             data={botsStatus}
             isLoading={isLoadingBots}

@@ -6,36 +6,22 @@ export interface CheckboxProps extends Omit<InputHTMLAttributes<HTMLInputElement
   label?: string
 }
 
-const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(
-  ({ className, label, checked, onChange, ...props }, ref) => {
-    return (
-      <label className="flex items-center gap-2 cursor-pointer">
-        <div className="relative">
-          <input
-            type="checkbox"
-            className="sr-only"
-            checked={checked}
-            onChange={onChange}
-            ref={ref}
-            {...props}
-          />
-          <div
-            className={cn(
-              'w-4 h-4 rounded border transition-all',
-              checked
-                ? 'bg-primary-500 border-primary-500'
-                : 'border-dark-400 bg-dark-300',
-              className
-            )}
-          >
-            {checked && <Check className="w-3 h-3 text-white absolute top-0.5 left-0.5" />}
-          </div>
+const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(({ className, label, checked, onChange, ...props }, ref) => {
+  return (
+    <label className="flex cursor-pointer items-center gap-2">
+      <div className="relative">
+        <input type="checkbox" className="sr-only" checked={checked} onChange={onChange} ref={ref} {...props} />
+        <div
+          className={cn('flex h-4 w-4 items-center justify-center rounded border transition-all', checked && 'border-primary-500 bg-primary-500', className)}
+          style={checked ? undefined : { backgroundColor: 'var(--surface-2)', borderColor: 'var(--border-color)' }}
+        >
+          {checked && <Check className="h-3 w-3 text-white" />}
         </div>
-        {label && <span className="text-sm text-gray-300">{label}</span>}
-      </label>
-    )
-  }
-)
+      </div>
+      {label && <span style={{ color: 'var(--text-secondary)' }}>{label}</span>}
+    </label>
+  )
+})
 
 Checkbox.displayName = 'Checkbox'
 
