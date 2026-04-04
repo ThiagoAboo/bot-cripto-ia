@@ -12,7 +12,7 @@ const logFiltersSchema = z.object({
   modules: z.string().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
-  search: z.string().optional()
+  search: z.string().optional(),
 })
 
 const traceFiltersSchema = z.object({
@@ -29,16 +29,20 @@ const traceFiltersSchema = z.object({
   onlyErrors: z.coerce.boolean().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
-  search: z.string().optional()
+  search: z.string().optional(),
 })
 
-function buildLogsWhere(userId: string, systemLogUserId: string) {
+function buildLogsWhere(userId: string, systemLogUserId: string | null): Record<string, unknown> {
+  if (!systemLogUserId) {
+    return { userId }
+  }
+
   return {
     OR: [
       { userId },
       { userId: systemLogUserId },
     ],
-  } as Record<string, unknown>
+  }
 }
 
 function parseDetails(details: string | null): unknown {
@@ -62,7 +66,7 @@ export async function getLogs(req: AuthRequest, res: Response) {
       endTrace('getLogs')
       return res.status(400).json({
         success: false,
-        error: validation.error.errors.map(e => e.message).join(', ')
+        error: validation.error.errors.map((e) => e.message).join(', '),
       })
     }
 
@@ -84,9 +88,9 @@ export async function getLogs(req: AuthRequest, res: Response) {
         where,
         orderBy: { timestamp: 'desc' },
         skip,
-        take: limit
+        take: limit,
       }),
-      prisma.log.count({ where })
+      prisma.log.count({ where }),
     ])
 
     const items = logs.map((log: any) => ({
@@ -96,7 +100,7 @@ export async function getLogs(req: AuthRequest, res: Response) {
       module: log.module,
       message: log.message,
       details: parseDetails(log.details),
-      isSystem: log.userId === systemLogUserId,
+      isSystem: systemLogUserId ? log.userId === systemLogUserId : false,
     }))
 
     endTrace('getLogs')
@@ -108,8 +112,8 @@ export async function getLogs(req: AuthRequest, res: Response) {
         total,
         page,
         limit,
-        totalPages: Math.ceil(total / limit)
-      }
+        totalPages: Math.ceil(total / limit),
+      },
     })
   } catch (error) {
     logger.error('Erro ao buscar logs:', error)
@@ -127,14 +131,25 @@ export async function getTraces(req: AuthRequest, res: Response) {
       endTrace('getTraces')
       return res.status(400).json({
         success: false,
-        error: validation.error.errors.map(e => e.message).join(', ')
+        error: validation.error.errors.map((e) => e.message).join(', '),
       })
     }
 
     const {
-      page, limit, levels, modules, traceId: traceIdFilter,
-      functionName, botId, currentPair, recommendedAction,
-      minDurationMs, onlyErrors, startDate, endDate, search
+      page,
+      limit,
+      levels,
+      modules,
+      traceId: traceIdFilter,
+      functionName,
+      botId,
+      currentPair,
+      recommendedAction,
+      minDurationMs,
+      onlyErrors,
+      startDate,
+      endDate,
+      search,
     } = validation.data
     const userId = req.userId!
     const skip = (page - 1) * limit
@@ -155,7 +170,7 @@ export async function getTraces(req: AuthRequest, res: Response) {
     if (search) {
       where.OR = [
         { message: { contains: search } },
-        { functionName: { contains: search } }
+        { functionName: { contains: search } },
       ]
     }
 
@@ -167,11 +182,11 @@ export async function getTraces(req: AuthRequest, res: Response) {
         take: limit,
         include: {
           bot: {
-            select: { name: true }
-          }
-        }
+            select: { name: true },
+          },
+        },
       }),
-      prisma.trace.count({ where })
+      prisma.trace.count({ where }),
     ])
 
     const items = traces.map((trace: any) => ({
@@ -189,7 +204,7 @@ export async function getTraces(req: AuthRequest, res: Response) {
       currentPair: trace.currentPair,
       recommendedAction: trace.recommendedAction,
       confidence: trace.confidence,
-      errorFlag: trace.errorFlag
+      errorFlag: trace.errorFlag,
     }))
 
     endTrace('getTraces')
@@ -201,8 +216,8 @@ export async function getTraces(req: AuthRequest, res: Response) {
         total,
         page,
         limit,
-        totalPages: Math.ceil(total / limit)
-      }
+        totalPages: Math.ceil(total / limit),
+      },
     })
   } catch (error) {
     logger.error('Erro ao buscar traces:', error)
@@ -221,14 +236,14 @@ export async function getTraceGroup(req: AuthRequest, res: Response) {
     const traces = await prisma.trace.findMany({
       where: {
         userId,
-        traceId: traceIdParam
+        traceId: traceIdParam,
       },
       orderBy: { timestamp: 'asc' },
       include: {
         bot: {
-          select: { name: true }
-        }
-      }
+          select: { name: true },
+        },
+      },
     })
 
     if (traces.length === 0) {
@@ -245,7 +260,7 @@ export async function getTraceGroup(req: AuthRequest, res: Response) {
       durationMs: trace.durationMs,
       currentPair: trace.currentPair,
       recommendedAction: trace.recommendedAction,
-      confidence: trace.confidence
+      confidence: trace.confidence,
     }))
 
     const result = {
@@ -256,15 +271,11 @@ export async function getTraceGroup(req: AuthRequest, res: Response) {
       totalDurationMs: traces[traces.length - 1].durationMs,
       hasError: traces.some((t: any) => t.errorFlag),
       botId: traces[0].botId,
-      botName: traces[0].bot?.name
+      botName: traces[0].bot?.name,
     }
 
     endTrace('getTraceGroup')
-
-    return res.json({
-      success: true,
-      data: result
-    })
+    return res.json({ success: true, data: result })
   } catch (error) {
     logger.error('Erro ao buscar grupo de traces:', error)
     endTrace('getTraceGroup', { errorFlag: true })
@@ -281,14 +292,13 @@ export async function exportLogs(req: AuthRequest, res: Response) {
       endTrace('exportLogs')
       return res.status(400).json({
         success: false,
-        error: validation.error.errors.map(e => e.message).join(', ')
+        error: validation.error.errors.map((e) => e.message).join(', '),
       })
     }
 
     const { levels, modules, startDate, endDate, search } = validation.data
     const userId = req.userId!
     const systemLogUserId = await getSystemLogUserId()
-
     const where: any = buildLogsWhere(userId, systemLogUserId)
 
     if (levels) where.level = { in: levels.split(',') }
@@ -299,7 +309,7 @@ export async function exportLogs(req: AuthRequest, res: Response) {
 
     const logs = await prisma.log.findMany({
       where,
-      orderBy: { timestamp: 'desc' }
+      orderBy: { timestamp: 'desc' },
     })
 
     const headers = ['timestamp', 'level', 'module', 'message', 'details', 'isSystem']
@@ -312,18 +322,18 @@ export async function exportLogs(req: AuthRequest, res: Response) {
         log.module,
         `"${log.message.replace(/"/g, '""')}"`,
         log.details ? `"${log.details.replace(/"/g, '""')}"` : '',
-        log.userId === systemLogUserId,
+        systemLogUserId ? log.userId === systemLogUserId : false,
       ]
       csvRows.push(row.join(','))
     }
 
-    const csv = csvRows.join('\n')
+    const csv = csvRows.join('
+')
 
     res.setHeader('Content-Type', 'text/csv')
     res.setHeader('Content-Disposition', `attachment; filename=logs_${Date.now()}.csv`)
 
     endTrace('exportLogs')
-
     return res.send(csv)
   } catch (error) {
     logger.error('Erro ao exportar logs:', error)
@@ -341,13 +351,12 @@ export async function exportTraces(req: AuthRequest, res: Response) {
       endTrace('exportTraces')
       return res.status(400).json({
         success: false,
-        error: validation.error.errors.map(e => e.message).join(', ')
+        error: validation.error.errors.map((e) => e.message).join(', '),
       })
     }
 
     const { levels, modules, traceId: traceIdFilter, functionName, botId, startDate, endDate, search } = validation.data
     const userId = req.userId!
-
     const where: any = { userId }
 
     if (levels) where.level = { in: levels.split(',') }
@@ -360,16 +369,29 @@ export async function exportTraces(req: AuthRequest, res: Response) {
     if (search) {
       where.OR = [
         { message: { contains: search } },
-        { functionName: { contains: search } }
+        { functionName: { contains: search } },
       ]
     }
 
     const traces = await prisma.trace.findMany({
       where,
-      orderBy: { timestamp: 'asc' }
+      orderBy: { timestamp: 'asc' },
     })
 
-    const headers = ['timestamp', 'level', 'module', 'traceId', 'functionName', 'message', 'durationMs', 'botId', 'currentPair', 'recommendedAction', 'confidence', 'errorFlag']
+    const headers = [
+      'timestamp',
+      'level',
+      'module',
+      'traceId',
+      'functionName',
+      'message',
+      'durationMs',
+      'botId',
+      'currentPair',
+      'recommendedAction',
+      'confidence',
+      'errorFlag',
+    ]
     const csvRows = [headers.join(',')]
 
     for (const trace of traces) {
@@ -385,18 +407,18 @@ export async function exportTraces(req: AuthRequest, res: Response) {
         trace.currentPair || '',
         trace.recommendedAction || '',
         trace.confidence || '',
-        trace.errorFlag
+        trace.errorFlag,
       ]
       csvRows.push(row.join(','))
     }
 
-    const csv = csvRows.join('\n')
+    const csv = csvRows.join('
+')
 
     res.setHeader('Content-Type', 'text/csv')
     res.setHeader('Content-Disposition', `attachment; filename=traces_${Date.now()}.csv`)
 
     endTrace('exportTraces')
-
     return res.send(csv)
   } catch (error) {
     logger.error('Erro ao exportar traces:', error)
@@ -410,18 +432,11 @@ export async function getBotsForFilter(req: AuthRequest, res: Response) {
 
   try {
     const bots = await prisma.bot.findMany({
-      select: {
-        id: true,
-        name: true
-      }
+      select: { id: true, name: true },
     })
 
     endTrace('getBotsForFilter')
-
-    return res.json({
-      success: true,
-      data: bots
-    })
+    return res.json({ success: true, data: bots })
   } catch (error) {
     logger.error('Erro ao buscar bots:', error)
     endTrace('getBotsForFilter', { errorFlag: true })

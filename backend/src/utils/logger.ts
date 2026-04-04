@@ -431,6 +431,10 @@ installConsolePersistence()
 
 export const logger = baseLogger
 
+export async function getSystemLogUserId(): Promise<string | null> {
+  return ensureSystemUserId()
+}
+
 export function logInfo(module: string, message: string, details?: unknown): void {
   logger.info(`[${module}] ${message}`, { module, ...normalizeMeta(details) })
 }
