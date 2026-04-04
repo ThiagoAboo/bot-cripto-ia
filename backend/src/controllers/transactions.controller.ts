@@ -125,6 +125,68 @@ export async function getOrders(req: AuthRequest, res: Response): Promise<Respon
   }
 }
 
+
+export async function getOrderById(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'getOrderById', 'transactions')
+
+  try {
+    const { id } = req.params
+    const userId = req.userId!
+
+    const transaction = await prisma.transaction.findFirst({
+      where: { id, userId },
+      include: { bot: { select: { name: true } } },
+    })
+
+    if (!transaction) {
+      logger.warn('[transactions] Ordem não encontrada', {
+        module: 'transactions',
+        event: 'get_order_by_id_not_found',
+        userId,
+        orderId: id,
+      })
+
+      endTrace('getOrderById', { userId, orderId: id, errorFlag: true })
+      return res.status(404).json({ success: false, error: 'Ordem não encontrada' })
+    }
+
+    const item = {
+      id: transaction.id,
+      date: transaction.date,
+      pair: transaction.pair,
+      origin: transaction.origin,
+      botId: transaction.botId,
+      botName: transaction.bot?.name,
+      type: transaction.type,
+      quantity: transaction.quantity,
+      price: transaction.price,
+      total: transaction.total,
+      fee: transaction.fee,
+      status: transaction.status,
+      profitBrl: transaction.profitBrl,
+      profitPercent: transaction.profitPercent,
+    }
+
+    trace('DEBUG', 'transactions', 'getOrderById', 'Ordem recuperada com sucesso', 0, {
+      userId,
+      orderId: id,
+    })
+    endTrace('getOrderById', { userId, orderId: id })
+    return res.json({ success: true, data: item })
+  } catch (error) {
+    logger.error('[transactions] Erro ao buscar ordem por id', {
+      module: 'transactions',
+      event: 'get_order_by_id_error',
+      userId: req.userId,
+      orderId: req.params.id,
+      error,
+    })
+
+    endTrace('getOrderById', { userId: req.userId, orderId: req.params.id, errorFlag: true })
+    return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
+  }
+}
+
 export async function createOrder(req: AuthRequest, res: Response): Promise<Response> {
   startTrace(req.userId!, 'createOrder', 'transactions')
 
