@@ -2,15 +2,11 @@ import { Request, Response } from 'express'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
 import { z } from 'zod'
+
 import { prisma } from '../config/database'
 import { AuthRequest } from '../middleware/auth.middleware'
 import { logger } from '../utils/logger'
-import {
-  endTrace,
-  setCurrentTraceUserId,
-  startTrace,
-  trace,
-} from '../utils/tracer'
+import { endTrace, setCurrentTraceUserId, startTrace, trace } from '../utils/tracer'
 
 const JWT_SECRET = process.env.JWT_SECRET || 'default-secret'
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h'
@@ -41,10 +37,6 @@ const registerSchema = z.object({
   }),
 })
 
-function getValidationMessage(error: z.ZodError): string {
-  return error.issues.map((issue) => issue.message).join(', ')
-}
-
 function safeParsePreferences(preferences: string | null | undefined): Record<string, unknown> {
   if (!preferences) {
     return {}
@@ -57,55 +49,59 @@ function safeParsePreferences(preferences: string | null | undefined): Record<st
   }
 }
 
-export async function login(req: Request, res: Response) {
+export async function login(req: Request, res: Response): Promise<Response> {
   startTrace(null, 'login', 'auth')
 
   try {
     const validation = loginSchema.safeParse(req)
 
     if (!validation.success) {
-      const errorMessage = getValidationMessage(validation.error)
-
-      trace('WARN', 'auth', 'login', 'Validação falhou', 0, {
-        errorFlag: true,
+      logger.warn('[auth] Tentativa de login com payload inválido', {
+        module: 'auth',
+        event: 'login_validation_failed',
+        errors: validation.error.errors,
       })
-      endTrace('login', { errorFlag: true })
 
-      return res.status(400).json({ success: false, error: errorMessage })
+      trace('DEBUG', 'auth', 'login', 'Validação falhou', 0, {
+        errors: validation.error.errors,
+      })
+      endTrace('login')
+      return res.status(400).json({
+        success: false,
+        error: validation.error.errors.map((entry) => entry.message).join(', '),
+      })
     }
 
     const { email, password } = validation.data.body
     const user = await prisma.user.findUnique({ where: { email } })
 
     if (!user) {
-      trace('WARN', 'auth', 'login', 'Usuário não encontrado', 0, {
-        errorFlag: true,
-      })
-      logger.warn('[auth] Tentativa de login com email inexistente', {
+      logger.warn('[auth] Login com usuário inexistente', {
         module: 'auth',
+        event: 'login_user_not_found',
         email,
       })
-      endTrace('login', { errorFlag: true })
 
+      trace('DEBUG', 'auth', 'login', 'Usuário não encontrado', 0, { email })
+      endTrace('login')
       return res.status(401).json({ success: false, error: 'Email ou senha inválidos' })
     }
 
-    setCurrentTraceUserId(user.id)
-
     const isValidPassword = await bcrypt.compare(password, user.passwordHash)
-
     if (!isValidPassword) {
-      trace('WARN', 'auth', 'login', 'Senha inválida', 0, {
-        userId: user.id,
-        errorFlag: true,
-      })
-      logger.warn('[auth] Tentativa de login com senha inválida', {
+      logger.warn('[auth] Login com senha inválida', {
         module: 'auth',
+        event: 'login_invalid_password',
+        userId: user.id,
+        email,
+      })
+
+      setCurrentTraceUserId(user.id)
+      trace('DEBUG', 'auth', 'login', 'Senha inválida', 0, {
         userId: user.id,
         email,
       })
       endTrace('login', { userId: user.id, errorFlag: true })
-
       return res.status(401).json({ success: false, error: 'Email ou senha inválidos' })
     }
 
@@ -115,23 +111,22 @@ export async function login(req: Request, res: Response) {
     })
 
     const token = jwt.sign(
-      {
-        userId: user.id,
-        email: user.email,
-      },
+      { userId: user.id, email: user.email },
       JWT_SECRET,
-      {
-        expiresIn: JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'],
-      },
+      { expiresIn: JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'] },
     )
+
+    setCurrentTraceUserId(user.id)
 
     logger.info('[auth] Usuário logado com sucesso', {
       module: 'auth',
+      event: 'user_login',
       userId: user.id,
       email: user.email,
+      name: user.name,
     })
 
-    trace('INFO', 'auth', 'login', 'Login bem sucedido', 0, {
+    trace('DEBUG', 'auth', 'login', 'Login bem sucedido', 0, {
       userId: user.id,
     })
     endTrace('login', { userId: user.id })
@@ -148,8 +143,10 @@ export async function login(req: Request, res: Response) {
   } catch (error) {
     logger.error('[auth] Erro no login', {
       module: 'auth',
+      event: 'login_error',
       error,
     })
+
     trace('ERROR', 'auth', 'login', 'Erro interno durante login', 0, {
       errorFlag: true,
     })
@@ -159,8 +156,8 @@ export async function login(req: Request, res: Response) {
   }
 }
 
-export async function getMe(req: AuthRequest, res: Response) {
-  startTrace(req.userId ?? null, 'getMe', 'auth')
+export async function getMe(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'getMe', 'auth')
 
   try {
     const user = await prisma.user.findUnique({
@@ -176,12 +173,7 @@ export async function getMe(req: AuthRequest, res: Response) {
     })
 
     if (!user) {
-      trace('WARN', 'auth', 'getMe', 'Usuário não encontrado', 0, {
-        userId: req.userId,
-        errorFlag: true,
-      })
       endTrace('getMe', { userId: req.userId, errorFlag: true })
-
       return res.status(404).json({ success: false, error: 'Usuário não encontrado' })
     }
 
@@ -198,78 +190,75 @@ export async function getMe(req: AuthRequest, res: Response) {
       },
     })
   } catch (error) {
-    logger.error('[auth] Erro ao buscar usuário', {
+    logger.error('[auth] Erro ao buscar usuário atual', {
       module: 'auth',
+      event: 'get_me_error',
       userId: req.userId,
       error,
     })
-    trace('ERROR', 'auth', 'getMe', 'Erro ao buscar usuário', 0, {
-      userId: req.userId,
-      errorFlag: true,
-    })
-    endTrace('getMe', { userId: req.userId, errorFlag: true })
 
+    endTrace('getMe', { userId: req.userId, errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }
 
-export async function logout(req: AuthRequest, res: Response) {
-  startTrace(req.userId ?? null, 'logout', 'auth')
+export async function logout(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'logout', 'auth')
 
   logger.info('[auth] Usuário fez logout', {
     module: 'auth',
+    event: 'user_logout',
     userId: req.userId,
   })
 
-  trace('INFO', 'auth', 'logout', 'Logout realizado', 0, {
-    userId: req.userId,
-  })
   endTrace('logout', { userId: req.userId })
-
   return res.json({ success: true })
 }
 
-export async function changePassword(req: AuthRequest, res: Response) {
-  startTrace(req.userId ?? null, 'changePassword', 'auth')
+export async function changePassword(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'changePassword', 'auth')
 
   try {
     const validation = changePasswordSchema.safeParse(req)
 
     if (!validation.success) {
-      const errorMessage = getValidationMessage(validation.error)
-
-      trace('WARN', 'auth', 'changePassword', 'Validação falhou', 0, {
+      logger.warn('[auth] Alteração de senha com payload inválido', {
+        module: 'auth',
+        event: 'change_password_validation_failed',
         userId: req.userId,
-        errorFlag: true,
+        errors: validation.error.errors,
+      })
+
+      trace('DEBUG', 'auth', 'changePassword', 'Validação falhou', 0, {
+        errors: validation.error.errors,
       })
       endTrace('changePassword', { userId: req.userId, errorFlag: true })
-
-      return res.status(400).json({ success: false, error: errorMessage })
+      return res.status(400).json({
+        success: false,
+        error: validation.error.errors.map((entry) => entry.message).join(', '),
+      })
     }
 
     const { currentPassword, newPassword } = validation.data.body
-
     const user = await prisma.user.findUnique({ where: { id: req.userId } })
 
     if (!user) {
-      trace('WARN', 'auth', 'changePassword', 'Usuário não encontrado', 0, {
-        userId: req.userId,
-        errorFlag: true,
-      })
       endTrace('changePassword', { userId: req.userId, errorFlag: true })
-
       return res.status(404).json({ success: false, error: 'Usuário não encontrado' })
     }
 
     const isValidPassword = await bcrypt.compare(currentPassword, user.passwordHash)
-
     if (!isValidPassword) {
-      trace('WARN', 'auth', 'changePassword', 'Senha atual inválida', 0, {
+      logger.warn('[auth] Tentativa de troca de senha com senha atual inválida', {
+        module: 'auth',
+        event: 'change_password_invalid_current_password',
         userId: req.userId,
-        errorFlag: true,
+      })
+
+      trace('DEBUG', 'auth', 'changePassword', 'Senha atual inválida', 0, {
+        userId: req.userId,
       })
       endTrace('changePassword', { userId: req.userId, errorFlag: true })
-
       return res.status(401).json({ success: false, error: 'Senha atual incorreta' })
     }
 
@@ -282,10 +271,11 @@ export async function changePassword(req: AuthRequest, res: Response) {
 
     logger.info('[auth] Senha alterada com sucesso', {
       module: 'auth',
+      event: 'change_password_success',
       userId: req.userId,
     })
 
-    trace('INFO', 'auth', 'changePassword', 'Senha alterada com sucesso', 0, {
+    trace('DEBUG', 'auth', 'changePassword', 'Senha alterada com sucesso', 0, {
       userId: req.userId,
     })
     endTrace('changePassword', { userId: req.userId })
@@ -294,61 +284,57 @@ export async function changePassword(req: AuthRequest, res: Response) {
   } catch (error) {
     logger.error('[auth] Erro ao trocar senha', {
       module: 'auth',
+      event: 'change_password_error',
       userId: req.userId,
       error,
     })
-    trace('ERROR', 'auth', 'changePassword', 'Erro ao trocar senha', 0, {
-      userId: req.userId,
-      errorFlag: true,
-    })
-    endTrace('changePassword', { userId: req.userId, errorFlag: true })
 
+    endTrace('changePassword', { userId: req.userId, errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }
 
-export async function register(req: Request, res: Response) {
+export async function register(req: Request, res: Response): Promise<Response> {
   startTrace(null, 'register', 'auth')
 
   try {
     const validation = registerSchema.safeParse(req)
 
     if (!validation.success) {
-      const errorMessage = getValidationMessage(validation.error)
-
-      trace('WARN', 'auth', 'register', 'Validação falhou', 0, {
-        errorFlag: true,
+      logger.warn('[auth] Registro com payload inválido', {
+        module: 'auth',
+        event: 'register_validation_failed',
+        errors: validation.error.errors,
       })
-      endTrace('register', { errorFlag: true })
 
-      return res.status(400).json({ success: false, error: errorMessage })
+      endTrace('register', { errorFlag: true })
+      return res.status(400).json({
+        success: false,
+        error: validation.error.errors.map((entry) => entry.message).join(', '),
+      })
     }
 
     const { email, password, name } = validation.data.body
     const existingUser = await prisma.user.findUnique({ where: { email } })
 
     if (existingUser) {
-      setCurrentTraceUserId(existingUser.id)
-      trace('WARN', 'auth', 'register', 'Email já está em uso', 0, {
-        userId: existingUser.id,
-        errorFlag: true,
+      logger.warn('[auth] Tentativa de registro com email já existente', {
+        module: 'auth',
+        event: 'register_email_conflict',
+        email,
       })
-      endTrace('register', { userId: existingUser.id, errorFlag: true })
 
+      endTrace('register', { errorFlag: true })
       return res.status(409).json({ success: false, error: 'Email já está em uso' })
     }
 
     const passwordHash = await bcrypt.hash(password, 10)
-
     const user = await prisma.user.create({
       data: {
         email,
         passwordHash,
         name,
-        preferences: JSON.stringify({
-          notificationsEnabled: true,
-          theme: 'dark',
-        }),
+        preferences: JSON.stringify({ notificationsEnabled: true, theme: 'dark' }),
       },
     })
 
@@ -356,11 +342,13 @@ export async function register(req: Request, res: Response) {
 
     logger.info('[auth] Novo usuário registrado', {
       module: 'auth',
+      event: 'user_registered',
       userId: user.id,
       email: user.email,
+      name: user.name,
     })
 
-    trace('INFO', 'auth', 'register', 'Usuário registrado com sucesso', 0, {
+    trace('DEBUG', 'auth', 'register', 'Usuário registrado com sucesso', 0, {
       userId: user.id,
     })
     endTrace('register', { userId: user.id })
@@ -376,13 +364,11 @@ export async function register(req: Request, res: Response) {
   } catch (error) {
     logger.error('[auth] Erro no registro', {
       module: 'auth',
+      event: 'register_error',
       error,
     })
-    trace('ERROR', 'auth', 'register', 'Erro no registro', 0, {
-      errorFlag: true,
-    })
-    endTrace('register', { errorFlag: true })
 
+    endTrace('register', { errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }

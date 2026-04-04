@@ -2,11 +2,7 @@ import winston from 'winston'
 import { prisma } from '../config/database'
 import { getObservabilityContext } from './observability-context'
 
-const { combine, timestamp, printf } = winston.format
-
-export const SYSTEM_LOG_EMAIL = 'system.logs@bot-cripto-ia.local'
-const SYSTEM_LOG_NAME = 'System Logs'
-const SYSTEM_LOG_PASSWORD_HASH = '__system_logs_not_for_login__'
+const { combine, timestamp, printf, colorize } = winston.format
 
 const originalConsole = {
   log: console.log.bind(console),
@@ -16,105 +12,177 @@ const originalConsole = {
   debug: (console.debug ?? console.log).bind(console),
 }
 
-const sensitiveKeyPattern = /(password|passwordHash|secret|apiKey|token|authorization|cookie|accessToken|refreshToken)/i
+const REDACTED = '[REDACTED]'
+const SYSTEM_USER_EMAIL = 'system@bot-cripto-ia.local'
+const SYSTEM_USER_NAME = 'Sistema Interno'
+const SYSTEM_USER_PASSWORD_HASH = '__SYSTEM_INTERNAL_ACCOUNT__'
+const SENSITIVE_KEYS = new Set([
+  'apikey',
+  'secretkey',
+  'password',
+  'passwordhash',
+  'token',
+  'authorization',
+  'cookie',
+  'set-cookie',
+  'access_token',
+  'refresh_token',
+])
+
+let consolePatched = false
+let systemUserIdPromise: Promise<string | null> | null = null
 
 const myFormat = printf(({ level, message, timestamp: ts, ...meta }) => {
-  const sanitizedMeta = sanitizeForLogging({ ...meta }) as Record<string, unknown>
+  const sanitizedMeta = { ...meta }
   delete sanitizedMeta.skipPersistence
-  delete sanitizedMeta.skipConsoleCapture
-
-  return `${ts} [${level}]: ${message} ${Object.keys(sanitizedMeta).length ? safeStringify(sanitizedMeta) : ''}`
+  return `${ts} [${level}]: ${message} ${Object.keys(sanitizedMeta).length ? JSON.stringify(sanitizedMeta) : ''}`
 })
 
 export type LogMeta = Record<string, unknown> & {
   module?: string
-  userId?: string | null
+  userId?: string
   skipPersistence?: boolean
-  skipConsoleCapture?: boolean
 }
 
-let consoleCaptureInstalled = false
-let systemUserIdPromise: Promise<string> | null = null
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (Object.prototype.toString.call(value) !== '[object Object]') {
+    return false
+  }
 
-function safeStringify(value: unknown): string {
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === null || prototype === Object.prototype
+}
+
+function stringifyForMessage(value: unknown): string {
+  if (typeof value === 'string') {
+    return value
+  }
+
+  if (value instanceof Error) {
+    return `${value.name}: ${value.message}`
+  }
+
+  if (value === undefined) {
+    return 'undefined'
+  }
+
+  if (value === null) {
+    return 'null'
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value)
+  }
+
   try {
-    return JSON.stringify(value)
+    return JSON.stringify(sanitizeForLogging(value))
   } catch {
     return String(value)
   }
 }
 
-function serializeError(error: unknown): unknown {
-  if (error instanceof Error) {
-    return {
-      name: error.name,
-      message: error.message,
-      stack: error.stack,
-    }
+function sanitizeForLogging(value: unknown, visited = new WeakSet<object>(), currentKey?: string): unknown {
+  if (currentKey && SENSITIVE_KEYS.has(currentKey.toLowerCase())) {
+    return REDACTED
   }
 
-  return sanitizeForLogging(error)
-}
-
-function sanitizeForLogging(value: unknown, seen = new WeakSet<object>()): unknown {
   if (value === null || value === undefined) {
     return value
-  }
-
-  if (value instanceof Error) {
-    return serializeError(value)
-  }
-
-  if (value instanceof Date) {
-    return value.toISOString()
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((item) => sanitizeForLogging(item, seen))
-  }
-
-  if (typeof value === 'object') {
-    if (seen.has(value as object)) {
-      return '[Circular]'
-    }
-
-    seen.add(value as object)
-
-    const output: Record<string, unknown> = {}
-    for (const [key, entryValue] of Object.entries(value as Record<string, unknown>)) {
-      if (sensitiveKeyPattern.test(key)) {
-        output[key] = '[REDACTED]'
-        continue
-      }
-
-      output[key] = sanitizeForLogging(entryValue, seen)
-    }
-
-    seen.delete(value as object)
-    return output
   }
 
   if (typeof value === 'bigint') {
     return value.toString()
   }
 
-  return value
+  if (value instanceof Date) {
+    return value.toISOString()
+  }
+
+  if (value instanceof Error) {
+    const base: Record<string, unknown> = {
+      name: value.name,
+      message: value.message,
+      stack: value.stack,
+    }
+
+    for (const [key, customValue] of Object.entries(value)) {
+      base[key] = sanitizeForLogging(customValue, visited, key)
+    }
+
+    return base
+  }
+
+  if (typeof Buffer !== 'undefined' && Buffer.isBuffer(value)) {
+    return {
+      type: 'Buffer',
+      length: value.length,
+    }
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeForLogging(item, visited))
+  }
+
+  if (typeof value === 'function') {
+    return `[Function ${value.name || 'anonymous'}]`
+  }
+
+  if (typeof value !== 'object') {
+    return value
+  }
+
+  if (visited.has(value as object)) {
+    return '[Circular]'
+  }
+
+  visited.add(value as object)
+
+  if (!isPlainObject(value)) {
+    try {
+      return JSON.parse(JSON.stringify(value))
+    } catch {
+      return String(value)
+    }
+  }
+
+  const sanitizedEntries = Object.entries(value).map(([key, entryValue]) => [
+    key,
+    sanitizeForLogging(entryValue, visited, key),
+  ])
+
+  return Object.fromEntries(sanitizedEntries)
 }
 
 function normalizeMeta(meta?: unknown): LogMeta {
-  if (!meta) {
+  if (meta === undefined) {
     return {}
   }
 
   if (meta instanceof Error) {
-    return { error: serializeError(meta) }
+    return { error: sanitizeForLogging(meta) }
   }
 
-  if (typeof meta === 'object' && !Array.isArray(meta)) {
+  if (Array.isArray(meta)) {
+    return { args: sanitizeForLogging(meta) }
+  }
+
+  if (isPlainObject(meta)) {
     return sanitizeForLogging(meta) as LogMeta
   }
 
   return { value: sanitizeForLogging(meta) }
+}
+
+function safeJsonStringify(value: unknown): string | null {
+  if (value === undefined) {
+    return null
+  }
+
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return JSON.stringify({ serializationError: true, preview: stringifyForMessage(value) })
+  }
 }
 
 function extractModule(message: string, meta: LogMeta): string {
@@ -132,6 +200,10 @@ function extractModule(message: string, meta: LogMeta): string {
     return moduleMatch[1].trim()
   }
 
+  if (meta.source === 'console') {
+    return 'console'
+  }
+
   return 'system'
 }
 
@@ -139,74 +211,60 @@ function sanitizeMessage(message: string): string {
   return message.replace(/^\[[^\]]+\]\s*/, '').trim()
 }
 
-async function ensureSystemLogUserId(): Promise<string> {
+async function ensureSystemUserId(): Promise<string | null> {
   if (!systemUserIdPromise) {
-    systemUserIdPromise = prisma.user
-      .upsert({
-        where: { email: SYSTEM_LOG_EMAIL },
-        update: {
-          name: SYSTEM_LOG_NAME,
-          passwordHash: SYSTEM_LOG_PASSWORD_HASH,
-          preferences: '{}',
-        },
-        create: {
-          email: SYSTEM_LOG_EMAIL,
-          name: SYSTEM_LOG_NAME,
-          passwordHash: SYSTEM_LOG_PASSWORD_HASH,
-          preferences: '{}',
-        },
-        select: { id: true },
-      })
-      .then((user) => user.id)
-      .catch((error) => {
-        systemUserIdPromise = null
-        throw error
-      })
+    systemUserIdPromise = (async () => {
+      try {
+        const existing = await prisma.user.findUnique({
+          where: { email: SYSTEM_USER_EMAIL },
+          select: { id: true },
+        })
+
+        if (existing?.id) {
+          return existing.id
+        }
+
+        const created = await prisma.user.create({
+          data: {
+            email: SYSTEM_USER_EMAIL,
+            name: SYSTEM_USER_NAME,
+            passwordHash: SYSTEM_USER_PASSWORD_HASH,
+            preferences: JSON.stringify({ internal: true, theme: 'dark', notificationsEnabled: false }),
+          },
+          select: { id: true },
+        })
+
+        return created.id
+      } catch (error) {
+        try {
+          const fallback = await prisma.user.findUnique({
+            where: { email: SYSTEM_USER_EMAIL },
+            select: { id: true },
+          })
+
+          return fallback?.id ?? null
+        } catch {
+          originalConsole.error('Erro ao resolver usuário técnico de logs:', sanitizeForLogging(error))
+          return null
+        }
+      }
+    })()
   }
 
   return systemUserIdPromise
 }
 
-export async function getSystemLogUserId(): Promise<string> {
-  return ensureSystemLogUserId()
-}
-
-async function resolveUserId(meta: LogMeta): Promise<string | undefined> {
+async function resolvePersistedUserId(meta: LogMeta): Promise<string | null> {
   if (typeof meta.userId === 'string' && meta.userId.trim()) {
     return meta.userId.trim()
   }
 
   const context = getObservabilityContext()
-  if (context?.userId?.trim()) {
-    return context.userId.trim()
+  if (context?.userId) {
+    return context.userId
   }
 
-  return ensureSystemLogUserId()
-}
-
-function writeToTerminal(level: 'info' | 'warn' | 'error' | 'debug', message: string, meta: LogMeta): void {
-  const printableMeta = sanitizeForLogging({ ...meta }) as Record<string, unknown>
-  delete printableMeta.skipPersistence
-  delete printableMeta.skipConsoleCapture
-
-  const line = `${new Date().toISOString()} [${level}]: ${message} ${Object.keys(printableMeta).length ? safeStringify(printableMeta) : ''}`.trimEnd()
-
-  if (level === 'error') {
-    originalConsole.error(line)
-    return
-  }
-
-  if (level === 'warn') {
-    originalConsole.warn(line)
-    return
-  }
-
-  if (level === 'debug') {
-    originalConsole.debug(line)
-    return
-  }
-
-  originalConsole.info(line)
+  return ensureSystemUserId()
 }
 
 async function persistLog(level: string, message: string, meta: LogMeta): Promise<void> {
@@ -214,27 +272,24 @@ async function persistLog(level: string, message: string, meta: LogMeta): Promis
     return
   }
 
-  const context = getObservabilityContext()
-  const userId = await resolveUserId(meta)
-
+  const userId = await resolvePersistedUserId(meta)
   if (!userId) {
     return
   }
 
-  const detailsPayload = sanitizeForLogging({
+  const context = getObservabilityContext()
+  const detailsPayload: Record<string, unknown> = {
     ...meta,
     traceId: context?.traceId ?? null,
     parentTraceId: context?.parentTraceId ?? null,
     functionName: context?.functionName ?? null,
-    contextUserId: context?.userId ?? null,
-  }) as Record<string, unknown>
+  }
 
   delete detailsPayload.skipPersistence
-  delete detailsPayload.skipConsoleCapture
   delete detailsPayload.userId
   delete detailsPayload.module
 
-  const details = Object.keys(detailsPayload).length > 0 ? safeStringify(detailsPayload) : null
+  const details = safeJsonStringify(detailsPayload)
 
   try {
     await prisma.log.create({
@@ -247,7 +302,7 @@ async function persistLog(level: string, message: string, meta: LogMeta): Promis
       },
     })
   } catch (error) {
-    originalConsole.error('Erro ao persistir log no banco:', serializeError(error))
+    originalConsole.error('Erro ao persistir log no banco:', sanitizeForLogging(error))
   }
 }
 
@@ -255,6 +310,9 @@ const baseLogger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
   format: combine(timestamp(), myFormat),
   transports: [
+    new winston.transports.Console({
+      format: combine(colorize(), timestamp(), myFormat),
+    }),
     new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
     new winston.transports.File({ filename: 'logs/combined.log' }),
   ],
@@ -264,17 +322,17 @@ function wrapLogMethod(
   methodName: 'info' | 'warn' | 'error' | 'debug',
   level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG',
 ): winston.LeveledLogMethod {
+  const original = baseLogger[methodName].bind(baseLogger)
+
   return ((message: unknown, meta?: unknown) => {
     const normalizedMeta = normalizeMeta(meta)
-    const printableMeta = sanitizeForLogging({ ...normalizedMeta }) as LogMeta
-    delete printableMeta.skipConsoleCapture
+    const printableMeta = { ...normalizedMeta }
+    delete printableMeta.skipPersistence
 
-    const messageText = typeof message === 'string' ? message : safeStringify(sanitizeForLogging(message))
+    const messageText = typeof message === 'string' ? message : stringifyForMessage(message)
 
-    writeToTerminal(methodName, messageText, printableMeta)
-    baseLogger.log(methodName, messageText, printableMeta)
+    original(messageText, printableMeta)
     void persistLog(level, messageText, normalizedMeta)
-
     return baseLogger
   }) as winston.LeveledLogMethod
 }
@@ -284,78 +342,103 @@ baseLogger.warn = wrapLogMethod('warn', 'WARN')
 baseLogger.error = wrapLogMethod('error', 'ERROR')
 baseLogger.debug = wrapLogMethod('debug', 'DEBUG')
 
-export const logger = baseLogger
-
-function buildConsolePayload(args: unknown[]): { message: string; meta?: LogMeta } {
+function normalizeConsoleCall(args: unknown[], consoleMethod: string): { message: string; meta: LogMeta } {
   if (args.length === 0) {
-    return { message: '' }
+    return {
+      message: '',
+      meta: { module: 'console', source: 'console', consoleMethod },
+    }
   }
 
-  const sanitizedArgs = args.map((arg) => sanitizeForLogging(arg))
-  const [firstArg, ...restArgs] = sanitizedArgs
+  if (typeof args[0] === 'string') {
+    const [message, ...rest] = args
 
-  const message = typeof firstArg === 'string' ? firstArg : safeStringify(firstArg)
+    if (rest.length === 0) {
+      return {
+        message,
+        meta: { module: 'console', source: 'console', consoleMethod },
+      }
+    }
 
-  if (restArgs.length === 0) {
+    if (rest.length === 1 && isPlainObject(rest[0])) {
+      return {
+        message,
+        meta: {
+          module: 'console',
+          source: 'console',
+          consoleMethod,
+          ...normalizeMeta(rest[0]),
+        },
+      }
+    }
+
     return {
       message,
       meta: {
-        consoleMethodArgs: [],
+        module: 'console',
+        source: 'console',
+        consoleMethod,
+        args: sanitizeForLogging(rest),
       },
     }
   }
 
   return {
-    message,
+    message: args.map((arg) => stringifyForMessage(arg)).join(' '),
     meta: {
-      consoleMethodArgs: restArgs,
+      module: 'console',
+      source: 'console',
+      consoleMethod,
+      args: sanitizeForLogging(args),
     },
   }
 }
 
-export function installConsoleCapture(): void {
-  if (consoleCaptureInstalled) {
+export function installConsolePersistence(): void {
+  if (consolePatched) {
     return
   }
 
-  consoleCaptureInstalled = true
+  consolePatched = true
 
-  console.log = ((...args: unknown[]) => {
-    const { message, meta } = buildConsolePayload(args)
-    logger.info(message, { ...meta, consoleMethod: 'log' })
-  }) as typeof console.log
+  console.log = (...args: unknown[]) => {
+    const { message, meta } = normalizeConsoleCall(args, 'log')
+    baseLogger.info(message, meta)
+  }
 
-  console.info = ((...args: unknown[]) => {
-    const { message, meta } = buildConsolePayload(args)
-    logger.info(message, { ...meta, consoleMethod: 'info' })
-  }) as typeof console.info
+  console.info = (...args: unknown[]) => {
+    const { message, meta } = normalizeConsoleCall(args, 'info')
+    baseLogger.info(message, meta)
+  }
 
-  console.warn = ((...args: unknown[]) => {
-    const { message, meta } = buildConsolePayload(args)
-    logger.warn(message, { ...meta, consoleMethod: 'warn' })
-  }) as typeof console.warn
+  console.warn = (...args: unknown[]) => {
+    const { message, meta } = normalizeConsoleCall(args, 'warn')
+    baseLogger.warn(message, meta)
+  }
 
-  console.error = ((...args: unknown[]) => {
-    const { message, meta } = buildConsolePayload(args)
-    logger.error(message, { ...meta, consoleMethod: 'error' })
-  }) as typeof console.error
+  console.error = (...args: unknown[]) => {
+    const { message, meta } = normalizeConsoleCall(args, 'error')
+    baseLogger.error(message, meta)
+  }
 
-  console.debug = ((...args: unknown[]) => {
-    const { message, meta } = buildConsolePayload(args)
-    logger.debug(message, { ...meta, consoleMethod: 'debug' })
-  }) as typeof console.debug
+  console.debug = (...args: unknown[]) => {
+    const { message, meta } = normalizeConsoleCall(args, 'debug')
+    baseLogger.debug(message, meta)
+  }
 }
 
-installConsoleCapture()
+installConsolePersistence()
 
-export function logInfo(module: string, message: string, details?: unknown) {
+export const logger = baseLogger
+
+export function logInfo(module: string, message: string, details?: unknown): void {
   logger.info(`[${module}] ${message}`, { module, ...normalizeMeta(details) })
 }
 
-export function logWarn(module: string, message: string, details?: unknown) {
+export function logWarn(module: string, message: string, details?: unknown): void {
   logger.warn(`[${module}] ${message}`, { module, ...normalizeMeta(details) })
 }
 
-export function logError(module: string, message: string, error?: unknown) {
+export function logError(module: string, message: string, error?: unknown): void {
   logger.error(`[${module}] ${message}`, { module, ...normalizeMeta(error) })
 }

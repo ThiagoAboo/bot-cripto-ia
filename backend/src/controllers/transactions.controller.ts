@@ -1,25 +1,28 @@
 import { Response } from 'express'
-import { AuthRequest } from '../middleware/auth.middleware'
-import { prisma } from '../config/database'
-import { logger } from '../utils/logger'
-import { startTrace, endTrace, trace } from '../utils/tracer'
 import { z } from 'zod'
 
-// Schema para criação de ordem
+import { prisma } from '../config/database'
+import { AuthRequest } from '../middleware/auth.middleware'
+import { logger } from '../utils/logger'
+import { endTrace, startTrace, trace } from '../utils/tracer'
+
 const createOrderSchema = z.object({
   pair: z.string().min(1, 'Par é obrigatório'),
   type: z.enum(['buy', 'sell']),
   quantity: z.number().positive('Quantidade deve ser positiva'),
   orderType: z.enum(['market', 'limit']),
-  price: z.number().positive().optional()
-}).refine(data => {
+  price: z.number().positive().optional(),
+}).refine((data) => {
   if (data.orderType === 'limit' && !data.price) {
     return false
   }
-  return true
-}, { message: 'Preço é obrigatório para ordens limit', path: ['price'] })
 
-// Schema para filtros
+  return true
+}, {
+  message: 'Preço é obrigatório para ordens limit',
+  path: ['price'],
+})
+
 const orderFiltersSchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(100).default(20),
@@ -29,32 +32,34 @@ const orderFiltersSchema = z.object({
   origins: z.string().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
-  search: z.string().optional()
+  search: z.string().optional(),
 })
 
-// ==============================
-// GET ORDERS (listagem com filtros)
-// ==============================
-export async function getOrders(req: AuthRequest, res: Response) {
-  const traceId = startTrace(req.userId!, 'getOrders', 'transactions')
-  
+export async function getOrders(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'getOrders', 'transactions')
+
   try {
     const validation = orderFiltersSchema.safeParse(req.query)
     if (!validation.success) {
-      endTrace('getOrders')
-      return res.status(400).json({ 
-        success: false, 
-        error: validation.error.errors.map(e => e.message).join(', ')
+      logger.warn('[transactions] Filtros inválidos ao consultar ordens', {
+        module: 'transactions',
+        event: 'get_orders_validation_failed',
+        userId: req.userId,
+        errors: validation.error.errors,
+      })
+
+      endTrace('getOrders', { userId: req.userId, errorFlag: true })
+      return res.status(400).json({
+        success: false,
+        error: validation.error.errors.map((entry) => entry.message).join(', '),
       })
     }
-    
+
     const { page, limit, pair, types, statuses, origins, startDate, endDate, search } = validation.data
     const userId = req.userId!
     const skip = (page - 1) * limit
-    
-    // Construir where clause
     const where: any = { userId }
-    
+
     if (pair) where.pair = pair
     if (types) where.type = { in: types.split(',') }
     if (statuses) where.status = { in: statuses.split(',') }
@@ -64,25 +69,21 @@ export async function getOrders(req: AuthRequest, res: Response) {
     if (search) {
       where.OR = [
         { pair: { contains: search } },
-        { id: { contains: search } }
+        { id: { contains: search } },
       ]
     }
-    
+
     const [transactions, total] = await Promise.all([
       prisma.transaction.findMany({
         where,
         orderBy: { date: 'desc' },
         skip,
         take: limit,
-        include: {
-          bot: {
-            select: { name: true }
-          }
-        }
+        include: { bot: { select: { name: true } } },
       }),
-      prisma.transaction.count({ where })
+      prisma.transaction.count({ where }),
     ])
-    
+
     const items = transactions.map((transaction: any) => ({
       id: transaction.id,
       date: transaction.date,
@@ -97,11 +98,10 @@ export async function getOrders(req: AuthRequest, res: Response) {
       fee: transaction.fee,
       status: transaction.status,
       profitBrl: transaction.profitBrl,
-      profitPercent: transaction.profitPercent
+      profitPercent: transaction.profitPercent,
     }))
-    
-    endTrace('getOrders')
-    
+
+    endTrace('getOrders', { userId })
     return res.json({
       success: true,
       data: {
@@ -109,82 +109,122 @@ export async function getOrders(req: AuthRequest, res: Response) {
         total,
         page,
         limit,
-        totalPages: Math.ceil(total / limit)
-      }
+        totalPages: Math.ceil(total / limit),
+      },
     })
   } catch (error) {
-    logger.error('Erro ao buscar ordens:', error)
-    endTrace('getOrders')
+    logger.error('[transactions] Erro ao buscar ordens', {
+      module: 'transactions',
+      event: 'get_orders_error',
+      userId: req.userId,
+      error,
+    })
+
+    endTrace('getOrders', { userId: req.userId, errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }
 
-// ==============================
-// CREATE ORDER (ordem manual)
-// ==============================
-export async function createOrder(req: AuthRequest, res: Response) {
-  const traceId = startTrace(req.userId!, 'createOrder', 'transactions')
-  
+export async function createOrder(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'createOrder', 'transactions')
+
   try {
-    // Validações manuais antes do schema
     const { pair, type, quantity, orderType, price } = req.body
-    
+
     if (!pair) {
-      endTrace('createOrder')
+      endTrace('createOrder', { userId: req.userId, errorFlag: true })
       return res.status(400).json({ success: false, error: 'Par é obrigatório' })
     }
-    
+
     if (!type || (type !== 'buy' && type !== 'sell')) {
-      endTrace('createOrder')
+      endTrace('createOrder', { userId: req.userId, errorFlag: true })
       return res.status(400).json({ success: false, error: 'Tipo deve ser "buy" ou "sell"' })
     }
-    
+
     if (!quantity || quantity <= 0) {
-      endTrace('createOrder')
+      endTrace('createOrder', { userId: req.userId, errorFlag: true })
       return res.status(400).json({ success: false, error: 'Quantidade deve ser maior que zero' })
     }
-    
+
     if (orderType === 'limit' && (!price || price <= 0)) {
-      endTrace('createOrder')
+      endTrace('createOrder', { userId: req.userId, errorFlag: true })
       return res.status(400).json({ success: false, error: 'Preço é obrigatório para ordens limit' })
     }
-    
+
     const validation = createOrderSchema.safeParse(req.body)
     if (!validation.success) {
-      trace('DEBUG', 'transactions', 'createOrder', 'Validação falhou', 0, { errors: validation.error.errors })
-      endTrace('createOrder')
-      return res.status(400).json({ 
-        success: false, 
-        error: validation.error.errors.map(e => e.message).join(', ')
+      logger.warn('[transactions] Payload inválido ao criar ordem', {
+        module: 'transactions',
+        event: 'create_order_validation_failed',
+        userId: req.userId,
+        errors: validation.error.errors,
+      })
+
+      trace('DEBUG', 'transactions', 'createOrder', 'Validação falhou', 0, {
+        errors: validation.error.errors,
+      })
+      endTrace('createOrder', { userId: req.userId, errorFlag: true })
+      return res.status(400).json({
+        success: false,
+        error: validation.error.errors.map((entry) => entry.message).join(', '),
       })
     }
-    
+
     const userId = req.userId!
-    
-    // Buscar saldo disponível
     const currency = type === 'buy' ? 'USDT' : pair.split('/')[0]
     const balance = await prisma.balance.findUnique({
-      where: { userId_currency: { userId, currency } }
+      where: {
+        userId_currency: {
+          userId,
+          currency,
+        },
+      },
     })
-    
-    const estimatedPrice = price || 50000 // Mock: preço atual
+
+    const estimatedPrice = price || 50000
     const totalValue = quantity * estimatedPrice
-    const fee = totalValue * 0.001 // 0.1% de taxa
-    
-    // Validar saldo
+    const fee = totalValue * 0.001
+
     if (type === 'buy' && (!balance || balance.available < totalValue)) {
-      trace('DEBUG', 'transactions', 'createOrder', 'Saldo insuficiente', 0, { currency, required: totalValue, available: balance?.available })
-      endTrace('createOrder')
+      logger.warn('[transactions] Saldo insuficiente para compra', {
+        module: 'transactions',
+        event: 'create_order_insufficient_balance_buy',
+        userId,
+        pair,
+        required: totalValue,
+        available: balance?.available,
+        currency,
+      })
+
+      trace('DEBUG', 'transactions', 'createOrder', 'Saldo insuficiente', 0, {
+        currency,
+        required: totalValue,
+        available: balance?.available,
+      })
+      endTrace('createOrder', { userId, errorFlag: true })
       return res.status(400).json({ success: false, error: 'Saldo insuficiente' })
     }
-    
+
     if (type === 'sell' && (!balance || balance.available < quantity)) {
-      trace('DEBUG', 'transactions', 'createOrder', 'Saldo insuficiente', 0, { currency, required: quantity, available: balance?.available })
-      endTrace('createOrder')
+      logger.warn('[transactions] Saldo insuficiente para venda', {
+        module: 'transactions',
+        event: 'create_order_insufficient_balance_sell',
+        userId,
+        pair,
+        required: quantity,
+        available: balance?.available,
+        currency,
+      })
+
+      trace('DEBUG', 'transactions', 'createOrder', 'Saldo insuficiente', 0, {
+        currency,
+        required: quantity,
+        available: balance?.available,
+      })
+      endTrace('createOrder', { userId, errorFlag: true })
       return res.status(400).json({ success: false, error: 'Saldo insuficiente' })
     }
-    
-    // Criar transação
+
     const transaction = await prisma.transaction.create({
       data: {
         userId,
@@ -197,66 +237,78 @@ export async function createOrder(req: AuthRequest, res: Response) {
         fee,
         status: 'executed',
         profitBrl: null,
-        profitPercent: null
-      }
+        profitPercent: null,
+      },
     })
-    
-    // Atualizar saldos
+
     if (type === 'buy') {
-      // Diminuir USDT
       await prisma.balance.update({
         where: { userId_currency: { userId, currency: 'USDT' } },
-        data: { 
+        data: {
           available: { decrement: totalValue },
           total: { decrement: totalValue },
-          updatedAt: new Date()
-        }
+          updatedAt: new Date(),
+        },
       })
-      
-      // Aumentar moeda comprada
+
       const targetCurrency = pair.split('/')[0]
       await prisma.balance.upsert({
         where: { userId_currency: { userId, currency: targetCurrency } },
-        update: { 
+        update: {
           available: { increment: quantity },
           total: { increment: quantity },
-          updatedAt: new Date()
+          updatedAt: new Date(),
         },
         create: {
           userId,
           currency: targetCurrency,
           available: quantity,
           reserved: 0,
-          total: quantity
-        }
+          total: quantity,
+        },
       })
     } else {
-      // Diminuir moeda vendida
       const targetCurrency = pair.split('/')[0]
       await prisma.balance.update({
         where: { userId_currency: { userId, currency: targetCurrency } },
-        data: { 
+        data: {
           available: { decrement: quantity },
           total: { decrement: quantity },
-          updatedAt: new Date()
-        }
+          updatedAt: new Date(),
+        },
       })
-      
-      // Aumentar USDT
+
       await prisma.balance.update({
         where: { userId_currency: { userId, currency: 'USDT' } },
-        data: { 
+        data: {
           available: { increment: totalValue },
           total: { increment: totalValue },
-          updatedAt: new Date()
-        }
+          updatedAt: new Date(),
+        },
       })
     }
-    
-    logger.info(`Ordem manual criada: ${type} ${quantity} ${pair} por usuário ${userId}`)
-    trace('DEBUG', 'transactions', 'createOrder', 'Ordem criada com sucesso', 0, { transactionId: transaction.id })
-    endTrace('createOrder')
-    
+
+    logger.info('[transactions] Ordem manual criada com sucesso', {
+      module: 'transactions',
+      event: 'manual_order_created',
+      userId,
+      transactionId: transaction.id,
+      order: {
+        pair,
+        type,
+        quantity,
+        orderType,
+        price: estimatedPrice,
+        total: totalValue,
+        fee,
+      },
+    })
+
+    trace('DEBUG', 'transactions', 'createOrder', 'Ordem criada com sucesso', 0, {
+      transactionId: transaction.id,
+      userId,
+    })
+    endTrace('createOrder', { userId })
     return res.json({
       success: true,
       data: {
@@ -269,159 +321,172 @@ export async function createOrder(req: AuthRequest, res: Response) {
         price: transaction.price,
         total: transaction.total,
         fee: transaction.fee,
-        status: transaction.status
-      }
+        status: transaction.status,
+      },
     })
   } catch (error) {
-    logger.error('Erro ao criar ordem:', error)
-    endTrace('createOrder')
+    logger.error('[transactions] Erro ao criar ordem', {
+      module: 'transactions',
+      event: 'create_order_error',
+      userId: req.userId,
+      error,
+    })
+
+    endTrace('createOrder', { userId: req.userId, errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }
 
-// ==============================
-// CANCEL ORDER
-// ==============================
-export async function cancelOrder(req: AuthRequest, res: Response) {
-  const traceId = startTrace(req.userId!, 'cancelOrder', 'transactions')
-  
+export async function cancelOrder(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'cancelOrder', 'transactions')
+
   try {
     const { id } = req.params
     const userId = req.userId!
-    
-    const order = await prisma.transaction.findFirst({
-      where: { id, userId }
-    })
-    
+    const order = await prisma.transaction.findFirst({ where: { id, userId } })
+
     if (!order) {
-      endTrace('cancelOrder')
+      endTrace('cancelOrder', { userId, errorFlag: true })
       return res.status(404).json({ success: false, error: 'Ordem não encontrada' })
     }
-    
+
     if (order.status !== 'pending') {
-      endTrace('cancelOrder')
+      logger.warn('[transactions] Tentativa de cancelar ordem não pendente', {
+        module: 'transactions',
+        event: 'cancel_order_invalid_status',
+        userId,
+        orderId: id,
+        status: order.status,
+      })
+
+      endTrace('cancelOrder', { userId, errorFlag: true })
       return res.status(400).json({ success: false, error: 'Apenas ordens pendentes podem ser canceladas' })
     }
-    
+
     await prisma.transaction.update({
       where: { id },
-      data: { status: 'cancelled' }
+      data: { status: 'cancelled' },
     })
-    
-    logger.info(`Ordem cancelada: ${id}`)
-    trace('DEBUG', 'transactions', 'cancelOrder', 'Ordem cancelada', 0, { orderId: id })
-    endTrace('cancelOrder')
-    
+
+    logger.info('[transactions] Ordem cancelada com sucesso', {
+      module: 'transactions',
+      event: 'order_cancelled',
+      userId,
+      orderId: id,
+    })
+
+    trace('DEBUG', 'transactions', 'cancelOrder', 'Ordem cancelada', 0, { orderId: id, userId })
+    endTrace('cancelOrder', { userId })
     return res.json({ success: true })
   } catch (error) {
-    logger.error('Erro ao cancelar ordem:', error)
-    endTrace('cancelOrder')
+    logger.error('[transactions] Erro ao cancelar ordem', {
+      module: 'transactions',
+      event: 'cancel_order_error',
+      userId: req.userId,
+      orderId: req.params.id,
+      error,
+    })
+
+    endTrace('cancelOrder', { userId: req.userId, errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }
 
-// ==============================
-// GET BALANCE
-// ==============================
-export async function getBalance(req: AuthRequest, res: Response) {
-  const traceId = startTrace(req.userId!, 'getBalance', 'transactions')
-  
+export async function getBalance(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'getBalance', 'transactions')
+
   try {
     const userId = req.userId!
-    
-    const balances = await prisma.balance.findMany({
-      where: { userId }
-    })
-    
+    const balances = await prisma.balance.findMany({ where: { userId } })
     const result = balances.map((balance: any) => ({
       currency: balance.currency,
       available: balance.available,
       reserved: balance.reserved,
-      total: balance.total
+      total: balance.total,
     }))
-    
-    endTrace('getBalance')
-    
-    return res.json({
-      success: true,
-      data: result
-    })
+
+    endTrace('getBalance', { userId })
+    return res.json({ success: true, data: result })
   } catch (error) {
-    logger.error('Erro ao buscar saldo:', error)
-    endTrace('getBalance')
+    logger.error('[transactions] Erro ao buscar saldo', {
+      module: 'transactions',
+      event: 'get_balance_error',
+      userId: req.userId,
+      error,
+    })
+
+    endTrace('getBalance', { userId: req.userId, errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }
 
-// ==============================
-// GET EXCHANGE RATE
-// ==============================
-export async function getExchangeRate(req: AuthRequest, res: Response) {
-  const traceId = startTrace(req.userId!, 'getExchangeRate', 'transactions')
-  
+export async function getExchangeRate(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'getExchangeRate', 'transactions')
+
   try {
     const { from, to } = req.query
-    
-    // Mock de cotações
     const rates: Record<string, number> = {
       'USDT-BRL': 5.85,
       'USDT-EUR': 0.92,
       'USDT-BTC': 0.000016,
       'USDT-ETH': 0.00027,
       'BRL-USDT': 0.171,
-      'EUR-USDT': 1.087
+      'EUR-USDT': 1.087,
     }
-    
+
     const key = `${from}-${to}`
     const rate = rates[key] || 1
-    
-    endTrace('getExchangeRate')
-    
+
+    endTrace('getExchangeRate', { userId: req.userId })
     return res.json({
       success: true,
       data: {
         from,
         to,
         rate,
-        lastUpdate: new Date().toISOString()
-      }
+        lastUpdate: new Date().toISOString(),
+      },
     })
   } catch (error) {
-    logger.error('Erro ao buscar cotação:', error)
-    endTrace('getExchangeRate')
+    logger.error('[transactions] Erro ao buscar cotação', {
+      module: 'transactions',
+      event: 'get_exchange_rate_error',
+      userId: req.userId,
+      error,
+    })
+
+    endTrace('getExchangeRate', { userId: req.userId, errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }
 
-// ==============================
-// GET CANDLES (gráfico)
-// ==============================
-export async function getCandles(req: AuthRequest, res: Response) {
-  const traceId = startTrace(req.userId!, 'getCandles', 'transactions')
-  
+export async function getCandles(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'getCandles', 'transactions')
+
   try {
-    const { pair, period, limit } = req.query
-    const limitNum = parseInt(limit as string) || 100
-    
-    // Mock de dados de velas
-    const candles = Array.from({ length: limitNum }, (_, i) => ({
-      timestamp: new Date(Date.now() - (limitNum - i) * 3600000).toISOString(),
+    const { limit } = req.query
+    const limitNum = parseInt(limit as string, 10) || 100
+
+    const candles = Array.from({ length: limitNum }, (_, index) => ({
+      timestamp: new Date(Date.now() - (limitNum - index) * 3600000).toISOString(),
       open: 50000 + Math.random() * 10000,
       high: 52000 + Math.random() * 10000,
       low: 48000 + Math.random() * 10000,
       close: 51000 + Math.random() * 10000,
-      volume: 1000 + Math.random() * 5000
+      volume: 1000 + Math.random() * 5000,
     }))
-    
-    endTrace('getCandles')
-    
-    return res.json({
-      success: true,
-      data: candles
-    })
+
+    endTrace('getCandles', { userId: req.userId })
+    return res.json({ success: true, data: candles })
   } catch (error) {
-    logger.error('Erro ao buscar velas:', error)
-    endTrace('getCandles')
+    logger.error('[transactions] Erro ao buscar velas', {
+      module: 'transactions',
+      event: 'get_candles_error',
+      userId: req.userId,
+      error,
+    })
+
+    endTrace('getCandles', { userId: req.userId, errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }
