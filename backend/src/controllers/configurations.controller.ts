@@ -46,16 +46,20 @@ const configurationsSchema = z.object({
 // ==============================
 export async function getConfigurations(req: AuthRequest, res: Response) {
   const traceId = startTrace(req.userId!, 'getConfigurations', 'configurations')
-  
+
   try {
+    trace('DEBUG', 'configurations', 'getConfigurations', 'Buscando configurações do usuário', 0)
+
     const userId = req.userId!
-    
+
     let config = await prisma.configuration.findUnique({
       where: { userId }
     })
-    
+
     // Se não existir, criar configurações padrão
     if (!config) {
+      trace('DEBUG', 'configurations', 'getConfigurations', 'Configurações não encontradas, criando padrão', 0)
+
       const defaultStrategies = JSON.stringify([
         {
           id: "strategy_scalper",
@@ -120,7 +124,7 @@ export async function getConfigurations(req: AuthRequest, res: Response) {
           }
         }
       ])
-      
+
       config = await prisma.configuration.create({
         data: {
           userId,
@@ -142,8 +146,10 @@ export async function getConfigurations(req: AuthRequest, res: Response) {
           strategies: defaultStrategies
         }
       })
+
+      trace('DEBUG', 'configurations', 'getConfigurations', 'Configurações padrão criadas', 0)
     }
-    
+
     const response = {
       exchangeApiKeys: {
         exchange: config.exchange,
@@ -172,15 +178,17 @@ export async function getConfigurations(req: AuthRequest, res: Response) {
         strategies: JSON.parse(config.strategies)
       }
     }
-    
+
+    trace('DEBUG', 'configurations', 'getConfigurations', 'Configurações retornadas com sucesso', 0)
     endTrace('getConfigurations')
-    
+
     return res.json({
       success: true,
       data: response
     })
   } catch (error) {
     logger.error('Erro ao buscar configurações:', error)
+    trace('DEBUG', 'configurations', 'getConfigurations', `Erro: ${error}`, 0, { errorFlag: true })
     endTrace('getConfigurations')
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
@@ -191,21 +199,25 @@ export async function getConfigurations(req: AuthRequest, res: Response) {
 // ==============================
 export async function putConfigurations(req: AuthRequest, res: Response) {
   const traceId = startTrace(req.userId!, 'putConfigurations', 'configurations')
-  
+
   try {
+    trace('DEBUG', 'configurations', 'putConfigurations', 'Iniciando salvamento de configurações', 0)
+
     const validation = configurationsSchema.safeParse(req.body)
     if (!validation.success) {
       trace('DEBUG', 'configurations', 'putConfigurations', 'Validação falhou', 0, { errors: validation.error.errors })
       endTrace('putConfigurations')
-      return res.status(400).json({ 
-        success: false, 
+      return res.status(400).json({
+        success: false,
         error: validation.error.errors.map(e => e.message).join(', ')
       })
     }
-    
+
+    trace('DEBUG', 'configurations', 'putConfigurations', 'Dados validados com sucesso', 0)
+
     const { exchangeApiKeys, botParameters } = validation.data
     const userId = req.userId!
-    
+
     await prisma.configuration.upsert({
       where: { userId },
       update: {
@@ -247,14 +259,15 @@ export async function putConfigurations(req: AuthRequest, res: Response) {
         strategies: JSON.stringify(botParameters.strategies)
       }
     })
-    
+
+    trace('DEBUG', 'configurations', 'putConfigurations', 'Configurações salvas no banco com sucesso', 0)
     logger.info(`Configurações salvas para usuário: ${userId}`)
-    trace('DEBUG', 'configurations', 'putConfigurations', 'Configurações salvas', 0)
     endTrace('putConfigurations')
-    
+
     return res.json({ success: true })
   } catch (error) {
     logger.error('Erro ao salvar configurações:', error)
+    trace('DEBUG', 'configurations', 'putConfigurations', `Erro ao salvar: ${error}`, 0, { errorFlag: true })
     endTrace('putConfigurations')
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
@@ -265,41 +278,42 @@ export async function putConfigurations(req: AuthRequest, res: Response) {
 // ==============================
 export async function testConnection(req: AuthRequest, res: Response) {
   const traceId = startTrace(req.userId!, 'testConnection', 'configurations')
-  
+
   try {
     const { exchange, apiKey, secretKey } = req.body
-    
-    // Mock de teste de conexão
-    // Em produção, chamaria a API da exchange real
-    
+
+    trace('DEBUG', 'configurations', 'testConnection', `Testando conexão com ${exchange}`, 0)
+
     if (!apiKey || !secretKey) {
+      trace('DEBUG', 'configurations', 'testConnection', 'Chaves não fornecidas', 0)
       endTrace('testConnection')
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Chaves de API não fornecidas' 
+      return res.status(400).json({
+        success: false,
+        message: 'Chaves de API não fornecidas'
       })
     }
-    
+
     // Simular validação
     const isValid = apiKey.length > 10 && secretKey.length > 10
-    
+
     if (isValid) {
       trace('DEBUG', 'configurations', 'testConnection', 'Conexão bem sucedida', 0, { exchange })
       endTrace('testConnection')
-      return res.json({ 
-        success: true, 
-        message: 'Conexão estabelecida com sucesso!' 
+      return res.json({
+        success: true,
+        message: 'Conexão estabelecida com sucesso!'
       })
     } else {
-      trace('DEBUG', 'configurations', 'testConnection', 'Conexão falhou', 0, { exchange })
+      trace('DEBUG', 'configurations', 'testConnection', 'Conexão falhou - chaves inválidas', 0, { exchange })
       endTrace('testConnection')
-      return res.status(401).json({ 
-        success: false, 
-        message: 'Chaves de API inválidas' 
+      return res.status(401).json({
+        success: false,
+        message: 'Chaves de API inválidas'
       })
     }
   } catch (error) {
     logger.error('Erro ao testar conexão:', error)
+    trace('DEBUG', 'configurations', 'testConnection', `Erro: ${error}`, 0, { errorFlag: true })
     endTrace('testConnection')
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
@@ -310,23 +324,26 @@ export async function testConnection(req: AuthRequest, res: Response) {
 // ==============================
 export async function getExchangePairs(req: AuthRequest, res: Response) {
   const traceId = startTrace(req.userId!, 'getExchangePairs', 'configurations')
-  
+
   try {
-    // Mock de pares disponíveis
+    trace('DEBUG', 'configurations', 'getExchangePairs', 'Buscando pares disponíveis', 0)
+
     const pairs = [
       "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
       "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "DOT/USDT", "LINK/USDT",
       "MATIC/USDT", "UNI/USDT", "ATOM/USDT", "LTC/USDT", "ETC/USDT"
     ]
-    
+
+    trace('DEBUG', 'configurations', 'getExchangePairs', `${pairs.length} pares encontrados`, 0)
     endTrace('getExchangePairs')
-    
+
     return res.json({
       success: true,
       data: pairs
     })
   } catch (error) {
     logger.error('Erro ao buscar pares:', error)
+    trace('DEBUG', 'configurations', 'getExchangePairs', `Erro: ${error}`, 0, { errorFlag: true })
     endTrace('getExchangePairs')
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
