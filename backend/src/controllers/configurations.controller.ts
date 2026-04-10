@@ -4,6 +4,8 @@ import { z } from 'zod'
 import { prisma } from '../config/database'
 import { AuthRequest } from '../middleware/auth.middleware'
 import { logger } from '../utils/logger'
+import { getAvailablePairs, testBinanceConnection } from '../services/binance.service'
+import { ExternalApiError } from '../services/external-http.service'
 import { endTrace, startTrace, trace } from '../utils/tracer'
 
 const configurationsSchema = z.object({
@@ -367,7 +369,7 @@ export async function testConnection(req: AuthRequest, res: Response): Promise<R
   startTrace(req.userId!, 'testConnection', 'configurations')
 
   try {
-    const { exchange, apiKey, secretKey } = req.body
+    const { exchange, apiKey, secretKey } = req.body as { exchange?: string; apiKey?: string; secretKey?: string }
     trace('DEBUG', 'configurations', 'testConnection', `Testando conexão com ${exchange}`, 0)
 
     if (!apiKey || !secretKey) {
@@ -386,40 +388,32 @@ export async function testConnection(req: AuthRequest, res: Response): Promise<R
       })
     }
 
-    const isValid = apiKey.length > 10 && secretKey.length > 10
-
-    if (isValid) {
-      logger.info('[configurations] Teste de conexão bem sucedido', {
-        module: 'configurations',
-        event: 'configuration_test_connection_success',
-        userId: req.userId,
-        exchange,
-        apiKey: redactKey(apiKey),
-        secretKey: redactKey(secretKey),
-      })
-
-      trace('DEBUG', 'configurations', 'testConnection', 'Conexão bem sucedida', 0, { exchange })
-      endTrace('testConnection', { userId: req.userId })
-      return res.json({
-        success: true,
-        message: 'Conexão estabelecida com sucesso!',
+    if ((exchange ?? 'binance') !== 'binance') {
+      endTrace('testConnection', { userId: req.userId, errorFlag: true })
+      return res.status(400).json({
+        success: false,
+        message: 'Apenas Binance está suportada nesta integração externa',
       })
     }
 
-    logger.warn('[configurations] Teste de conexão falhou', {
+    const connection = await testBinanceConnection(apiKey, secretKey)
+
+    logger.info('[configurations] Teste de conexão bem sucedido', {
       module: 'configurations',
-      event: 'configuration_test_connection_failed',
+      event: 'configuration_test_connection_success',
       userId: req.userId,
       exchange,
       apiKey: redactKey(apiKey),
       secretKey: redactKey(secretKey),
+      connection,
     })
 
-    trace('DEBUG', 'configurations', 'testConnection', 'Conexão falhou - chaves inválidas', 0, { exchange })
-    endTrace('testConnection', { userId: req.userId, errorFlag: true })
-    return res.status(401).json({
-      success: false,
-      message: 'Chaves de API inválidas',
+    trace('DEBUG', 'configurations', 'testConnection', 'Conexão bem sucedida', 0, { exchange })
+    endTrace('testConnection', { userId: req.userId })
+    return res.json({
+      success: true,
+      message: 'Conexão estabelecida com sucesso!',
+      data: connection,
     })
   } catch (error) {
     logger.error('[configurations] Erro ao testar conexão', {
@@ -432,6 +426,11 @@ export async function testConnection(req: AuthRequest, res: Response): Promise<R
     trace('DEBUG', 'configurations', 'testConnection', `Erro: ${error}`, 0, { errorFlag: true })
     endTrace('testConnection', { userId: req.userId, errorFlag: true })
 
+    if (error instanceof ExternalApiError) {
+      const status = error.status === 401 || error.code === -2014 ? 401 : 502
+      return res.status(status).json({ success: false, message: error.message, code: error.code })
+    }
+
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }
@@ -442,11 +441,7 @@ export async function getExchangePairs(req: AuthRequest, res: Response): Promise
   try {
     trace('DEBUG', 'configurations', 'getExchangePairs', 'Buscando pares disponíveis', 0)
 
-    const pairs = [
-      'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT',
-      'DOGE/USDT', 'ADA/USDT', 'AVAX/USDT', 'DOT/USDT', 'LINK/USDT',
-      'MATIC/USDT', 'UNI/USDT', 'ATOM/USDT', 'LTC/USDT', 'ETC/USDT',
-    ]
+    const pairs = await getAvailablePairs()
 
     trace('DEBUG', 'configurations', 'getExchangePairs', `${pairs.length} pares encontrados`, 0)
     endTrace('getExchangePairs', { userId: req.userId })
@@ -465,6 +460,10 @@ export async function getExchangePairs(req: AuthRequest, res: Response): Promise
 
     trace('DEBUG', 'configurations', 'getExchangePairs', `Erro: ${error}`, 0, { errorFlag: true })
     endTrace('getExchangePairs', { userId: req.userId, errorFlag: true })
+
+    if (error instanceof ExternalApiError) {
+      return res.status(502).json({ success: false, error: error.message, code: error.code })
+    }
 
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }

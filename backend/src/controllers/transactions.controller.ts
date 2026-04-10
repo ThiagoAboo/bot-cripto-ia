@@ -3,6 +3,10 @@ import { z } from 'zod'
 
 import { prisma } from '../config/database'
 import { AuthRequest } from '../middleware/auth.middleware'
+import { getExchangeRate as getExternalExchangeRate } from '../services/awesomeapi.service'
+import { ExternalApiError } from '../services/external-http.service'
+import { getAccountBalances, getCandles as getBinanceCandles, getTickerPrice } from '../services/binance.service'
+import { sendWebhook } from '../services/webhook.service'
 import { logger } from '../utils/logger'
 import { endTrace, startTrace, trace } from '../utils/tracer'
 
@@ -34,6 +38,48 @@ const orderFiltersSchema = z.object({
   endDate: z.string().optional(),
   search: z.string().optional(),
 })
+
+async function getUserExchangeCredentials(userId: string): Promise<{ apiKey: string; secretKey: string } | null> {
+  const configuration = await prisma.configuration.findUnique({
+    where: { userId },
+    select: { apiKey: true, secretKey: true, exchange: true },
+  })
+
+  if (!configuration || configuration.exchange !== 'binance' || !configuration.apiKey || !configuration.secretKey) {
+    return null
+  }
+
+  return {
+    apiKey: configuration.apiKey,
+    secretKey: configuration.secretKey,
+  }
+}
+
+async function syncExternalBalances(userId: string, balances: Array<{ currency: string; available: number; reserved: number; total: number }>): Promise<void> {
+  await Promise.all(
+    balances.map((balance) => prisma.balance.upsert({
+      where: {
+        userId_currency: {
+          userId,
+          currency: balance.currency,
+        },
+      },
+      update: {
+        available: balance.available,
+        reserved: balance.reserved,
+        total: balance.total,
+        updatedAt: new Date(),
+      },
+      create: {
+        userId,
+        currency: balance.currency,
+        available: balance.available,
+        reserved: balance.reserved,
+        total: balance.total,
+      },
+    })),
+  )
+}
 
 export async function getOrders(req: AuthRequest, res: Response): Promise<Response> {
   startTrace(req.userId!, 'getOrders', 'transactions')
@@ -243,7 +289,8 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
       },
     })
 
-    const estimatedPrice = price || 50000
+    const marketPrice = !price ? await getTickerPrice(pair).catch(() => null) : null
+    const estimatedPrice = price || marketPrice || 50000
     const totalValue = quantity * estimatedPrice
     const fee = totalValue * 0.001
 
@@ -349,6 +396,25 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
         },
       })
     }
+
+    await sendWebhook('order.executed', {
+      pair,
+      type,
+      quantity,
+      price: estimatedPrice,
+      total: totalValue,
+      fee,
+      status: 'executed',
+    }).catch((webhookError) => {
+      logger.warn('[transactions] Falha ao enviar webhook de ordem executada', {
+        module: 'transactions',
+        event: 'create_order_webhook_failed',
+        userId,
+        transactionId: transaction.id,
+        error: webhookError,
+        skipPersistence: true,
+      })
+    })
 
     logger.info('[transactions] Ordem manual criada com sucesso', {
       module: 'transactions',
@@ -459,6 +525,16 @@ export async function getBalance(req: AuthRequest, res: Response): Promise<Respo
 
   try {
     const userId = req.userId!
+    const credentials = await getUserExchangeCredentials(userId)
+
+    if (credentials) {
+      const balances = await getAccountBalances(credentials.apiKey, credentials.secretKey)
+      await syncExternalBalances(userId, balances)
+
+      endTrace('getBalance', { userId })
+      return res.json({ success: true, data: balances })
+    }
+
     const balances = await prisma.balance.findMany({ where: { userId } })
     const result = balances.map((balance: any) => ({
       currency: balance.currency,
@@ -478,6 +554,11 @@ export async function getBalance(req: AuthRequest, res: Response): Promise<Respo
     })
 
     endTrace('getBalance', { userId: req.userId, errorFlag: true })
+
+    if (error instanceof ExternalApiError) {
+      return res.status(502).json({ success: false, error: error.message, code: error.code })
+    }
+
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }
@@ -486,27 +567,25 @@ export async function getExchangeRate(req: AuthRequest, res: Response): Promise<
   startTrace(req.userId!, 'getExchangeRate', 'transactions')
 
   try {
-    const { from, to } = req.query
-    const rates: Record<string, number> = {
-      'USDT-BRL': 5.85,
-      'USDT-EUR': 0.92,
-      'USDT-BTC': 0.000016,
-      'USDT-ETH': 0.00027,
-      'BRL-USDT': 0.171,
-      'EUR-USDT': 1.087,
+    const from = String(req.query.from || '').trim().toUpperCase()
+    const to = String(req.query.to || '').trim().toUpperCase()
+
+    if (!from || !to) {
+      endTrace('getExchangeRate', { userId: req.userId, errorFlag: true })
+      return res.status(400).json({ success: false, error: 'Parâmetros from e to são obrigatórios' })
     }
 
-    const key = `${from}-${to}`
-    const rate = rates[key] || 1
+    const rate = await getExternalExchangeRate(from, to)
 
     endTrace('getExchangeRate', { userId: req.userId })
     return res.json({
       success: true,
       data: {
-        from,
-        to,
-        rate,
-        lastUpdate: new Date().toISOString(),
+        from: rate.from,
+        to: rate.to,
+        rate: rate.rate,
+        pctChange: rate.pctChange,
+        lastUpdate: rate.lastUpdate,
       },
     })
   } catch (error) {
@@ -518,6 +597,11 @@ export async function getExchangeRate(req: AuthRequest, res: Response): Promise<
     })
 
     endTrace('getExchangeRate', { userId: req.userId, errorFlag: true })
+
+    if (error instanceof ExternalApiError) {
+      return res.status(502).json({ success: false, error: error.message, code: error.code })
+    }
+
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }
@@ -526,17 +610,16 @@ export async function getCandles(req: AuthRequest, res: Response): Promise<Respo
   startTrace(req.userId!, 'getCandles', 'transactions')
 
   try {
-    const { limit } = req.query
-    const limitNum = parseInt(limit as string, 10) || 100
+    const pair = String(req.query.pair || '').trim().toUpperCase()
+    const period = String(req.query.period || '').trim() || '1h'
+    const limitNum = Math.max(1, Math.min(1000, parseInt(String(req.query.limit || '100'), 10) || 100))
 
-    const candles = Array.from({ length: limitNum }, (_, index) => ({
-      timestamp: new Date(Date.now() - (limitNum - index) * 3600000).toISOString(),
-      open: 50000 + Math.random() * 10000,
-      high: 52000 + Math.random() * 10000,
-      low: 48000 + Math.random() * 10000,
-      close: 51000 + Math.random() * 10000,
-      volume: 1000 + Math.random() * 5000,
-    }))
+    if (!pair) {
+      endTrace('getCandles', { userId: req.userId, errorFlag: true })
+      return res.status(400).json({ success: false, error: 'Parâmetro pair é obrigatório' })
+    }
+
+    const candles = await getBinanceCandles(pair, period, limitNum)
 
     endTrace('getCandles', { userId: req.userId })
     return res.json({ success: true, data: candles })
@@ -549,6 +632,12 @@ export async function getCandles(req: AuthRequest, res: Response): Promise<Respo
     })
 
     endTrace('getCandles', { userId: req.userId, errorFlag: true })
+
+    if (error instanceof ExternalApiError) {
+      const status = /intervalo inválido/i.test(error.message) ? 400 : 502
+      return res.status(status).json({ success: false, error: error.message, code: error.code })
+    }
+
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }

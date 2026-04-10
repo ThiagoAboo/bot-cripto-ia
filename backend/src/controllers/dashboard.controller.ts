@@ -2,8 +2,23 @@ import { Response } from 'express'
 
 import { prisma } from '../config/database'
 import { AuthRequest } from '../middleware/auth.middleware'
+import { getCurrencyRateToBrl } from '../services/market-valuation.service'
 import { logger } from '../utils/logger'
 import { endTrace, startTrace } from '../utils/tracer'
+
+async function getBalancesWithRates(balances: Array<{ currency: string; available: number }>): Promise<{ rateMap: Record<string, number>; usdtBrlRate: number }> {
+  const uniqueCurrencies = Array.from(new Set(balances.map((balance) => balance.currency)))
+  const rateEntries = await Promise.all(uniqueCurrencies.map(async (currency) => {
+    const rate = await getCurrencyRateToBrl(currency).catch(() => 0)
+    return [currency, rate] as const
+  }))
+
+  const rateMap = Object.fromEntries(rateEntries)
+  return {
+    rateMap,
+    usdtBrlRate: rateMap.USDT ?? 0,
+  }
+}
 
 export async function getTotalBalance(req: AuthRequest, res: Response): Promise<Response> {
   startTrace(req.userId!, 'getTotalBalance', 'dashboard')
@@ -27,12 +42,10 @@ export async function getTotalBalance(req: AuthRequest, res: Response): Promise<
       take: 100,
     })
 
+    const { rateMap, usdtBrlRate } = await getBalancesWithRates(balances)
     const totalBrl = balances.reduce((sum: number, balance: any) => {
-      if (balance.currency === 'USDT') return sum + balance.available * 5.85
-      if (balance.currency === 'BTC') return sum + balance.available * 350000
-      if (balance.currency === 'ETH') return sum + balance.available * 18000
-      if (balance.currency === 'SOL') return sum + balance.available * 80
-      return sum
+      const rate = rateMap[balance.currency] ?? 0
+      return sum + (balance.available * rate)
     }, 0)
 
     const dailyProfitBrl = recentTransactions.reduce((sum: number, transaction: any) => sum + (transaction.profitBrl || 0), 0)
@@ -54,7 +67,7 @@ export async function getTotalBalance(req: AuthRequest, res: Response): Promise<
         totalPnlBrl,
         totalPnlPercent,
         hitRate,
-        usdtBrlRate: 5.85,
+        usdtBrlRate,
         lastUpdate: new Date().toISOString(),
       },
     })
@@ -78,6 +91,7 @@ export async function getCurrenciesBalance(req: AuthRequest, res: Response): Pro
     const userId = req.userId!
     const balances = await prisma.balance.findMany({ where: { userId } })
     const currencies = ['BTC', 'ETH', 'SOL', 'USDT']
+    const { rateMap, usdtBrlRate } = await getBalancesWithRates(balances)
     const result = []
 
     for (const currency of currencies) {
@@ -119,12 +133,7 @@ export async function getCurrenciesBalance(req: AuthRequest, res: Response): Pro
       const winningTrades = last100Transactions.filter((transaction: any) => (transaction.profitBrl || 0) > 0).length
       const hitRate = last100Transactions.length > 0 ? (winningTrades / last100Transactions.length) * 100 : 0
 
-      let balanceBrl = 0
-      if (currency === 'USDT') balanceBrl = balance.available * 5.85
-      else if (currency === 'BTC') balanceBrl = balance.available * 350000
-      else if (currency === 'ETH') balanceBrl = balance.available * 18000
-      else if (currency === 'SOL') balanceBrl = balance.available * 80
-
+      const balanceBrl = balance.available * (rateMap[currency] ?? 0)
       const previousBalanceBrl = balanceBrl - dailyProfitBrl
       const dailyProfitPercent = previousBalanceBrl > 0 ? (dailyProfitBrl / previousBalanceBrl) * 100 : 0
       const initialBalanceBrl = balanceBrl - totalPnlBrl
@@ -138,7 +147,7 @@ export async function getCurrenciesBalance(req: AuthRequest, res: Response): Pro
         totalPnlBrl,
         totalPnlPercent,
         hitRate,
-        usdtBrlRate: 5.85,
+        usdtBrlRate,
       })
     }
 

@@ -1,0 +1,1093 @@
+================================================================================
+DOCUMENTAÇÃO COMPLETA DE INTEGRAÇÕES COM APIs EXTERNAS
+BOT CRYPTO IA - VERSÃO DETALHADA
+================================================================================
+
+ÍNDICE
+===============================================================================
+1. VISÃO GERAL DAS INTEGRAÇÕES
+2. BINANCE API - INTEGRAÇÃO COMPLETA
+   2.1 Configuração e Credenciais
+   2.2 Endpoints Utilizados
+   2.3 Estrutura das Respostas
+   2.4 Autenticação e Assinatura
+   2.5 Rate Limiting e Controles
+   2.6 Tratamento de Erros
+3. AWESOMEAPI - COTAÇÃO DE MOEDAS
+   3.1 Configuração
+   3.2 Endpoints e Frequência
+   3.3 Cache de Cotações
+4. WEBHOOKS - NOTIFICAÇÕES EXTERNAS
+   4.1 Eventos Disparados
+   4.2 Formato dos Payloads
+   4.3 Configuração
+5. INTEGRAÇÃO COM FRONTEND
+   5.1 Mapeamento de Chamadas Frontend -> API Externa
+   5.2 Fluxo de Dados por Tela
+   5.3 Sincronização e Cache
+6. CARGA DE DADOS PARA TREINAMENTO DE IA
+   6.1 Coleta de Dados Históricos
+   6.2 Indicadores Técnicos Calculados
+   6.3 Formato do Dataset
+   6.4 Pipeline de Dados
+7. VARIÁVEIS DE AMBIENTE
+8. TRATAMENTO DE ERROS E RETRY
+9. DIAGRAMA DE FLUXO COMPLETO
+10. EXEMPLOS DE IMPLEMENTAÇÃO
+
+
+1. VISÃO GERAL DAS INTEGRAÇÕES
+===============================================================================
+
+O backend do Bot Crypto IA se integra com APIs externas para:
+
+| API           | Finalidade                                    | Frequência         | Prioridade |
+|---------------|-----------------------------------------------|--------------------|------------|
+| Binance API   | Preços em tempo real, velas, ordens, saldos   | 5s - 30s           | Alta       |
+| AwesomeAPI    | Cotação USD/BRL, EUR/BRL, BTC/BRL             | 60s                | Média      |
+| Webhook       | Notificações externas (Discord, Telegram)     | Por evento         | Baixa      |
+
+
+2. BINANCE API - INTEGRAÇÃO COMPLETA
+===============================================================================
+
+2.1 CONFIGURAÇÃO E CREDENCIAIS
+-------------------------------------------------------------------------------
+
+Endpoint Base: https://api.binance.com
+Documentação: https://binance-docs.github.io/apidocs/spot/en/
+
+Credenciais necessárias (armazenadas no banco - tabela Configuration):
+- BINANCE_API_KEY
+- BINANCE_SECRET_KEY
+
+As chaves são criptografadas no banco de dados e descriptografadas apenas quando
+necessárias para chamadas à API.
+
+2.2 ENDPOINTS UTILIZADOS
+-------------------------------------------------------------------------------
+
+| Método | Endpoint                    | Descrição                     | Frequência        | Cache |
+|--------|-----------------------------|-------------------------------|-------------------|-------|
+| GET    | /api/v3/ticker/price        | Preço atual do par            | A cada 5s         | 5s    |
+| GET    | /api/v3/klines              | Dados de velas (candlestick)  | Sob demanda       | 5min  |
+| GET    | /api/v3/account             | Informações da conta/saldos   | A cada 30s        | 30s   |
+| POST   | /api/v3/order               | Executar ordem                | Sob demanda       | Não   |
+| DELETE | /api/v3/order               | Cancelar ordem                | Sob demanda       | Não   |
+| GET    | /api/v3/exchangeInfo        | Informações de pares          | A cada 1h         | 1h    |
+| GET    | /api/v3/time                | Sincronização de tempo        | A cada 1h         | 1h    |
+
+2.3 ESTRUTURA DAS RESPOSTAS
+-------------------------------------------------------------------------------
+
+2.3.1 GET /api/v3/ticker/price?symbol=BTCUSDT
+
+Resposta:
+{
+  "symbol": "BTCUSDT",
+  "price": "62345.67"
+}
+
+Mapeamento para Frontend:
+- price → usado em: Dashboard (preço atual), Transações (gráfico), Bot (decisões)
+
+2.3.2 GET /api/v3/klines?symbol=BTCUSDT&interval=1h&limit=100
+
+Resposta:
+[
+  [
+    1701619200000,  // Open time (timestamp)
+    "62345.67",     // Open price
+    "62500.00",     // High price
+    "62200.00",     // Low price
+    "62400.00",     // Close price
+    "123.45",       // Volume
+    1701622799999,  // Close time
+    "1234567.89",   // Quote asset volume
+    100,            // Number of trades
+    "12.34",        // Taker buy base volume
+    "123456.78",    // Taker buy quote volume
+    "0"             // Ignore
+  ]
+]
+
+Mapeamento para Frontend:
+- timestamp → usado no gráfico candlestick
+- open/high/low/close → usado no gráfico candlestick
+- volume → usado no gráfico (opcional)
+
+2.3.3 POST /api/v3/order
+
+Requisição (ordem LIMIT):
+{
+  "symbol": "BTCUSDT",
+  "side": "BUY",
+  "type": "LIMIT",
+  "quantity": "0.001",
+  "price": "62000",
+  "timeInForce": "GTC",
+  "timestamp": 1701619200000,
+  "recvWindow": 5000
+}
+
+Resposta (sucesso):
+{
+  "symbol": "BTCUSDT",
+  "orderId": 123456789,
+  "clientOrderId": "abc123",
+  "transactTime": 1701619200000,
+  "price": "62000.00",
+  "origQty": "0.00100000",
+  "executedQty": "0.00100000",
+  "cummulativeQuoteQty": "62.00000000",
+  "status": "FILLED",
+  "timeInForce": "GTC",
+  "type": "LIMIT",
+  "side": "BUY"
+}
+
+Resposta (erro):
+{
+  "code": -2010,
+  "msg": "Account has insufficient balance for requested action."
+}
+
+2.4 AUTENTICAÇÃO E ASSINATURA
+-------------------------------------------------------------------------------
+
+Todas as requisições autenticadas devem incluir:
+1. Header: X-MBX-APIKEY = API_KEY
+2. Parâmetros: timestamp e signature
+
+Geração da signature:
+signature = HMAC_SHA256(queryString, SECRET_KEY)
+
+Exemplo em TypeScript:
+-------------------------------------------------------------------------------
+import crypto from 'crypto'
+
+function generateSignature(queryString: string, secretKey: string): string {
+  return crypto
+    .createHmac('sha256', secretKey)
+    .update(queryString)
+    .digest('hex')
+}
+
+async function binanceRequest(
+  endpoint: string,
+  method: 'GET' | 'POST' | 'DELETE',
+  params: Record<string, any>,
+  apiKey: string,
+  secretKey: string
+) {
+  const timestamp = Date.now()
+  const queryParams = { ...params, timestamp, recvWindow: 5000 }
+  const queryString = new URLSearchParams(queryParams).toString()
+  const signature = generateSignature(queryString, secretKey)
+  
+  const url = `https://api.binance.com${endpoint}?${queryString}&signature=${signature}`
+  
+  const response = await fetch(url, {
+    method,
+    headers: { 'X-MBX-APIKEY': apiKey }
+  })
+  
+  return response.json()
+}
+-------------------------------------------------------------------------------
+
+2.5 RATE LIMITING E CONTROLES
+-------------------------------------------------------------------------------
+
+Limites da Binance:
+| Tipo de requisição | Limite | Janela   | Ação em caso de excesso |
+|--------------------|--------|----------|--------------------------|
+| Weight total       | 1200   | 1 minuto | Aguardar e retentar      |
+| Ordens             | 50     | 10s      | Delay de 10s             |
+| WebSocket          | 1024   | 5 minutos| Fechar e reconectar      |
+
+Implementação do Rate Limiter:
+-------------------------------------------------------------------------------
+class BinanceRateLimiter {
+  private requests: number[] = []
+  private orderRequests: number[] = []
+  private readonly maxWeight = 1200
+  private readonly maxOrders = 50
+  private readonly windowMs = 60000
+  private readonly orderWindowMs = 10000
+
+  async waitForWeight(weight: number = 1): Promise<void> {
+    const now = Date.now()
+    this.requests = this.requests.filter(t => now - t < this.windowMs)
+    
+    let currentWeight = this.requests.length
+    if (currentWeight + weight > this.maxWeight) {
+      const oldest = this.requests[0]
+      const waitTime = this.windowMs - (now - oldest)
+      await new Promise(resolve => setTimeout(resolve, waitTime))
+      return this.waitForWeight(weight)
+    }
+    
+    for (let i = 0; i < weight; i++) {
+      this.requests.push(now)
+    }
+  }
+
+  async waitForOrder(): Promise<void> {
+    const now = Date.now()
+    this.orderRequests = this.orderRequests.filter(t => now - t < this.orderWindowMs)
+    
+    if (this.orderRequests.length >= this.maxOrders) {
+      const oldest = this.orderRequests[0]
+      const waitTime = this.orderWindowMs - (now - oldest)
+      await new Promise(resolve => setTimeout(resolve, waitTime))
+      return this.waitForOrder()
+    }
+    
+    this.orderRequests.push(now)
+  }
+}
+-------------------------------------------------------------------------------
+
+2.6 TRATAMENTO DE ERROS
+-------------------------------------------------------------------------------
+
+| Código | Erro                         | Ação do Sistema                          |
+|--------|------------------------------|------------------------------------------|
+| -1000  | Parâmetro inválido           | Validar parâmetros antes de enviar       |
+| -1003  | Rate limit excedido          | Aguardar e tentar novamente (backoff)    |
+| -1021  | Timestamp inválido           | Sincronizar tempo com servidor           |
+| -1022  | Assinatura inválida          | Regenerar signature                      |
+| -2010  | Saldo insuficiente           | Notificar frontend, não tentar novamente |
+| -2011  | Ordem não encontrada         | Verificar ID e tentar novamente          |
+| -2013  | Ordem não existe             | Retornar erro ao frontend                |
+| -2014  | API Key inválida             | Notificar usuário para reconfigurar      |
+
+
+3. AWESOMEAPI - COTAÇÃO DE MOEDAS
+===============================================================================
+
+3.1 CONFIGURAÇÃO
+-------------------------------------------------------------------------------
+
+Endpoint Base: https://economia.awesomeapi.com.br
+Documentação: https://docs.awesomeapi.com.br/api-de-moedas
+
+Credenciais: Nenhuma (API pública)
+
+3.2 ENDPOINTS E FREQUÊNCIA
+-------------------------------------------------------------------------------
+
+| Método | Endpoint                    | Descrição          | Frequência | Cache |
+|--------|-----------------------------|--------------------|------------|-------|
+| GET    | /json/last/USDT-BRL         | Cotação USDT/BRL   | A cada 60s | 60s   |
+| GET    | /json/last/EUR-BRL          | Cotação EUR/BRL    | A cada 60s | 60s   |
+| GET    | /json/last/BTC-BRL          | Cotação BTC/BRL    | A cada 60s | 60s   |
+| GET    | /json/last/ETH-BRL          | Cotação ETH/BRL    | A cada 60s | 60s   |
+
+3.3 ESTRUTURA DA RESPOSTA
+-------------------------------------------------------------------------------
+
+GET /json/last/USDT-BRL
+
+Resposta:
+{
+  "USDTBRL": {
+    "code": "USDT",
+    "codein": "BRL",
+    "name": "Tether USD/Brazilian Real",
+    "high": "5.95",
+    "low": "5.80",
+    "varBid": "0.05",
+    "pctChange": "0.86",
+    "bid": "5.85",        // Preço de compra (usado pelo sistema)
+    "ask": "5.86",        // Preço de venda
+    "timestamp": "1701619200",
+    "create_date": "2024-12-03 10:00:00"
+  }
+}
+
+Mapeamento para Frontend:
+- bid → usado no Dashboard (cotação USDT/BRL)
+- pctChange → usado para indicar variação
+
+3.4 CACHE DE COTAÇÕES
+-------------------------------------------------------------------------------
+
+Implementação do Cache:
+-------------------------------------------------------------------------------
+interface RateCache {
+  rate: number
+  timestamp: number
+  pctChange: number
+}
+
+const rateCache = new Map<string, RateCache>()
+const CACHE_DURATION = 60000 // 1 minuto
+
+async function getExchangeRate(from: string, to: string): Promise<RateCache> {
+  const cacheKey = `${from}-${to}`
+  const cached = rateCache.get(cacheKey)
+  
+  if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+    return cached
+  }
+  
+  const rate = await fetchRateFromAPI(from, to)
+  rateCache.set(cacheKey, rate)
+  
+  return rate
+}
+
+async function fetchRateFromAPI(from: string, to: string): Promise<RateCache> {
+  const pair = `${from}-${to}`
+  const url = `https://economia.awesomeapi.com.br/json/last/${pair}`
+  
+  const response = await fetch(url)
+  const data = await response.json()
+  
+  const key = `${from}${to}`
+  return {
+    rate: parseFloat(data[key].bid),
+    pctChange: parseFloat(data[key].pctChange),
+    timestamp: Date.now()
+  }
+}
+-------------------------------------------------------------------------------
+
+
+4. WEBHOOKS - NOTIFICAÇÕES EXTERNAS
+===============================================================================
+
+4.1 EVENTOS DISPARADOS
+-------------------------------------------------------------------------------
+
+| Evento                    | Disparo                         | Payload                          |
+|---------------------------|---------------------------------|----------------------------------|
+| order.executed            | Ordem executada com sucesso     | Objeto Order completo            |
+| order.failed              | Falha na execução da ordem      | { orderId, error, reason }       |
+| bot.started               | Bot iniciado manual/automático  | { botId, botName, timestamp }    |
+| bot.stopped               | Bot pausado/parado              | { botId, botName, timestamp }    |
+| bot.error                 | Erro na execução do bot         | { botId, error, stack }          |
+| training.completed        | Treinamento concluído           | { sessionId, metrics, modelUrl } |
+| training.failed           | Treinamento falhou              | { sessionId, error }             |
+| balance.low               | Saldo abaixo do limite          | { currency, available, threshold }|
+| price.alert               | Preço atingiu limite configurado| { pair, price, threshold }       |
+
+4.2 FORMATO DOS PAYLOADS
+-------------------------------------------------------------------------------
+
+Payload padrão:
+{
+  "event": "order.executed",
+  "timestamp": "2024-12-03T10:00:00Z",
+  "environment": "production",
+  "data": { ... }
+}
+
+Exemplo order.executed:
+{
+  "event": "order.executed",
+  "timestamp": "2024-12-03T10:00:00Z",
+  "data": {
+    "id": "tx_123",
+    "pair": "BTC/USDT",
+    "type": "buy",
+    "quantity": 0.05,
+    "price": 62000,
+    "total": 3100,
+    "fee": 3.10,
+    "status": "executed"
+  }
+}
+
+4.3 CONFIGURAÇÃO
+-------------------------------------------------------------------------------
+
+Variáveis de ambiente:
+WEBHOOK_URL=https://your-webhook-url.com/endpoint
+WEBHOOK_ENABLED=true
+WEBHOOK_RETRY_ATTEMPTS=3
+WEBHOOK_RETRY_DELAY=1000
+
+Implementação com retry:
+-------------------------------------------------------------------------------
+async function sendWebhook(event: string, data: any, retries: number = 3) {
+  if (!process.env.WEBHOOK_ENABLED || process.env.WEBHOOK_ENABLED !== 'true') {
+    return
+  }
+
+  const url = process.env.WEBHOOK_URL
+  if (!url) return
+
+  const payload = {
+    event,
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV,
+    data
+  }
+
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      
+      if (response.ok) {
+        logger.info(`Webhook enviado: ${event}`)
+        return
+      }
+    } catch (error) {
+      logger.error(`Webhook falhou (tentativa ${i + 1}):`, error)
+      await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, i)))
+    }
+  }
+  
+  logger.error(`Webhook falhou após ${retries} tentativas: ${event}`)
+}
+-------------------------------------------------------------------------------
+
+
+5. INTEGRAÇÃO COM FRONTEND
+===============================================================================
+
+5.1 MAPEAMENTO DE CHAMADAS FRONTEND -> API EXTERNA
+-------------------------------------------------------------------------------
+
+| Tela/Frontend              | Chamada Frontend              | API Externa                    | Frequência      |
+|----------------------------|-------------------------------|--------------------------------|-----------------|
+| Dashboard                  | GET /api/dashboard/*          | Binance (preços)               | A cada 10s      |
+| Dashboard                  | GET /api/dashboard/performance| Binance (histórico)            | Sob demanda     |
+| Configurações              | POST /api/configurations/test | Binance (test connection)      | Sob demanda     |
+| Transações                 | GET /api/exchange/candles     | Binance (klines)               | A cada 5s       |
+| Transações                 | GET /api/exchange/rate        | AwesomeAPI                     | A cada 60s      |
+| Transações                 | POST /api/orders              | Binance (order)                | Sob demanda     |
+| Treinamento IA             | POST /api/training/sessions   | Binance (dados históricos)     | Sob demanda     |
+| Treinamento IA             | GET /api/training/sessions    | Binance (dados históricos)     | Sob demanda     |
+
+5.2 FLUXO DE DADOS POR TELA
+-------------------------------------------------------------------------------
+
+5.2.1 DASHBOARD
+
+1. Frontend chama GET /api/dashboard/total-balance
+2. Backend:
+   - Busca saldos no banco (tabela Balance)
+   - Chama Binance API para cotação atual
+   - Calcula totais convertidos para BRL
+3. Retorna para Frontend:
+   - totalBrl
+   - dailyProfitBrl
+   - totalPnlBrl
+   - hitRate
+   - usdtBrlRate
+
+Tempo de resposta esperado: < 500ms
+Cache: Dados de cotação cacheados por 5s
+
+5.2.2 GRÁFICO DE PERFORMANCE
+
+1. Frontend chama GET /api/dashboard/performance?period=7d
+2. Backend:
+   - Busca histórico de saldos do banco (tabela BalanceHistory)
+   - Se não houver dados suficientes, calcula a partir de transações
+3. Retorna para Frontend:
+   - Array de { timestamp, balance }
+
+Tempo de resposta esperado: < 200ms
+
+5.2.3 TRANSAÇÕES - GRÁFICO CANDLESTICK
+
+1. Frontend chama GET /api/exchange/candles?pair=BTC/USDT&period=1h&limit=100
+2. Backend:
+   - Verifica cache (5 minutos)
+   - Se cache expirado, chama Binance API
+   - Converte dados para formato do frontend
+3. Retorna para Frontend:
+   - Array de { timestamp, open, high, low, close, volume }
+
+Tempo de resposta esperado: < 300ms (com cache), < 1000ms (sem cache)
+Atualização: Frontend faz polling a cada 5 segundos
+
+5.2.4 TRANSAÇÕES - ORDEM MANUAL
+
+1. Frontend chama POST /api/orders
+2. Backend:
+   - Valida saldo no banco
+   - Reserva saldo (atualiza Balance.reserved)
+   - Chama Binance API para executar ordem
+   - Atualiza saldos (Balance.available e Balance.total)
+   - Registra transação (Transaction)
+   - Emite WebSocket order:created
+3. Retorna para Frontend:
+   - Objeto Transaction
+
+Tempo de resposta esperado: < 2000ms
+
+5.2.5 TREINAMENTO IA - COLETA DE DADOS
+
+1. Frontend chama POST /api/training/sessions
+2. Backend:
+   - Inicia job em background (Bull/Redis)
+   - Coleta dados da Binance API:
+     - Período: config.trainingPeriod
+     - Pares: config.includedPairs
+     - Timeframe: config.timeframe
+   - Calcula indicadores técnicos
+   - Prepara dataset
+   - Inicia treinamento
+3. Atualiza frontend via WebSocket:
+   - training:metrics (a cada época)
+   - training:log (a cada evento)
+   - training:status (quando muda)
+
+Tempo de coleta de dados: depende do período (pode levar minutos)
+
+5.3 SINCRONIZAÇÃO E CACHE
+-------------------------------------------------------------------------------
+
+5.3.1 ESTRATÉGIA DE CACHE
+
+| Dados                    | TTL      | Invalidação                     |
+|--------------------------|----------|---------------------------------|
+| Preços (ticker)          | 5s       | Atualização automática          |
+| Cotações (AwesomeAPI)    | 60s      | Atualização automática          |
+| Candles                  | 5min     | Nova chamada à API              |
+| Pares disponíveis        | 1h       | Nova chamada à API              |
+| Saldos                   | 30s      | Sincronização com exchange      |
+| Configurações            | 1min     | Invalidação após PUT            |
+
+5.3.2 SINCRONIZAÇÃO DE SALDOS
+
+Regras:
+- Sincronização automática a cada 30 segundos
+- Sincronização manual via POST /api/balance/sync
+- Divergência > 0.1% gera alerta (Log WARN)
+
+Fluxo de sincronização:
+1. Buscar saldos reais da Binance
+2. Comparar com saldos no banco
+3. Se divergente:
+   - Atualizar banco
+   - Registrar log WARN
+   - Emitir WebSocket para frontend
+
+5.3.3 WEBHOOKS DE ATUALIZAÇÃO (WebSocket)
+
+Eventos emitidos para o frontend:
+
+| Evento                    | Disparo                         | Dados                              |
+|---------------------------|---------------------------------|------------------------------------|
+| dashboard:update          | A cada 5-10s (timer)            | { totalBalance, currenciesBalance, botsStatus } |
+| order:created             | Ordem criada                    | Transaction                        |
+| order:updated             | Status da ordem mudou           | { id, status }                     |
+| training:metrics          | Época de treinamento concluída  | { sessionId, metrics }             |
+| training:log              | Log de treinamento gerado       | { sessionId, log }                 |
+| training:status           | Status da sessão mudou          | { sessionId, status }              |
+| balance:updated           | Saldo atualizado                | { currency, available, total }     |
+
+
+6. CARGA DE DADOS PARA TREINAMENTO DE IA
+===============================================================================
+
+6.1 COLETA DE DADOS HISTÓRICOS
+-------------------------------------------------------------------------------
+
+Fonte: Binance API (GET /api/v3/klines)
+
+Parâmetros de coleta:
+- Pares: config.includedPairs (ex: ["BTC/USDT", "ETH/USDT"])
+- Período: config.trainingPeriod (ex: 90 dias)
+- Timeframe: config.timeframe (ex: 1h, 4h, 1d)
+- Indicadores: config.indicators (ex: ["RSI", "MACD", "SMA"])
+
+Volume de dados estimado:
+- 1h timeframe: 24 pontos/dia x 90 dias = 2.160 pontos por par
+- 4h timeframe: 6 pontos/dia x 90 dias = 540 pontos por par
+- 1d timeframe: 90 pontos
+
+6.2 INDICADORES TÉCNICOS CALCULADOS
+-------------------------------------------------------------------------------
+
+Os seguintes indicadores são calculados a partir dos dados brutos:
+
+| Indicador | Fórmula                                    | Período padrão |
+|-----------|--------------------------------------------|----------------|
+| SMA       | Média móvel simples                        | 7, 14, 21, 50  |
+| EMA       | Média móvel exponencial                    | 7, 14, 21, 50  |
+| RSI       | 100 - (100 / (1 + RS))                     | 14             |
+| MACD      | EMA(12) - EMA(26), com sinal EMA(9)        | 12, 26, 9      |
+| BB        | Bandas de Bollinger (média ± 2*desvio)     | 20, 2          |
+| Volume    | Volume negociado                           | -              |
+| ATR       | Average True Range                         | 14             |
+| OBV       | On-Balance Volume                          | -              |
+| StochRSI  | (RSI - min(RSI)) / (max(RSI) - min(RSI))   | 14             |
+
+6.3 FORMATO DO DATASET
+-------------------------------------------------------------------------------
+
+Dataset gerado para treinamento (formato CSV):
+
+timestamp,open,high,low,close,volume,SMA_7,SMA_14,EMA_7,RSI,MACD,BB_upper,BB_lower
+2024-01-01 00:00:00,62345,62500,62200,62400,1234.5,62300,62250,62350,65.2,12.3,63000,61800
+2024-01-01 01:00:00,62400,62600,62300,62500,1456.7,62350,62300,62400,68.4,15.6,63200,62000
+...
+
+Colunas:
+- timestamp: Data/hora do candle
+- open, high, low, close, volume: Dados brutos
+- SMA_7, SMA_14: Médias móveis
+- EMA_7: Média exponencial
+- RSI: Índice de força relativa
+- MACD: Moving Average Convergence Divergence
+- BB_upper, BB_lower: Bandas de Bollinger
+
+6.4 PIPELINE DE DADOS
+-------------------------------------------------------------------------------
+
+Pipeline completo para treinamento:
+
+1. Coleta de dados brutos da Binance
+   │
+   ▼
+2. Validação e limpeza
+   - Remover dados faltantes
+   - Interpolar gaps pequenos (até 3 candles)
+   - Remover outliers (valores > 3 desvios padrão)
+   │
+   ▼
+3. Cálculo de indicadores técnicos
+   - SMA, EMA, RSI, MACD, Bollinger Bands, etc.
+   │
+   ▼
+4. Normalização
+   - Min-Max scaling para cada feature
+   - Range: [0, 1] ou [-1, 1]
+   │
+   ▼
+5. Criação de sequências (para LSTM)
+   - Tamanho da sequência: config.hyperparameters.windowSize (padrão: 60)
+   - Passo: 1
+   │
+   ▼
+6. Divisão treino/validação
+   - Treino: 80% dos dados (mais antigos)
+   - Validação: 20% dos dados (mais recentes)
+   │
+   ▼
+7. Dataset pronto para treinamento
+
+Exemplo de criação de sequências (LSTM):
+-------------------------------------------------------------------------------
+function createSequences(data: number[][], windowSize: number): { X: number[][][], y: number[][] } {
+  const X = []
+  const y = []
+  
+  for (let i = windowSize; i < data.length; i++) {
+    X.push(data.slice(i - windowSize, i))
+    y.push(data[i])
+  }
+  
+  return { X, y }
+}
+-------------------------------------------------------------------------------
+
+
+7. VARIÁVEIS DE AMBIENTE
+===============================================================================
+
+# ==================== BINANCE ====================
+BINANCE_API_KEY=your_api_key_here
+BINANCE_SECRET_KEY=your_secret_key_here
+BINANCE_BASE_URL=https://api.binance.com
+BINANCE_TESTNET=false
+BINANCE_TIMEOUT=30000
+BINANCE_RECV_WINDOW=5000
+
+# ==================== AWESOMEAPI ====================
+AWESOMEAPI_BASE_URL=https://economia.awesomeapi.com.br
+AWESOMEAPI_TIMEOUT=5000
+
+# ==================== WEBHOOK ====================
+WEBHOOK_URL=https://your-webhook-url.com/endpoint
+WEBHOOK_ENABLED=false
+WEBHOOK_RETRY_ATTEMPTS=3
+WEBHOOK_RETRY_DELAY=1000
+
+# ==================== CACHE ====================
+CACHE_TTL_PRICE=5000           # 5 segundos
+CACHE_TTL_RATE=60000           # 1 minuto
+CACHE_TTL_CANDLES=300000       # 5 minutos
+CACHE_TTL_PAIRS=3600000        # 1 hora
+
+
+8. TRATAMENTO DE ERROS E RETRY
+===============================================================================
+
+8.1 RETRY COM BACKOFF EXPONENCIAL
+-------------------------------------------------------------------------------
+
+Implementação:
+-------------------------------------------------------------------------------
+async function fetchWithRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries: number = 3,
+  baseDelay: number = 1000
+): Promise<T> {
+  let lastError: Error | null = null
+  
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn()
+    } catch (error) {
+      lastError = error as Error
+      const delay = baseDelay * Math.pow(2, i)
+      logger.warn(`Tentativa ${i + 1}/${maxRetries} falhou. Retentando em ${delay}ms`)
+      await new Promise(resolve => setTimeout(resolve, delay))
+    }
+  }
+  
+  throw lastError
+}
+-------------------------------------------------------------------------------
+
+Uso:
+const price = await fetchWithRetry(() => getCurrentPrice(pair))
+
+8.2 TIMEOUT
+-------------------------------------------------------------------------------
+
+Implementação:
+-------------------------------------------------------------------------------
+async function fetchWithTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number = 30000
+): Promise<T> {
+  let timeoutId: NodeJS.Timeout
+  
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`Timeout após ${timeoutMs}ms`))
+    }, timeoutMs)
+  })
+  
+  try {
+    const result = await Promise.race([promise, timeoutPromise])
+    clearTimeout(timeoutId)
+    return result as T
+  } catch (error) {
+    clearTimeout(timeoutId)
+    throw error
+  }
+}
+-------------------------------------------------------------------------------
+
+8.3 CIRCUIT BREAKER
+-------------------------------------------------------------------------------
+
+Implementação para prevenir chamadas excessivas a APIs com falha:
+-------------------------------------------------------------------------------
+class CircuitBreaker {
+  private failures: number = 0
+  private lastFailureTime: number = 0
+  private state: 'CLOSED' | 'OPEN' | 'HALF_OPEN' = 'CLOSED'
+  private readonly failureThreshold: number = 5
+  private readonly timeoutMs: number = 60000
+
+  async execute<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.state === 'OPEN') {
+      if (Date.now() - this.lastFailureTime > this.timeoutMs) {
+        this.state = 'HALF_OPEN'
+        logger.info('Circuit breaker: HALF_OPEN')
+      } else {
+        throw new Error('Circuit breaker está OPEN')
+      }
+    }
+    
+    try {
+      const result = await fn()
+      if (this.state === 'HALF_OPEN') {
+        this.state = 'CLOSED'
+        this.failures = 0
+        logger.info('Circuit breaker: CLOSED')
+      }
+      return result
+    } catch (error) {
+      this.failures++
+      this.lastFailureTime = Date.now()
+      
+      if (this.failures >= this.failureThreshold) {
+        this.state = 'OPEN'
+        logger.warn('Circuit breaker: OPEN')
+      }
+      throw error
+    }
+  }
+}
+-------------------------------------------------------------------------------
+
+
+9. DIAGRAMA DE FLUXO COMPLETO
+===============================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              FRONTEND (REACT)                               │
+│  Dashboard │ Configurações │ Treinamento │ Transações │ Logs │ Perfil      │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           BACKEND (NODE.js)                                 │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐           │
+│  │ Controllers │ │  Services   │ │  WebSocket  │ │   Cache     │           │
+│  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘           │
+└─────────────────────────────────────────────────────────────────────────────┘
+          │                       │                       │
+          ▼                       ▼                       ▼
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   BINANCE API   │     │  AWESOMEAPI     │     │    WEBHOOK      │
+├─────────────────┤     ├─────────────────┤     ├─────────────────┤
+│ • Preços (5s)   │     │ • USD/BRL (60s) │     │ • Discord       │
+│ • Candles       │     │ • EUR/BRL (60s) │     │ • Telegram      │
+│ • Ordens        │     │ • BTC/BRL (60s) │     │ • Slack         │
+│ • Conta/Saldos  │     │                 │     │ • Custom URL    │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+          │                       │                       │
+          └───────────────────────┼───────────────────────┘
+                                  │
+                                  ▼
+                    ┌─────────────────────────────┐
+                    │      TREINAMENTO IA          │
+                    │  • Coleta de dados históricos│
+                    │  • Cálculo de indicadores    │
+                    │  • Criação de dataset        │
+                    │  • Treinamento do modelo     │
+                    └─────────────────────────────┘
+
+
+10. EXEMPLOS DE IMPLEMENTAÇÃO
+===============================================================================
+
+10.1 SERVIÇO DE PREÇOS (price.service.ts)
+-------------------------------------------------------------------------------
+import { logger } from '../utils/logger'
+import { traceSync, generateTraceId } from '../utils/tracer'
+
+interface PriceCache {
+  price: number
+  timestamp: number
+}
+
+const priceCache = new Map<string, PriceCache>()
+const PRICE_CACHE_DURATION = 5000 // 5 segundos
+
+export async function getCurrentPrice(
+  userId: string,
+  pair: string,
+  apiKey: string,
+  secretKey: string
+): Promise<number> {
+  const traceId = generateTraceId()
+  traceSync(userId, 'DEBUG', 'price', 'getCurrentPrice', `Buscando preço para ${pair}`, 0, { traceId })
+  
+  // Verificar cache
+  const cached = priceCache.get(pair)
+  if (cached && Date.now() - cached.timestamp < PRICE_CACHE_DURATION) {
+    traceSync(userId, 'DEBUG', 'price', 'getCurrentPrice', `Cache hit para ${pair}`, 0, { traceId })
+    return cached.price
+  }
+  
+  try {
+    const symbol = pair.replace('/', '')
+    const url = `${process.env.BINANCE_BASE_URL}/api/v3/ticker/price?symbol=${symbol}`
+    
+    const response = await fetch(url)
+    const data = await response.json()
+    const price = parseFloat(data.price)
+    
+    // Atualizar cache
+    priceCache.set(pair, { price, timestamp: Date.now() })
+    
+    traceSync(userId, 'DEBUG', 'price', 'getCurrentPrice', `Preço ${pair}: ${price}`, 0, { traceId })
+    return price
+  } catch (error) {
+    traceSync(userId, 'DEBUG', 'price', 'getCurrentPrice', `Erro: ${error}`, 0, { traceId, errorFlag: true })
+    throw error
+  }
+}
+
+10.2 SERVIÇO DE EXECUÇÃO DE ORDENS (order.service.ts)
+-------------------------------------------------------------------------------
+import crypto from 'crypto'
+import { binanceLimiter, orderLimiter } from '../utils/rateLimiter'
+
+export async function executeOrder(
+  userId: string,
+  pair: string,
+  side: 'BUY' | 'SELL',
+  quantity: number,
+  price: number | undefined,
+  apiKey: string,
+  secretKey: string
+): Promise<OrderResult> {
+  const traceId = generateTraceId()
+  traceSync(userId, 'TRACE', 'order', 'executeOrder', `Executando ${side} ${quantity} ${pair}`, 0, { traceId })
+  
+  // Aguardar rate limit
+  await binanceLimiter.waitForWeight(1)
+  if (price) {
+    await orderLimiter.waitForOrder()
+  }
+  
+  const symbol = pair.replace('/', '')
+  const timestamp = Date.now()
+  
+  let params: Record<string, any> = {
+    symbol,
+    side,
+    type: price ? 'LIMIT' : 'MARKET',
+    quantity: quantity.toString(),
+    timestamp,
+    recvWindow: 5000
+  }
+  
+  if (price) {
+    params.price = price.toString()
+    params.timeInForce = 'GTC'
+  }
+  
+  const queryString = new URLSearchParams(params).toString()
+  const signature = crypto
+    .createHmac('sha256', secretKey)
+    .update(queryString)
+    .digest('hex')
+  
+  const url = `${process.env.BINANCE_BASE_URL}/api/v3/order?${queryString}&signature=${signature}`
+  
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'X-MBX-APIKEY': apiKey }
+  })
+  
+  const result = await response.json()
+  
+  if (response.ok) {
+    traceSync(userId, 'DEBUG', 'order', 'executeOrder', `Ordem executada: ${result.orderId}`, 0, { traceId })
+    
+    // Enviar webhook
+    await sendWebhook('order.executed', {
+      orderId: result.orderId,
+      pair,
+      side,
+      quantity,
+      price,
+      status: 'FILLED'
+    })
+    
+    return { success: true, orderId: result.orderId, executedQty: parseFloat(result.executedQty) }
+  } else {
+    traceSync(userId, 'DEBUG', 'order', 'executeOrder', `Erro: ${result.msg}`, 0, { traceId, errorFlag: true })
+    
+    // Enviar webhook de erro
+    await sendWebhook('order.failed', {
+      pair,
+      side,
+      quantity,
+      price,
+      error: result.msg,
+      code: result.code
+    })
+    
+    return { success: false, error: result.msg, code: result.code }
+  }
+}
+
+10.3 SERVIÇO DE COLETA DE DADOS PARA TREINAMENTO (dataCollector.service.ts)
+-------------------------------------------------------------------------------
+export async function collectTrainingData(
+  sessionId: string,
+  config: TrainingConfig
+): Promise<Dataset> {
+  const allData = []
+  
+  for (const pair of config.includedPairs) {
+    logger.info(`Coletando dados para ${pair}`)
+    
+    const candles = await fetchHistoricalCandles(
+      pair,
+      config.timeframe,
+      config.trainingPeriod.startDate,
+      config.trainingPeriod.endDate
+    )
+    
+    // Calcular indicadores
+    const withIndicators = calculateIndicators(candles, config.indicators)
+    
+    allData.push(...withIndicators)
+  }
+  
+  // Normalizar dados
+  const normalized = normalizeData(allData)
+  
+  // Criar sequências para LSTM
+  const sequences = createSequences(normalized, config.hyperparameters.windowSize)
+  
+  // Dividir treino/validação
+  const splitIndex = Math.floor(sequences.X.length * 0.8)
+  
+  const dataset = {
+    trainX: sequences.X.slice(0, splitIndex),
+    trainY: sequences.y.slice(0, splitIndex),
+    valX: sequences.X.slice(splitIndex),
+    valY: sequences.y.slice(splitIndex)
+  }
+  
+  // Salvar dataset (opcional)
+  await saveDataset(sessionId, dataset)
+  
+  return dataset
+}
+
+async function fetchHistoricalCandles(
+  pair: string,
+  interval: string,
+  startDate: string,
+  endDate: string
+): Promise<CandleData[]> {
+  const symbol = pair.replace('/', '')
+  const startTime = new Date(startDate).getTime()
+  const endTime = new Date(endDate).getTime()
+  
+  let allCandles: CandleData[] = []
+  let currentStart = startTime
+  
+  while (currentStart < endTime) {
+    const url = `${process.env.BINANCE_BASE_URL}/api/v3/klines?symbol=${symbol}&interval=${interval}&startTime=${currentStart}&limit=1000`
+    
+    const response = await fetch(url)
+    const data = await response.json()
+    
+    if (data.length === 0) break
+    
+    const candles = data.map((candle: any) => ({
+      timestamp: new Date(candle[0]),
+      open: parseFloat(candle[1]),
+      high: parseFloat(candle[2]),
+      low: parseFloat(candle[3]),
+      close: parseFloat(candle[4]),
+      volume: parseFloat(candle[5])
+    }))
+    
+    allCandles = [...allCandles, ...candles]
+    currentStart = data[data.length - 1][0] + 1
+  }
+  
+  return allCandles
+}
+-------------------------------------------------------------------------------
+ 
+================================================================================
+FIM DA DOCUMENTAÇÃO DE INTEGRAÇÕES COM APIs EXTERNAS
+================================================================================

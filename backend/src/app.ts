@@ -180,6 +180,7 @@ app.get('/api/dashboard/performance', authMiddleware, dashboardController.getPer
 app.get('/api/configurations', authMiddleware, configurationsController.getConfigurations)
 app.put('/api/configurations', authMiddleware, configurationsController.putConfigurations)
 app.post('/api/configurations/test-connection', authMiddleware, configurationsController.testConnection)
+app.post('/api/configurations/test', authMiddleware, configurationsController.testConnection)
 app.get('/api/configurations/exchange-pairs', authMiddleware, configurationsController.getExchangePairs)
 app.get('/api/exchange/pairs', authMiddleware, configurationsController.getExchangePairs)
 
