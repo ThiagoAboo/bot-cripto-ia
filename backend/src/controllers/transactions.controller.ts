@@ -6,6 +6,8 @@ import { AuthRequest } from '../middleware/auth.middleware'
 import { getExchangeRate as getExternalExchangeRate } from '../services/awesomeapi.service'
 import { ExternalApiError } from '../services/external-http.service'
 import { getAccountBalances, getCandles as getBinanceCandles, getTickerPrice } from '../services/binance.service'
+import { getCurrencyRateToBrl } from '../services/market-valuation.service'
+import { recordBalanceHistorySnapshot } from '../services/portfolio.service'
 import { sendWebhook } from '../services/webhook.service'
 import { logger } from '../utils/logger'
 import { endTrace, startTrace, trace } from '../utils/tracer'
@@ -38,6 +40,122 @@ const orderFiltersSchema = z.object({
   endDate: z.string().optional(),
   search: z.string().optional(),
 })
+
+const ORDER_FEE_RATE = 0.001
+const FIFO_EPSILON = 1e-8
+
+interface FifoLot {
+  remainingQuantity: number
+  unitCostInQuote: number
+}
+
+function getPairCurrencies(pair: string): { baseCurrency: string; quoteCurrency: string } {
+  const [baseCurrency, quoteCurrency = 'USDT'] = pair
+    .split('/')
+    .map((value) => value.trim().toUpperCase())
+
+  return {
+    baseCurrency,
+    quoteCurrency,
+  }
+}
+
+function consumeFifoLots(lots: FifoLot[], quantityToConsume: number): number {
+  let remainingQuantity = quantityToConsume
+
+  while (remainingQuantity > FIFO_EPSILON) {
+    const currentLot = lots[0]
+    if (!currentLot) {
+      break
+    }
+
+    const consumedQuantity = Math.min(currentLot.remainingQuantity, remainingQuantity)
+    currentLot.remainingQuantity -= consumedQuantity
+    remainingQuantity -= consumedQuantity
+
+    if (currentLot.remainingQuantity <= FIFO_EPSILON) {
+      lots.shift()
+    }
+  }
+
+  return remainingQuantity
+}
+
+async function calculateSellProfitUsingFifo(
+  userId: string,
+  pair: string,
+  sellQuantity: number,
+  sellPrice: number,
+  sellFee: number,
+): Promise<{ profitBrl: number; profitPercent: number }> {
+  const historicalTransactions = await prisma.transaction.findMany({
+    where: {
+      userId,
+      pair,
+      status: 'executed',
+    },
+    orderBy: [
+      { date: 'asc' },
+      { createdAt: 'asc' },
+    ],
+    select: {
+      type: true,
+      quantity: true,
+      total: true,
+      fee: true,
+    },
+  })
+
+  const lots: FifoLot[] = []
+
+  for (const transaction of historicalTransactions) {
+    if (transaction.quantity <= FIFO_EPSILON) {
+      continue
+    }
+
+    if (transaction.type === 'buy') {
+      lots.push({
+        remainingQuantity: transaction.quantity,
+        unitCostInQuote: (transaction.total + transaction.fee) / transaction.quantity,
+      })
+      continue
+    }
+
+    const remainingFromHistoricalSell = consumeFifoLots(lots, transaction.quantity)
+    if (remainingFromHistoricalSell > FIFO_EPSILON) {
+      throw new Error('Histórico inconsistente para cálculo FIFO')
+    }
+  }
+
+  let remainingSellQuantity = sellQuantity
+  let costBasisInQuote = 0
+
+  while (remainingSellQuantity > FIFO_EPSILON) {
+    const currentLot = lots[0]
+    if (!currentLot) {
+      throw new Error('Não há compras suficientes no histórico para calcular o lucro da venda')
+    }
+
+    const allocatedQuantity = Math.min(currentLot.remainingQuantity, remainingSellQuantity)
+    costBasisInQuote += allocatedQuantity * currentLot.unitCostInQuote
+    currentLot.remainingQuantity -= allocatedQuantity
+    remainingSellQuantity -= allocatedQuantity
+
+    if (currentLot.remainingQuantity <= FIFO_EPSILON) {
+      lots.shift()
+    }
+  }
+
+  const { quoteCurrency } = getPairCurrencies(pair)
+  const quoteToBrlRate = await getCurrencyRateToBrl(quoteCurrency)
+  const netSellValueInQuote = (sellQuantity * sellPrice) - sellFee
+  const profitInQuote = netSellValueInQuote - costBasisInQuote
+
+  return {
+    profitBrl: profitInQuote * quoteToBrlRate,
+    profitPercent: costBasisInQuote > 0 ? (profitInQuote / costBasisInQuote) * 100 : 0,
+  }
+}
 
 async function getUserExchangeCredentials(userId: string): Promise<{ apiKey: string; secretKey: string } | null> {
   const configuration = await prisma.configuration.findUnique({
@@ -279,7 +397,8 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
     }
 
     const userId = req.userId!
-    const currency = type === 'buy' ? 'USDT' : pair.split('/')[0]
+    const { baseCurrency, quoteCurrency } = getPairCurrencies(pair)
+    const currency = type === 'buy' ? quoteCurrency : baseCurrency
     const balance = await prisma.balance.findUnique({
       where: {
         userId_currency: {
@@ -292,22 +411,22 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
     const marketPrice = !price ? await getTickerPrice(pair).catch(() => null) : null
     const estimatedPrice = price || marketPrice || 50000
     const totalValue = quantity * estimatedPrice
-    const fee = totalValue * 0.001
+    const fee = totalValue * ORDER_FEE_RATE
 
-    if (type === 'buy' && (!balance || balance.available < totalValue)) {
+    if (type === 'buy' && (!balance || balance.available < totalValue + fee)) {
       logger.warn('[transactions] Saldo insuficiente para compra', {
         module: 'transactions',
         event: 'create_order_insufficient_balance_buy',
         userId,
         pair,
-        required: totalValue,
+        required: totalValue + fee,
         available: balance?.available,
         currency,
       })
 
       trace('DEBUG', 'transactions', 'createOrder', 'Saldo insuficiente', 0, {
         currency,
-        required: totalValue,
+        required: totalValue + fee,
         available: balance?.available,
       })
       endTrace('createOrder', { userId, errorFlag: true })
@@ -334,6 +453,32 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
       return res.status(400).json({ success: false, error: 'Saldo insuficiente' })
     }
 
+    let profitBrl: number | null = null
+    let profitPercent: number | null = null
+
+    if (type === 'sell') {
+      try {
+        const sellProfit = await calculateSellProfitUsingFifo(userId, pair, quantity, estimatedPrice, fee)
+        profitBrl = sellProfit.profitBrl
+        profitPercent = sellProfit.profitPercent
+      } catch (fifoError) {
+        logger.warn('[transactions] Falha ao calcular lucro FIFO da venda', {
+          module: 'transactions',
+          event: 'create_order_fifo_failed',
+          userId,
+          pair,
+          quantity,
+          error: fifoError,
+        })
+
+        endTrace('createOrder', { userId, errorFlag: true })
+        return res.status(400).json({
+          success: false,
+          error: fifoError instanceof Error ? fifoError.message : 'Não foi possível calcular o lucro da venda',
+        })
+      }
+    }
+
     const transaction = await prisma.transaction.create({
       data: {
         userId,
@@ -345,24 +490,23 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
         total: totalValue,
         fee,
         status: 'executed',
-        profitBrl: null,
-        profitPercent: null,
+        profitBrl,
+        profitPercent,
       },
     })
 
     if (type === 'buy') {
       await prisma.balance.update({
-        where: { userId_currency: { userId, currency: 'USDT' } },
+        where: { userId_currency: { userId, currency: quoteCurrency } },
         data: {
-          available: { decrement: totalValue },
-          total: { decrement: totalValue },
+          available: { decrement: totalValue + fee },
+          total: { decrement: totalValue + fee },
           updatedAt: new Date(),
         },
       })
 
-      const targetCurrency = pair.split('/')[0]
       await prisma.balance.upsert({
-        where: { userId_currency: { userId, currency: targetCurrency } },
+        where: { userId_currency: { userId, currency: baseCurrency } },
         update: {
           available: { increment: quantity },
           total: { increment: quantity },
@@ -370,16 +514,15 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
         },
         create: {
           userId,
-          currency: targetCurrency,
+          currency: baseCurrency,
           available: quantity,
           reserved: 0,
           total: quantity,
         },
       })
     } else {
-      const targetCurrency = pair.split('/')[0]
       await prisma.balance.update({
-        where: { userId_currency: { userId, currency: targetCurrency } },
+        where: { userId_currency: { userId, currency: baseCurrency } },
         data: {
           available: { decrement: quantity },
           total: { decrement: quantity },
@@ -387,15 +530,33 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
         },
       })
 
-      await prisma.balance.update({
-        where: { userId_currency: { userId, currency: 'USDT' } },
-        data: {
-          available: { increment: totalValue },
-          total: { increment: totalValue },
+      await prisma.balance.upsert({
+        where: { userId_currency: { userId, currency: quoteCurrency } },
+        update: {
+          available: { increment: totalValue - fee },
+          total: { increment: totalValue - fee },
           updatedAt: new Date(),
+        },
+        create: {
+          userId,
+          currency: quoteCurrency,
+          available: totalValue - fee,
+          reserved: 0,
+          total: totalValue - fee,
         },
       })
     }
+
+    await recordBalanceHistorySnapshot(userId).catch((snapshotError) => {
+      logger.warn('[transactions] Falha ao registrar snapshot após ordem', {
+        module: 'transactions',
+        event: 'balance_snapshot_order_failed',
+        userId,
+        transactionId: transaction.id,
+        error: snapshotError,
+        skipPersistence: true,
+      })
+    })
 
     await sendWebhook('order.executed', {
       pair,
@@ -405,6 +566,8 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
       total: totalValue,
       fee,
       status: 'executed',
+      profitBrl,
+      profitPercent,
     }).catch((webhookError) => {
       logger.warn('[transactions] Falha ao enviar webhook de ordem executada', {
         module: 'transactions',
@@ -429,6 +592,8 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
         price: estimatedPrice,
         total: totalValue,
         fee,
+        profitBrl,
+        profitPercent,
       },
     })
 
@@ -450,6 +615,8 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
         total: transaction.total,
         fee: transaction.fee,
         status: transaction.status,
+        profitBrl: transaction.profitBrl,
+        profitPercent: transaction.profitPercent,
       },
     })
   } catch (error) {
@@ -530,6 +697,18 @@ export async function getBalance(req: AuthRequest, res: Response): Promise<Respo
     if (credentials) {
       const balances = await getAccountBalances(credentials.apiKey, credentials.secretKey)
       await syncExternalBalances(userId, balances)
+      await recordBalanceHistorySnapshot(userId, balances.map((balance) => ({
+        currency: balance.currency,
+        available: balance.available,
+      }))).catch((snapshotError) => {
+        logger.warn('[transactions] Falha ao registrar snapshot após sincronização externa', {
+          module: 'transactions',
+          event: 'balance_snapshot_sync_failed',
+          userId,
+          error: snapshotError,
+          skipPersistence: true,
+        })
+      })
 
       endTrace('getBalance', { userId })
       return res.json({ success: true, data: balances })

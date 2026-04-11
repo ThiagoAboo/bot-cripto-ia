@@ -9,28 +9,23 @@ import type {
 
 export const dashboardService = {
   async getTotalBalance(): Promise<TotalBalance> {
-    const response = await apiClient.get('/dashboard/total-balance')
-    return response.data
+    return apiClient.getData('/dashboard/total-balance')
   },
 
   async getCurrenciesBalance(): Promise<CurrencyBalance[]> {
-    const response = await apiClient.get('/dashboard/currencies-balance')
-    return response.data
+    return apiClient.getData('/dashboard/currencies-balance')
   },
 
   async getRecentTransactions(limit: number = 5): Promise<RecentTransaction[]> {
-    const response = await apiClient.get(`/dashboard/transactions/recent?limit=${limit}`)
-    return response.data
+    return apiClient.getData(`/dashboard/transactions/recent?limit=${limit}`)
   },
 
   async getBotsStatus(): Promise<BotStatus[]> {
-    const response = await apiClient.get('/dashboard/bots-status')
-    return response.data
+    return apiClient.getData('/dashboard/bots-status')
   },
 
   async getPerformanceData(period: '24h' | '7d' | '30d' | 'total'): Promise<PerformanceData> {
-    const response = await apiClient.get(`/dashboard/performance?period=${period}`)
-    return response.data
+    return apiClient.getData(`/dashboard/performance?period=${period}`)
   },
 
   async pauseBot(botId: string): Promise<void> {

@@ -21,18 +21,15 @@ export const transactionsService = {
     if (filters.endDate) params.append('endDate', filters.endDate)
     if (filters.search) params.append('search', filters.search)
     
-    const response = await apiClient.get(`/orders?${params.toString()}`)
-    return response.data
+    return apiClient.getData(`/orders?${params.toString()}`)
   },
 
   async getTransaction(id: string): Promise<Transaction | null> {
-    const response = await apiClient.get(`/orders/${id}`)
-    return response.data
+    return apiClient.getData(`/orders/${id}`)
   },
 
   async createOrder(order: ManualOrderRequest): Promise<Transaction> {
-    const response = await apiClient.post('/orders', order)
-    return response.data
+    return apiClient.postData('/orders', order)
   },
 
   async cancelOrder(orderId: string): Promise<void> {
@@ -40,22 +37,18 @@ export const transactionsService = {
   },
 
   async getBalance(): Promise<AvailableBalance[]> {
-    const response = await apiClient.get('/balance')
-    return response.data
+    return apiClient.getData('/balance')
   },
 
   async getCandles(pair: string, period: string, limit: number = 100): Promise<CandleData[]> {
-    const response = await apiClient.get(`/exchange/candles?pair=${pair}&period=${period}&limit=${limit}`)
-    return response.data
+    return apiClient.getData(`/exchange/candles?pair=${pair}&period=${period}&limit=${limit}`)
   },
 
   async getExchangeRate(from: string, to: string): Promise<ExchangeRate> {
-    const response = await apiClient.get(`/exchange/rate?from=${from}&to=${to}`)
-    return response.data
+    return apiClient.getData(`/exchange/rate?from=${from}&to=${to}`)
   },
 
   async getAvailablePairs(): Promise<string[]> {
-    const response = await apiClient.get('/exchange/pairs')
-    return response.data
+    return apiClient.getData('/exchange/pairs')
   },
 }

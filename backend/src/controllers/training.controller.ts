@@ -4,6 +4,12 @@ import { z } from 'zod'
 import { prisma } from '../config/database'
 import { io } from '../app'
 import { AuthRequest } from '../middleware/auth.middleware'
+import {
+  cancelTrainingSessionProcessing,
+  getTrainingSessionLogs,
+  pauseTrainingSessionProcessing,
+  startTrainingSessionProcessing,
+} from '../services/training-session.service'
 import { logger } from '../utils/logger'
 import { endTrace, startTrace, trace } from '../utils/tracer'
 
@@ -63,17 +69,10 @@ function normalizeTrainingLogLevel(level: unknown): 'INFO' | 'WARN' | 'ERROR' {
   return 'INFO'
 }
 
-function buildTrainingSessionResponse(session: any) {
+async function buildTrainingSessionResponse(session: any) {
   const config = safeJsonParse<Record<string, unknown>>(session.config, {})
   const metrics = safeJsonParse<any[]>(session.metrics, [])
-  const logs = Array.isArray(session.logs)
-    ? session.logs.map((entry: any) => ({
-        timestamp: entry?.timestamp ?? new Date().toISOString(),
-        level: normalizeTrainingLogLevel(entry?.level),
-        message: typeof entry?.message === 'string' ? entry.message : 'Log indisponível',
-        epoch: typeof entry?.epoch === 'number' ? entry.epoch : undefined,
-      }))
-    : []
+  const logs = await getTrainingSessionLogs(session.userId, session.id)
 
   return {
     id: session.id,
@@ -137,7 +136,7 @@ export async function getTrainingSessions(req: AuthRequest, res: Response): Prom
       include: { bot: { select: { name: true, strategyType: true } } },
     })
 
-    const result = sessions.map((session: any) => buildTrainingSessionResponse(session))
+    const result = await Promise.all(sessions.map((session: any) => buildTrainingSessionResponse(session)))
 
     endTrace('getTrainingSessions', { userId })
     return res.json({ success: true, data: result })
@@ -202,6 +201,11 @@ export async function createTrainingSession(req: AuthRequest, res: Response): Pr
     }
 
     const bot = await prisma.bot.findUnique({ where: { id: data.botId } })
+    if (!bot) {
+      endTrace('createTrainingSession', { userId, botId: data.botId, errorFlag: true })
+      return res.status(404).json({ success: false, error: 'Bot nao encontrado' })
+    }
+
     const session = await prisma.trainingSession.create({
       data: {
         botId: data.botId,
@@ -231,10 +235,12 @@ export async function createTrainingSession(req: AuthRequest, res: Response): Pr
       status: 'pending',
     })
 
+    startTrainingSessionProcessing(session.id, 600)
+
     endTrace('createTrainingSession', { userId, botId: data.botId })
     return res.json({
       success: true,
-      data: buildTrainingSessionResponse({
+      data: await buildTrainingSessionResponse({
         ...session,
         bot: bot ? { name: bot.name, strategyType: bot.strategyType } : null,
       }),
@@ -269,7 +275,7 @@ export async function getTrainingSessionById(req: AuthRequest, res: Response): P
       return res.status(404).json({ success: false, error: 'Sessão não encontrada' })
     }
 
-    const result = buildTrainingSessionResponse(session)
+    const result = await buildTrainingSessionResponse(session)
 
     endTrace('getTrainingSessionById', { userId, botId: session.botId })
     return res.json({ success: true, data: result })
@@ -300,10 +306,17 @@ export async function pauseTrainingSession(req: AuthRequest, res: Response): Pro
       return res.status(404).json({ success: false, error: 'Sessão não encontrada' })
     }
 
+    if (!['pending', 'running'].includes(session.status)) {
+      endTrace('pauseTrainingSession', { userId, botId: session.botId, errorFlag: true })
+      return res.status(400).json({ success: false, error: 'Apenas sessoes pendentes ou em execucao podem ser pausadas' })
+    }
+
     await prisma.trainingSession.update({
       where: { id },
       data: { status: 'paused', updatedAt: new Date() },
     })
+
+    pauseTrainingSessionProcessing(id)
 
     logger.info('[training] Sessão de treinamento pausada', {
       module: 'training',
@@ -344,10 +357,17 @@ export async function resumeTrainingSession(req: AuthRequest, res: Response): Pr
       return res.status(404).json({ success: false, error: 'Sessão não encontrada' })
     }
 
+    if (session.status !== 'paused') {
+      endTrace('resumeTrainingSession', { userId, botId: session.botId, errorFlag: true })
+      return res.status(400).json({ success: false, error: 'Apenas sessoes pausadas podem ser retomadas' })
+    }
+
     await prisma.trainingSession.update({
       where: { id },
       data: { status: 'running', updatedAt: new Date() },
     })
+
+    startTrainingSessionProcessing(id, 400)
 
     logger.info('[training] Sessão de treinamento retomada', {
       module: 'training',
@@ -388,10 +408,17 @@ export async function cancelTrainingSession(req: AuthRequest, res: Response): Pr
       return res.status(404).json({ success: false, error: 'Sessão não encontrada' })
     }
 
+    if (['completed', 'failed', 'cancelled'].includes(session.status)) {
+      endTrace('cancelTrainingSession', { userId, botId: session.botId, errorFlag: true })
+      return res.status(400).json({ success: false, error: 'A sessao nao pode mais ser cancelada' })
+    }
+
     await prisma.trainingSession.update({
       where: { id },
       data: { status: 'cancelled', endTime: new Date(), updatedAt: new Date() },
     })
+
+    cancelTrainingSessionProcessing(id)
 
     logger.info('[training] Sessão de treinamento cancelada', {
       module: 'training',
@@ -430,6 +457,11 @@ export async function testTrainingSession(req: AuthRequest, res: Response): Prom
     if (!session) {
       endTrace('testTrainingSession', { userId, errorFlag: true })
       return res.status(404).json({ success: false, error: 'Sessão não encontrada' })
+    }
+
+    if (session.status !== 'completed') {
+      endTrace('testTrainingSession', { userId, botId: session.botId, errorFlag: true })
+      return res.status(400).json({ success: false, error: 'Conclua o treinamento antes de executar o backtesting' })
     }
 
     const result = {
@@ -477,6 +509,11 @@ export async function saveTrainingModel(req: AuthRequest, res: Response): Promis
     if (!session) {
       endTrace('saveTrainingModel', { userId, errorFlag: true })
       return res.status(404).json({ success: false, error: 'Sessão não encontrada' })
+    }
+
+    if (session.status !== 'completed') {
+      endTrace('saveTrainingModel', { userId, botId: session.botId, errorFlag: true })
+      return res.status(400).json({ success: false, error: 'Somente sessoes concluidas podem ser salvas' })
     }
 
     const modelUrl = `/models/${id}_final.h5`

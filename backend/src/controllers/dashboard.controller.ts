@@ -3,6 +3,7 @@ import { Response } from 'express'
 import { prisma } from '../config/database'
 import { AuthRequest } from '../middleware/auth.middleware'
 import { getCurrencyRateToBrl } from '../services/market-valuation.service'
+import { recordBalanceHistorySnapshotValue } from '../services/portfolio.service'
 import { logger } from '../utils/logger'
 import { endTrace, startTrace } from '../utils/tracer'
 
@@ -29,15 +30,15 @@ export async function getTotalBalance(req: AuthRequest, res: Response): Promise<
     const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
 
     const recentTransactions = await prisma.transaction.findMany({
-      where: { userId, status: 'executed', date: { gte: oneDayAgo } },
+      where: { userId, status: 'executed', date: { gte: oneDayAgo }, profitBrl: { not: null } },
     })
 
     const allTransactions = await prisma.transaction.findMany({
-      where: { userId, status: 'executed' },
+      where: { userId, status: 'executed', profitBrl: { not: null } },
     })
 
     const last100Transactions = await prisma.transaction.findMany({
-      where: { userId, status: 'executed' },
+      where: { userId, status: 'executed', profitBrl: { not: null } },
       orderBy: { date: 'desc' },
       take: 100,
     })
@@ -56,6 +57,16 @@ export async function getTotalBalance(req: AuthRequest, res: Response): Promise<
     const dailyProfitPercent = previousTotalBrl > 0 ? (dailyProfitBrl / previousTotalBrl) * 100 : 0
     const initialTotalBrl = totalBrl - totalPnlBrl
     const totalPnlPercent = initialTotalBrl > 0 ? (totalPnlBrl / initialTotalBrl) * 100 : 0
+
+    await recordBalanceHistorySnapshotValue(userId, totalBrl).catch((snapshotError) => {
+      logger.warn('[dashboard] Falha ao registrar snapshot ao consultar saldo total', {
+        module: 'dashboard',
+        event: 'balance_snapshot_dashboard_failed',
+        userId,
+        error: snapshotError,
+        skipPersistence: true,
+      })
+    })
 
     endTrace('getTotalBalance', { userId })
     return res.json({
@@ -105,6 +116,7 @@ export async function getCurrenciesBalance(req: AuthRequest, res: Response): Pro
         where: {
           userId,
           status: 'executed',
+          profitBrl: { not: null },
           date: { gte: oneDayAgo },
           pair: { contains: currency },
         },
@@ -114,6 +126,7 @@ export async function getCurrenciesBalance(req: AuthRequest, res: Response): Pro
         where: {
           userId,
           status: 'executed',
+          profitBrl: { not: null },
           pair: { contains: currency },
         },
       })
@@ -122,6 +135,7 @@ export async function getCurrenciesBalance(req: AuthRequest, res: Response): Pro
         where: {
           userId,
           status: 'executed',
+          profitBrl: { not: null },
           pair: { contains: currency },
         },
         orderBy: { date: 'desc' },

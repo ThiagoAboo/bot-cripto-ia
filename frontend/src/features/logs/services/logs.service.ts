@@ -18,8 +18,7 @@ export const logsService = {
     if (filters.endDate) params.append('endDate', filters.endDate)
     if (filters.search) params.append('search', filters.search)
     
-    const response = await apiClient.get(`/logs?${params.toString()}`)
-    return response.data
+    return apiClient.getData(`/logs?${params.toString()}`)
   },
 
   async getTraces(filters: TraceFilters): Promise<{ items: TraceEntry[]; total: number }> {
@@ -39,13 +38,11 @@ export const logsService = {
     if (filters.endDate) params.append('endDate', filters.endDate)
     if (filters.search) params.append('search', filters.search)
     
-    const response = await apiClient.get(`/traces?${params.toString()}`)
-    return response.data
+    return apiClient.getData(`/traces?${params.toString()}`)
   },
 
   async getTraceGroup(traceId: string): Promise<TraceGroup | null> {
-    const response = await apiClient.get(`/traces/group/${traceId}`)
-    return response.data
+    return apiClient.getData(`/traces/group/${traceId}`)
   },
 
   async exportLogs(filters: LogFilters): Promise<Blob> {
@@ -80,7 +77,6 @@ export const logsService = {
   },
 
   async getAvailableBots(): Promise<{ id: string; name: string }[]> {
-    const response = await apiClient.get('/traces/bots')
-    return response.data
+    return apiClient.getData('/traces/bots')
   },
 }

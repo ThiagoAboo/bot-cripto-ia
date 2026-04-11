@@ -26,8 +26,8 @@ export function useSessions(strategyId?: string) {
     staleTime: 30000,
     refetchInterval: (query) => {
       const data = query.state.data
-      const hasRunningSession = data?.some((s: TrainingSession) => s.status === 'running')
-      return hasRunningSession ? 2000 : false
+      const hasActiveSession = data?.some((session: TrainingSession) => ['pending', 'running', 'paused'].includes(session.status))
+      return hasActiveSession ? 2000 : false
     },
   })
 }
@@ -39,7 +39,7 @@ export function useSession(sessionId: string) {
     enabled: !!sessionId,
     refetchInterval: (query) => {
       const data = query.state.data
-      return data?.status === 'running' ? 2000 : false
+      return data && ['pending', 'running'].includes(data.status) ? 2000 : false
     },
   })
 }

@@ -12,6 +12,7 @@ export function usePerformanceData(initialPeriod: string = '7d') {
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: PERFORMANCE_QUERY_KEYS.performance(selectedPeriod),
     queryFn: () => dashboardService.getPerformanceData(selectedPeriod as any),
+    refetchInterval: 10000,
     staleTime: 30000, // 30 segundos
     gcTime: 60000, // 1 minuto
   })

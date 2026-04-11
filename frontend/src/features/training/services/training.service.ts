@@ -8,24 +8,20 @@ import type {
 
 export const trainingService = {
   async getStrategies(): Promise<AvailableStrategy[]> {
-    const response = await apiClient.get('/training/strategies')
-    return response.data
+    return apiClient.getData('/training/strategies')
   },
 
   async getSessions(strategyId?: string): Promise<TrainingSession[]> {
     const url = strategyId ? `/training/sessions?botId=${strategyId}` : '/training/sessions'
-    const response = await apiClient.get(url)
-    return response.data
+    return apiClient.getData(url)
   },
 
   async getSession(sessionId: string): Promise<TrainingSession | null> {
-    const response = await apiClient.get(`/training/sessions/${sessionId}`)
-    return response.data
+    return apiClient.getData(`/training/sessions/${sessionId}`)
   },
 
   async createSession(config: TrainingConfig): Promise<TrainingSession> {
-    const response = await apiClient.post('/training/sessions', config)
-    return response.data
+    return apiClient.postData('/training/sessions', config)
   },
 
   async pauseSession(sessionId: string): Promise<void> {
@@ -41,13 +37,11 @@ export const trainingService = {
   },
 
   async testSession(sessionId: string): Promise<BacktestResult> {
-    const response = await apiClient.post(`/training/sessions/${sessionId}/test`)
-    return response.data
+    return apiClient.postData(`/training/sessions/${sessionId}/test`)
   },
 
-  async saveModel(sessionId: string): Promise<{ success: boolean; modelUrl: string }> {
-    const response = await apiClient.post(`/training/sessions/${sessionId}/save`)
-    return response.data
+  async saveModel(sessionId: string): Promise<{ modelUrl: string }> {
+    return apiClient.postData(`/training/sessions/${sessionId}/save`)
   },
 
   async downloadModel(sessionId: string): Promise<Blob> {
@@ -58,7 +52,6 @@ export const trainingService = {
   },
 
   async getAvailablePairs(): Promise<string[]> {
-    const response = await apiClient.get('/exchange/pairs')
-    return response.data
+    return apiClient.getData('/exchange/pairs')
   },
 }

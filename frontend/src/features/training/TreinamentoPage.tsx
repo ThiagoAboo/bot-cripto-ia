@@ -1,5 +1,16 @@
 import { useEffect, useState } from 'react'
-import { useStrategies, useCreateSession, useSessions, useTestSession, useSaveModel, useDownloadModel } from './hooks/useTraining'
+import {
+  useStrategies,
+  useCreateSession,
+  useSessions,
+  useSession,
+  usePauseSession,
+  useResumeSession,
+  useCancelSession,
+  useTestSession,
+  useSaveModel,
+  useDownloadModel,
+} from './hooks/useTraining'
 import { ModelSelector } from './components/ModelSelector'
 import { DatasetConfig } from './components/DatasetConfig'
 import { HyperparametersForm } from './components/HyperparametersForm'
@@ -9,6 +20,7 @@ import { Button } from '../../shared/components/ui/Button'
 import { Skeleton } from '../../shared/components/ui/Skeleton'
 import { History, Brain, AlertCircle, Play, Pause, Square, Download, Save, TestTube } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { useWebSocket } from '../../app/providers/WebSocketProvider'
 import type { TrainingConfig, Architecture, DataSource, Timeframe, TrainingSession } from './types/training.types'
 
 const availableBots = [
@@ -23,13 +35,17 @@ export default function TreinamentoPage() {
   const { data: strategies, isLoading: isLoadingStrategies } = useStrategies()
   const { data: sessions, refetch: refetchSessions } = useSessions()
   const { mutate: createSession, isPending: isCreating } = useCreateSession()
+  const { mutate: pauseSession, isPending: isPausing } = usePauseSession()
+  const { mutate: resumeSession, isPending: isResuming } = useResumeSession()
+  const { mutate: cancelSession, isPending: isCancelling } = useCancelSession()
   const { mutate: testSession, isPending: isTesting } = useTestSession()
   const { mutate: saveModel, isPending: isSaving } = useSaveModel()
   const { mutate: downloadModel, isPending: isDownloading } = useDownloadModel()
+  const { isConnected, emit, on, off } = useWebSocket()
 
   const [selectedBotId, setSelectedBotId] = useState('')
   const [selectedStrategyId, setSelectedStrategyId] = useState('')
-  const [activeSession, setActiveSession] = useState<TrainingSession | null>(null)
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const [showHistory, setShowHistory] = useState(false)
 
   const [config, setConfig] = useState<Partial<TrainingConfig>>({
@@ -61,10 +77,70 @@ export default function TreinamentoPage() {
     },
   })
 
+  const fallbackSession = sessions?.find((item) => ['running', 'pending', 'paused'].includes(item.status)) ?? null
+  const activeSessionId = selectedSessionId ?? fallbackSession?.id ?? ''
+  const {
+    data: activeSessionDetails,
+    isLoading: isLoadingActiveSession,
+    refetch: refetchActiveSession,
+  } = useSession(activeSessionId)
+
+  const activeSession = activeSessionId
+    ? activeSessionDetails ?? sessions?.find((item) => item.id === activeSessionId) ?? null
+    : null
+
   useEffect(() => {
-    const runningSession = sessions?.find((item) => ['running', 'pending', 'paused'].includes(item.status))
-    setActiveSession(runningSession ?? null)
-  }, [sessions])
+    if (!selectedSessionId && fallbackSession) {
+      setSelectedSessionId(fallbackSession.id)
+      return
+    }
+
+    if (selectedSessionId && sessions && !sessions.some((session) => session.id === selectedSessionId)) {
+      setSelectedSessionId(fallbackSession?.id ?? null)
+    }
+  }, [fallbackSession, selectedSessionId, sessions])
+
+  useEffect(() => {
+    if (!activeSessionId || !isConnected) {
+      return
+    }
+
+    const handleTrainingStatus = (payload: { sessionId: string; status: TrainingSession['status'] }) => {
+      if (payload.sessionId !== activeSessionId) {
+        return
+      }
+
+      void refetchActiveSession()
+      void refetchSessions()
+    }
+
+    const handleTrainingMetric = (payload: { sessionId: string }) => {
+      if (payload.sessionId !== activeSessionId) {
+        return
+      }
+
+      void refetchActiveSession()
+    }
+
+    const handleTrainingLog = (payload: { sessionId: string }) => {
+      if (payload.sessionId !== activeSessionId) {
+        return
+      }
+
+      void refetchActiveSession()
+    }
+
+    emit('subscribe:training', activeSessionId)
+    on('training:status', handleTrainingStatus)
+    on('training:metrics', handleTrainingMetric)
+    on('training:log', handleTrainingLog)
+
+    return () => {
+      off('training:status', handleTrainingStatus)
+      off('training:metrics', handleTrainingMetric)
+      off('training:log', handleTrainingLog)
+    }
+  }, [activeSessionId, emit, isConnected, off, on, refetchActiveSession, refetchSessions])
 
   const handleStartTraining = () => {
     if (!selectedBotId || !selectedStrategyId) {
@@ -87,17 +163,45 @@ export default function TreinamentoPage() {
 
     createSession(trainingConfig, {
       onSuccess: (newSession) => {
-        setActiveSession(newSession)
-        refetchSessions()
+        setSelectedSessionId(newSession.id)
+        void refetchSessions()
       },
     })
   }
 
-  const notifyNotImplemented = () => toast.custom('Função em desenvolvimento')
-
+  const handlePause = () => activeSession && pauseSession(activeSession.id)
+  const handleResume = () => activeSession && resumeSession(activeSession.id)
+  const handleCancel = () => activeSession && cancelSession(activeSession.id)
   const handleTest = () => activeSession && testSession(activeSession.id)
   const handleSave = () => activeSession && saveModel(activeSession.id)
   const handleDownload = () => activeSession && downloadModel(activeSession.id)
+  const handleExportLogs = () => {
+    if (!activeSession || activeSession.logs.length === 0) {
+      toast.error('Nenhum log disponivel para exportar')
+      return
+    }
+
+    const content = activeSession.logs
+      .map((log) => `[${log.timestamp}] ${log.level}${log.epoch !== undefined ? ` [Epoca ${log.epoch}]` : ''} ${log.message}`)
+      .join('\n')
+
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+    const url = window.URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `training_logs_${activeSession.id}.txt`
+    document.body.appendChild(anchor)
+    anchor.click()
+    window.URL.revokeObjectURL(url)
+    document.body.removeChild(anchor)
+  }
+
+  const hasBlockingSession = !!activeSession && ['pending', 'running', 'paused'].includes(activeSession.status)
+  const canPause = !!activeSession && ['pending', 'running'].includes(activeSession.status)
+  const canResume = activeSession?.status === 'paused'
+  const canCancel = !!activeSession && !['completed', 'failed', 'cancelled'].includes(activeSession.status)
+  const canUseModel = activeSession?.status === 'completed'
+  const isMutatingSession = isPausing || isResuming || isCancelling
 
   if (isLoadingStrategies) {
     return (
@@ -189,31 +293,31 @@ export default function TreinamentoPage() {
           </div>
 
           <div className="flex flex-wrap gap-3">
-            <Button onClick={handleStartTraining} disabled={isCreating} isLoading={isCreating}>
+            <Button onClick={handleStartTraining} disabled={isCreating || hasBlockingSession} isLoading={isCreating}>
               <Play className="h-4 w-4" />
               Iniciar Treinamento
             </Button>
-            <Button variant="secondary" onClick={notifyNotImplemented}>
+            <Button variant="secondary" onClick={handlePause} disabled={!canPause || isMutatingSession} isLoading={isPausing}>
               <Pause className="h-4 w-4" />
               Pausar
             </Button>
-            <Button variant="secondary" onClick={notifyNotImplemented}>
+            <Button variant="secondary" onClick={handleResume} disabled={!canResume || isMutatingSession} isLoading={isResuming}>
               <Play className="h-4 w-4" />
               Retomar
             </Button>
-            <Button variant="danger" onClick={notifyNotImplemented}>
+            <Button variant="danger" onClick={handleCancel} disabled={!canCancel || isMutatingSession} isLoading={isCancelling}>
               <Square className="h-4 w-4" />
               Cancelar
             </Button>
-            <Button variant="secondary" onClick={handleTest} disabled={isTesting} isLoading={isTesting}>
+            <Button variant="secondary" onClick={handleTest} disabled={!canUseModel || isTesting} isLoading={isTesting}>
               <TestTube className="h-4 w-4" />
               Testar
             </Button>
-            <Button variant="secondary" onClick={handleSave} disabled={isSaving} isLoading={isSaving}>
+            <Button variant="secondary" onClick={handleSave} disabled={!canUseModel || isSaving} isLoading={isSaving}>
               <Save className="h-4 w-4" />
               Salvar
             </Button>
-            <Button variant="outline" onClick={handleDownload} disabled={isDownloading} isLoading={isDownloading}>
+            <Button variant="outline" onClick={handleDownload} disabled={!activeSession?.modelUrl || isDownloading} isLoading={isDownloading}>
               <Download className="h-4 w-4" />
               Exportar
             </Button>
@@ -222,8 +326,12 @@ export default function TreinamentoPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-6">
-        <MetricsChart metrics={activeSession?.metrics || []} isLoading={false} />
-        <TrainingLogTerminal logs={activeSession?.logs || []} isLoading={false} onExport={() => {}} />
+        <MetricsChart metrics={activeSession?.metrics || []} isLoading={Boolean(activeSessionId) && isLoadingActiveSession} />
+        <TrainingLogTerminal
+          logs={activeSession?.logs || []}
+          isLoading={Boolean(activeSessionId) && isLoadingActiveSession}
+          onExport={handleExportLogs}
+        />
       </div>
 
       {showHistory && sessions && sessions.length > 0 && (
@@ -238,7 +346,7 @@ export default function TreinamentoPage() {
                 key={session.id}
                 className="cursor-pointer rounded-2xl border p-4 transition-all hover:border-primary-500/40"
                 style={{ backgroundColor: 'var(--surface-1)', borderColor: 'var(--border-color)' }}
-                onClick={() => setActiveSession(session)}
+                onClick={() => setSelectedSessionId(session.id)}
               >
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
@@ -256,6 +364,8 @@ export default function TreinamentoPage() {
                           ? 'rounded-full bg-green-500/15 px-2 py-1 text-sm text-green-500'
                           : session.status === 'running'
                             ? 'rounded-full bg-yellow-500/15 px-2 py-1 text-sm text-yellow-500'
+                            : session.status === 'paused'
+                              ? 'rounded-full bg-amber-500/15 px-2 py-1 text-sm text-amber-500'
                             : session.status === 'failed'
                               ? 'rounded-full bg-red-500/15 px-2 py-1 text-sm text-red-500'
                               : 'rounded-full bg-slate-500/15 px-2 py-1 text-sm text-slate-500'
@@ -265,6 +375,8 @@ export default function TreinamentoPage() {
                         ? 'Concluído'
                         : session.status === 'running'
                           ? 'Em execução'
+                          : session.status === 'paused'
+                            ? 'Pausado'
                           : session.status === 'failed'
                             ? 'Falhou'
                             : session.status === 'cancelled'

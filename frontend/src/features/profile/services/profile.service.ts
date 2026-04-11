@@ -3,8 +3,7 @@ import type { Profile, UpdateProfileRequest, UpdatePreferencesRequest, ChangePas
 
 export const profileService = {
   async getProfile(): Promise<Profile> {
-    const response = await apiClient.get('/profile')
-    return response.data
+    return apiClient.getData('/profile')
   },
 
   async updateProfile(data: UpdateProfileRequest): Promise<void> {

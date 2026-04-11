@@ -6,8 +6,7 @@ import type {
 
 export const configurationsService = {
   async getConfigurations(): Promise<Configurations> {
-    const response = await apiClient.get('/configurations')
-    return response.data
+    return apiClient.getData('/configurations')
   },
 
   async saveConfigurations(config: Configurations): Promise<void> {
@@ -20,7 +19,6 @@ export const configurationsService = {
   },
 
   async getAvailablePairs(): Promise<string[]> {
-    const response = await apiClient.get('/exchange/pairs')
-    return response.data
+    return apiClient.getData('/exchange/pairs')
   },
 }
