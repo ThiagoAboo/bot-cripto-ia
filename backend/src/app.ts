@@ -6,7 +6,15 @@ import dotenv from 'dotenv'
 import { createServer } from 'http'
 import { Server } from 'socket.io'
 
-import { authMiddleware } from './middleware/auth.middleware'
+import { prisma } from './config/database'
+import { authMiddleware, resolveAuthenticatedUserFromToken, type AuthenticatedUser } from './middleware/auth.middleware'
+import {
+  getScopedRoom,
+  getSystemLogsRoom,
+  getTrainingRoom,
+  getUserRoom,
+  setSocketServer,
+} from './services/socket.service'
 import { logger } from './utils/logger'
 
 import * as authController from './controllers/auth.controller'
@@ -28,6 +36,8 @@ const io = new Server(httpServer, {
     credentials: true,
   },
 })
+
+setSocketServer(io)
 
 process.on('unhandledRejection', (reason) => {
   logger.error('[app] Unhandled promise rejection', {
@@ -72,77 +82,153 @@ const limiter = rateLimit({
 
 app.use('/api/', limiter)
 
+io.use(async (socket, next) => {
+  try {
+    const authToken = typeof socket.handshake.auth?.token === 'string'
+      ? socket.handshake.auth.token
+      : null
+    const headerToken = typeof socket.handshake.headers.authorization === 'string'
+      ? socket.handshake.headers.authorization.replace(/^Bearer\s+/i, '').trim()
+      : null
+    const token = authToken || headerToken
+
+    if (!token) {
+      return next(new Error('Token não fornecido'))
+    }
+
+    const user = await resolveAuthenticatedUserFromToken(token)
+    socket.data.user = user
+    socket.data.userId = user.id
+
+    return next()
+  } catch (error) {
+    return next(new Error('Token inválido ou expirado'))
+  }
+})
+
 io.on('connection', (socket) => {
+  const user = socket.data.user as AuthenticatedUser | undefined
+  const userId = socket.data.userId as string | undefined
+
+  if (!user || !userId) {
+    socket.emit('error', { error: 'Sessão não autenticada' })
+    socket.disconnect(true)
+    return
+  }
+
+  socket.join(getUserRoom(userId))
+
   logger.info('[app] WebSocket conectado', {
     module: 'app',
     event: 'websocket_connected',
     socketId: socket.id,
+    userId,
   })
 
+  socket.emit('connected', { message: 'connected', userId })
+
   socket.on('subscribe:dashboard', () => {
-    socket.join('dashboard')
+    socket.join(getScopedRoom(userId, 'dashboard'))
     logger.debug('[app] Cliente inscrito em dashboard', {
       module: 'app',
       event: 'ws_subscribe_dashboard',
       socketId: socket.id,
+      userId,
     })
   })
 
   socket.on('subscribe:orders', () => {
-    socket.join('orders')
+    socket.join(getScopedRoom(userId, 'orders'))
     logger.debug('[app] Cliente inscrito em orders', {
       module: 'app',
       event: 'ws_subscribe_orders',
       socketId: socket.id,
+      userId,
     })
   })
 
   socket.on('subscribe:logs', () => {
-    socket.join('logs')
+    socket.join(getScopedRoom(userId, 'logs'))
+    socket.join(getSystemLogsRoom())
     logger.debug('[app] Cliente inscrito em logs', {
       module: 'app',
       event: 'ws_subscribe_logs',
       socketId: socket.id,
+      userId,
     })
   })
 
   socket.on('subscribe:traces', () => {
-    socket.join('traces')
+    socket.join(getScopedRoom(userId, 'traces'))
     logger.debug('[app] Cliente inscrito em traces', {
       module: 'app',
       event: 'ws_subscribe_traces',
       socketId: socket.id,
+      userId,
     })
   })
 
-  socket.on('subscribe:training', (sessionId: string) => {
-    socket.join(`training:${sessionId}`)
-    logger.debug('[app] Cliente inscrito em training', {
-      module: 'app',
-      event: 'ws_subscribe_training',
-      socketId: socket.id,
-      sessionId,
-    })
+  socket.on('subscribe:training', async (sessionId: string) => {
+    try {
+      if (!sessionId) {
+        socket.emit('error', { error: 'Sessão de treinamento inválida' })
+        return
+      }
+
+      const session = await prisma.trainingSession.findFirst({
+        where: { id: sessionId, userId },
+        select: { id: true },
+      })
+
+      if (!session) {
+        socket.emit('error', { error: 'Sessão de treinamento não encontrada' })
+        return
+      }
+
+      socket.join(getTrainingRoom(userId, sessionId))
+      logger.debug('[app] Cliente inscrito em training', {
+        module: 'app',
+        event: 'ws_subscribe_training',
+        socketId: socket.id,
+        userId,
+        sessionId,
+      })
+    } catch (error) {
+      logger.warn('[app] Falha ao inscrever cliente em training', {
+        module: 'app',
+        event: 'ws_subscribe_training_error',
+        socketId: socket.id,
+        userId,
+        sessionId,
+        error,
+      })
+      socket.emit('error', { error: 'Não foi possível inscrever na sessão de treinamento' })
+    }
   })
 
   socket.on('unsubscribe:dashboard', () => {
-    socket.leave('dashboard')
+    socket.leave(getScopedRoom(userId, 'dashboard'))
   })
 
   socket.on('unsubscribe:orders', () => {
-    socket.leave('orders')
+    socket.leave(getScopedRoom(userId, 'orders'))
   })
 
   socket.on('unsubscribe:logs', () => {
-    socket.leave('logs')
+    socket.leave(getScopedRoom(userId, 'logs'))
+    socket.leave(getSystemLogsRoom())
   })
 
   socket.on('unsubscribe:traces', () => {
-    socket.leave('traces')
+    socket.leave(getScopedRoom(userId, 'traces'))
   })
 
   socket.on('unsubscribe:training', (sessionId: string) => {
-    socket.leave(`training:${sessionId}`)
+    if (!sessionId) {
+      return
+    }
+
+    socket.leave(getTrainingRoom(userId, sessionId))
   })
 
   socket.on('disconnect', () => {
@@ -150,6 +236,7 @@ io.on('connection', (socket) => {
       module: 'app',
       event: 'websocket_disconnected',
       socketId: socket.id,
+      userId,
     })
   })
 })
@@ -186,6 +273,7 @@ app.get('/api/exchange/pairs', authMiddleware, configurationsController.getExcha
 
 app.get('/api/training/strategies', authMiddleware, trainingController.getStrategies)
 app.get('/api/training/sessions', authMiddleware, trainingController.getTrainingSessions)
+app.post('/api/training/upload', authMiddleware, trainingController.uploadTrainingDataset)
 app.post('/api/training/sessions', authMiddleware, trainingController.createTrainingSession)
 app.get('/api/training/sessions/:id', authMiddleware, trainingController.getTrainingSessionById)
 app.post('/api/training/sessions/:id/pause', authMiddleware, trainingController.pauseTrainingSession)
@@ -229,9 +317,9 @@ app.use('*', (req, res) => {
   res.status(404).json({ success: false, error: 'Rota não encontrada' })
 })
 
-const PORT = process.env.PORT || 3001
+const PORT = Number(process.env.PORT || 3001)
 
-httpServer.listen(PORT, () => {
+function logServerStartup(port: number | string): void {
   logger.info('[app] Servidor iniciado', {
     module: 'app',
     event: 'server_started',
@@ -259,6 +347,44 @@ httpServer.listen(PORT, () => {
       'GET /api/profile',
     ],
   })
-})
+}
 
-export { io }
+export async function startServer(port: number = PORT): Promise<typeof httpServer> {
+  if (httpServer.listening) {
+    return httpServer
+  }
+
+  return new Promise((resolve, reject) => {
+    const handleError = (error: Error) => {
+      httpServer.off('error', handleError)
+      reject(error)
+    }
+
+    httpServer.once('error', handleError)
+    httpServer.listen(port, () => {
+      httpServer.off('error', handleError)
+      const address = httpServer.address()
+      const resolvedPort =
+        typeof address === 'object' && address && 'port' in address
+          ? address.port
+          : port
+
+      logServerStartup(resolvedPort)
+      resolve(httpServer)
+    })
+  })
+}
+
+if (require.main === module) {
+  void startServer().catch((error) => {
+    logger.error('[app] Erro ao iniciar servidor', {
+      module: 'app',
+      event: 'server_start_error',
+      error,
+    })
+
+    process.exitCode = 1
+  })
+}
+
+export { app, httpServer, io }

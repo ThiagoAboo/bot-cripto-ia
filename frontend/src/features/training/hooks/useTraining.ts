@@ -1,14 +1,24 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { trainingService } from '../services/training.service'
-import type { TrainingConfig, TrainingSession } from '../types/training.types'
+import type { AvailableBot, TrainingConfig, TrainingSession } from '../types/training.types'
 import toast from 'react-hot-toast'
 
 export const TRAINING_QUERY_KEYS = {
+  bots: ['training', 'bots'],
   strategies: ['training', 'strategies'],
   sessions: ['training', 'sessions'],
   session: (id: string) => ['training', 'sessions', id],
   pairs: ['training', 'pairs'],
   backtest: (id: string) => ['training', 'backtest', id],
+  uploads: ['training', 'uploads'],
+}
+
+export function useAvailableBots() {
+  return useQuery<AvailableBot[], Error>({
+    queryKey: TRAINING_QUERY_KEYS.bots,
+    queryFn: () => trainingService.getBots(),
+    staleTime: 60000,
+  })
 }
 
 export function useStrategies() {
@@ -55,6 +65,18 @@ export function useCreateSession() {
     },
     onError: (error: Error) => {
       toast.error(`Erro ao iniciar treinamento: ${error.message}`)
+    },
+  })
+}
+
+export function useUploadDataset() {
+  return useMutation({
+    mutationFn: (file: File) => trainingService.uploadDataset(file),
+    onSuccess: () => {
+      toast.success('Dataset enviado com sucesso!')
+    },
+    onError: (error: Error) => {
+      toast.error(`Erro ao enviar dataset: ${error.message}`)
     },
   })
 }

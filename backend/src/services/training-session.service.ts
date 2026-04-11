@@ -1,5 +1,5 @@
-import { io } from '../app'
 import { prisma } from '../config/database'
+import { emitTrainingLog, emitTrainingMetric, emitTrainingStatus } from './socket.service'
 import { logger } from '../utils/logger'
 
 type TrainingLogLevel = 'INFO' | 'WARN' | 'ERROR'
@@ -79,18 +79,6 @@ function clearTrainingTimer(sessionId: string): void {
   }
 }
 
-function emitTrainingStatus(sessionId: string, status: string): void {
-  io.to(`training:${sessionId}`).emit('training:status', { sessionId, status })
-}
-
-function emitTrainingMetric(sessionId: string, metric: TrainingMetricEntry): void {
-  io.to(`training:${sessionId}`).emit('training:metrics', { sessionId, metrics: metric })
-}
-
-function emitTrainingLog(sessionId: string, log: TrainingLogEntry): void {
-  io.to(`training:${sessionId}`).emit('training:log', { sessionId, log })
-}
-
 async function persistTrainingLog(
   userId: string,
   sessionId: string,
@@ -116,7 +104,7 @@ async function persistTrainingLog(
     logger.info(`[training] ${message}`, logPayload)
   }
 
-  emitTrainingLog(sessionId, {
+  emitTrainingLog(userId, sessionId, {
     timestamp: new Date().toISOString(),
     level,
     message,
@@ -184,7 +172,7 @@ async function completeTrainingSession(sessionId: string, userId: string, botId:
     },
   })
 
-  emitTrainingStatus(sessionId, 'completed')
+  emitTrainingStatus(userId, sessionId, 'completed')
   await persistTrainingLog(userId, sessionId, botId, 'INFO', 'Treinamento concluido com sucesso')
 }
 
@@ -223,7 +211,7 @@ async function advanceTrainingSession(sessionId: string): Promise<void> {
       },
     })
 
-    emitTrainingStatus(sessionId, 'running')
+    emitTrainingStatus(session.userId, sessionId, 'running')
     await persistTrainingLog(
       session.userId,
       sessionId,
@@ -251,7 +239,7 @@ async function advanceTrainingSession(sessionId: string): Promise<void> {
     },
   })
 
-  emitTrainingMetric(sessionId, nextMetric)
+  emitTrainingMetric(session.userId, sessionId, nextMetric)
 
   if (nextEpoch === 1 || nextEpoch % 10 === 0 || nextEpoch === totalEpochs) {
     await persistTrainingLog(
@@ -317,7 +305,7 @@ export function startTrainingSessionProcessing(sessionId: string, delayMs: numbe
           },
         }).catch(() => undefined)
 
-        emitTrainingStatus(sessionId, 'failed')
+        emitTrainingStatus(session.userId, sessionId, 'failed')
         await persistTrainingLog(session.userId, sessionId, session.botId, 'ERROR', 'Treinamento interrompido por erro interno')
       }).catch(() => undefined)
     })

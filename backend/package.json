@@ -7,6 +7,8 @@
     "dev": "nodemon src/app.ts",
     "build": "tsc",
     "start": "node dist/app.js",
+    "test": "node --test",
+    "test:run": "node --test",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev --name init",
     "prisma:studio": "prisma studio",

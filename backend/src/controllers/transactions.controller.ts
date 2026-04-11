@@ -8,6 +8,7 @@ import { ExternalApiError } from '../services/external-http.service'
 import { getAccountBalances, getCandles as getBinanceCandles, getTickerPrice } from '../services/binance.service'
 import { getCurrencyRateToBrl } from '../services/market-valuation.service'
 import { recordBalanceHistorySnapshot } from '../services/portfolio.service'
+import { emitDashboardUpdate, emitOrderCreated, emitOrderUpdated } from '../services/socket.service'
 import { sendWebhook } from '../services/webhook.service'
 import { logger } from '../utils/logger'
 import { endTrace, startTrace, trace } from '../utils/tracer'
@@ -495,6 +496,21 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
       },
     })
 
+    const transactionPayload = {
+      id: transaction.id,
+      date: transaction.date,
+      pair: transaction.pair,
+      origin: transaction.origin,
+      type: transaction.type,
+      quantity: transaction.quantity,
+      price: transaction.price,
+      total: transaction.total,
+      fee: transaction.fee,
+      status: transaction.status,
+      profitBrl: transaction.profitBrl,
+      profitPercent: transaction.profitPercent,
+    }
+
     if (type === 'buy') {
       await prisma.balance.update({
         where: { userId_currency: { userId, currency: quoteCurrency } },
@@ -558,6 +574,13 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
       })
     })
 
+    emitOrderCreated(userId, transactionPayload)
+    emitDashboardUpdate(userId, {
+      scope: 'portfolio',
+      reason: 'order_executed',
+      updatedAt: new Date().toISOString(),
+    })
+
     await sendWebhook('order.executed', {
       pair,
       type,
@@ -604,20 +627,7 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
     endTrace('createOrder', { userId })
     return res.json({
       success: true,
-      data: {
-        id: transaction.id,
-        date: transaction.date,
-        pair: transaction.pair,
-        origin: transaction.origin,
-        type: transaction.type,
-        quantity: transaction.quantity,
-        price: transaction.price,
-        total: transaction.total,
-        fee: transaction.fee,
-        status: transaction.status,
-        profitBrl: transaction.profitBrl,
-        profitPercent: transaction.profitPercent,
-      },
+      data: transactionPayload,
     })
   } catch (error) {
     logger.error('[transactions] Erro ao criar ordem', {
@@ -661,6 +671,12 @@ export async function cancelOrder(req: AuthRequest, res: Response): Promise<Resp
     await prisma.transaction.update({
       where: { id },
       data: { status: 'cancelled' },
+    })
+
+    emitOrderUpdated(userId, {
+      id,
+      status: 'cancelled',
+      updatedAt: new Date().toISOString(),
     })
 
     logger.info('[transactions] Ordem cancelada com sucesso', {
@@ -708,6 +724,12 @@ export async function getBalance(req: AuthRequest, res: Response): Promise<Respo
           error: snapshotError,
           skipPersistence: true,
         })
+      })
+
+      emitDashboardUpdate(userId, {
+        scope: 'portfolio',
+        reason: 'balance_synced',
+        updatedAt: new Date().toISOString(),
       })
 
       endTrace('getBalance', { userId })

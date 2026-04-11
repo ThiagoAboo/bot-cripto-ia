@@ -1,5 +1,6 @@
 import { apiClient } from '../../../shared/services/api.client'
 import type { 
+  AvailableBot,
   TrainingSession, 
   TrainingConfig, 
   BacktestResult,
@@ -7,6 +8,32 @@ import type {
 } from '../types/training.types'
 
 export const trainingService = {
+  async getBots(): Promise<AvailableBot[]> {
+    const bots = await apiClient.getData<Array<{
+      id: string
+      name: string
+      strategy: string
+      description?: string
+      status: 'online' | 'offline' | 'training' | 'error'
+      isPaused: boolean
+      lastAnalysis?: string
+      recommendedAction?: 'buy' | 'sell' | 'hold'
+      confidence?: number
+    }>>('/dashboard/bots-status')
+
+    return bots.map((bot) => ({
+      id: bot.id,
+      name: bot.name,
+      strategyType: bot.strategy,
+      description: bot.description,
+      status: bot.status,
+      isPaused: bot.isPaused,
+      lastAnalysis: bot.lastAnalysis,
+      recommendedAction: bot.recommendedAction,
+      confidence: bot.confidence,
+    }))
+  },
+
   async getStrategies(): Promise<AvailableStrategy[]> {
     return apiClient.getData('/training/strategies')
   },
@@ -22,6 +49,17 @@ export const trainingService = {
 
   async createSession(config: TrainingConfig): Promise<TrainingSession> {
     return apiClient.postData('/training/sessions', config)
+  },
+
+  async uploadDataset(file: File): Promise<{ url: string }> {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    return apiClient.postData('/training/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    })
   },
 
   async pauseSession(sessionId: string): Promise<void> {

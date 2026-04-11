@@ -4,7 +4,7 @@ import { Input } from '../../../shared/components/ui/Input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../shared/components/ui/Select'
 import { Brain, Cpu, Layers } from 'lucide-react'
 import { ARCHITECTURES } from '../types/training.types'
-import type { Architecture } from '../types/training.types'
+import type { Architecture, AvailableBot, AvailableStrategy } from '../types/training.types'
 
 interface ModelSelectorProps {
   botId: string
@@ -12,8 +12,8 @@ interface ModelSelectorProps {
   architecture: Architecture
   modelVersion: string
   baseModelId?: string
-  availableBots: Array<{ id: string; name: string; strategy: string }>
-  availableStrategies: Array<{ id: string; name: string; strategyType: string }>
+  availableBots: AvailableBot[]
+  availableStrategies: AvailableStrategy[]
   onBotChange: (value: string) => void
   onStrategyChange: (value: string) => void
   onArchitectureChange: (value: Architecture) => void
@@ -32,7 +32,11 @@ export function ModelSelector({
   onArchitectureChange,
   onVersionChange,
 }: ModelSelectorProps) {
-  const selectedArchitecture = ARCHITECTURES.find(a => a.value === architecture)
+  const selectedArchitecture = ARCHITECTURES.find((item) => item.value === architecture)
+  const selectedBot = availableBots.find((item) => item.id === botId)
+  const compatibleStrategies = selectedBot
+    ? availableStrategies.filter((item) => item.strategyType === selectedBot.strategyType)
+    : availableStrategies
 
   return (
     <Card>
@@ -55,7 +59,7 @@ export function ModelSelector({
               <SelectContent>
                 {availableBots.map((bot) => (
                   <SelectItem key={bot.id} value={bot.id}>
-                    {bot.name} ({bot.strategy})
+                    {bot.name} ({bot.strategyType})
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -73,7 +77,7 @@ export function ModelSelector({
                 <SelectValue placeholder="Selecione uma estratégia" />
               </SelectTrigger>
               <SelectContent>
-                {availableStrategies.map((strategy) => (
+                {compatibleStrategies.map((strategy) => (
                   <SelectItem key={strategy.id} value={strategy.id}>
                     {strategy.name}
                   </SelectItem>

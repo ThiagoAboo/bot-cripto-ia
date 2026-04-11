@@ -7,9 +7,12 @@ import {
   type CandlestickData,
   type IChartApi,
 } from 'lightweight-charts'
-import { LineChart, RefreshCw } from 'lucide-react'
+import { AlertCircle, LineChart, RefreshCw } from 'lucide-react'
 
 import { useTheme } from '../../../app/providers/ThemeProvider'
+import { formatCurrency } from '../../../shared/utils/formatters'
+import { useAvailablePairs, useCandles } from '../hooks/useTransactions'
+import { CHART_PERIODS, type CandleData, type ChartPeriod } from '../types/transactions.types'
 
 interface PairChartProps {
   selectedPair: string
@@ -17,8 +20,6 @@ interface PairChartProps {
   displayCurrency: string
   exchangeRate?: number
 }
-
-type Timeframe = '15m' | '1h' | '4h' | '1d'
 
 type ChartPalette = {
   background: string
@@ -54,9 +55,6 @@ const DEFAULT_PALETTE: Record<'light' | 'dark', ChartPalette> = {
   },
 }
 
-const PAIRS = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'ADA/USDT', 'XRP/USDT']
-const TIMEFRAMES: Timeframe[] = ['15m', '1h', '4h', '1d']
-
 const BASE_PRICES: Record<string, number> = {
   'BTC/USDT': 62350,
   'ETH/USDT': 3450,
@@ -91,109 +89,32 @@ function readPalette(theme: 'light' | 'dark'): ChartPalette {
   }
 }
 
-function getTimeframeStep(timeframe: Timeframe): number {
-  switch (timeframe) {
-    case '15m':
-      return 15 * 60
-    case '1h':
-      return 60 * 60
-    case '4h':
-      return 4 * 60 * 60
-    case '1d':
-      return 24 * 60 * 60
-    default:
-      return 60 * 60
-  }
-}
 
-function getBasePrice(pair: string): number {
-  return BASE_PRICES[pair] ?? 100
-}
-
-function hashSeed(text: string): number {
-  let hash = 0
-
-  for (let index = 0; index < text.length; index += 1) {
-    hash = (hash << 5) - hash + text.charCodeAt(index)
-    hash |= 0
-  }
-
-  return Math.abs(hash) + 1
-}
-
-function createRandom(seed: number) {
-  let state = seed % 2147483647
-
-  if (state <= 0) {
-    state += 2147483646
-  }
-
-  return () => {
-    state = (state * 16807) % 2147483647
-    return (state - 1) / 2147483646
-  }
-}
-
-function buildCandles(params: {
+function convertCandlesToChartData(params: {
+  candles: CandleData[]
   pair: string
-  timeframe: Timeframe
   displayCurrency: string
   exchangeRate?: number
-  refreshTick: number
 }): CandlestickData[] {
-  const { pair, timeframe, displayCurrency, exchangeRate, refreshTick } = params
-  const points = timeframe === '1d' ? 90 : 120
-  const step = getTimeframeStep(timeframe)
-  const multiplier =
-    displayCurrency === 'BRL' && pair.endsWith('/USDT')
+  const { candles, pair, displayCurrency, exchangeRate } = params
+  const conversionRate =
+    pair.endsWith('/USDT') && displayCurrency !== 'USDT'
       ? exchangeRate && exchangeRate > 0
         ? exchangeRate
-        : 5.85
+        : 1
       : 1
 
-  const base = getBasePrice(pair) * multiplier
-  const random = createRandom(hashSeed(`${pair}-${timeframe}-${displayCurrency}-${refreshTick}`))
-  const now = Math.floor(Date.now() / 1000)
-  const candles: CandlestickData[] = []
-  let previousClose = base
-
-  for (let index = points; index > 0; index -= 1) {
-    const time = (now - index * step) as UTCTimestamp
-    const drift = (random() - 0.5) * base * 0.0025
-    const volatility = base * (timeframe === '1d' ? 0.018 : timeframe === '4h' ? 0.010 : 0.006)
-    const open = previousClose
-    const close = Math.max(0.0001, open + drift + (random() - 0.5) * volatility)
-    const high = Math.max(open, close) + random() * volatility * 0.7
-    const low = Math.max(0.0001, Math.min(open, close) - random() * volatility * 0.7)
-
-    candles.push({
-      time,
-      open: Number(open.toFixed(6)),
-      high: Number(high.toFixed(6)),
-      low: Number(low.toFixed(6)),
-      close: Number(close.toFixed(6)),
-    })
-
-    previousClose = close
-  }
-
-  return candles
+  return candles.map((candle) => ({
+    time: Math.floor(new Date(candle.timestamp).getTime() / 1000) as UTCTimestamp,
+    open: Number((candle.open * conversionRate).toFixed(6)),
+    high: Number((candle.high * conversionRate).toFixed(6)),
+    low: Number((candle.low * conversionRate).toFixed(6)),
+    close: Number((candle.close * conversionRate).toFixed(6)),
+  }))
 }
 
 function formatPrice(value: number, currency: string) {
-  if (currency === 'BRL') {
-    return new Intl.NumberFormat('pt-BR', {
-      style: 'currency',
-      currency: 'BRL',
-      maximumFractionDigits: value >= 100 ? 2 : 4,
-    }).format(value)
-  }
-
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: value >= 100 ? 2 : 4,
-  }).format(value)
+  return formatCurrency(value, currency)
 }
 
 export function PairChart({
@@ -206,16 +127,32 @@ export function PairChart({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chartRef = useRef<IChartApi | null>(null)
   const seriesRef = useRef<ReturnType<IChartApi['addCandlestickSeries']> | null>(null)
-  const [timeframe, setTimeframe] = useState<Timeframe>('1h')
-  const [refreshTick, setRefreshTick] = useState(0)
+  const [timeframe, setTimeframe] = useState<ChartPeriod>('1h')
+  const { data: availablePairs } = useAvailablePairs()
+  const {
+    data: candlesResponse,
+    isLoading,
+    isFetching,
+    error,
+    refetch,
+  } = useCandles(selectedPair, timeframe, timeframe === '1w' ? 52 : timeframe === '1d' ? 90 : 120)
 
   const palette = useMemo(() => readPalette(theme), [theme])
 
-  const pairOptions = useMemo(() => Array.from(new Set([selectedPair, ...PAIRS])), [selectedPair])
+  const pairOptions = useMemo(
+    () => Array.from(new Set([selectedPair, ...(availablePairs ?? Object.keys(BASE_PRICES))])),
+    [availablePairs, selectedPair],
+  )
 
   const candles = useMemo(
-    () => buildCandles({ pair: selectedPair, timeframe, displayCurrency, exchangeRate, refreshTick }),
-    [selectedPair, timeframe, displayCurrency, exchangeRate, refreshTick],
+    () =>
+      convertCandlesToChartData({
+        candles: candlesResponse ?? [],
+        pair: selectedPair,
+        displayCurrency,
+        exchangeRate,
+      }),
+    [candlesResponse, displayCurrency, exchangeRate, selectedPair],
   )
 
   const syncChartTheme = useCallback(() => {
@@ -348,7 +285,9 @@ export function PairChart({
     }
 
     seriesRef.current.setData(candles)
-    chartRef.current.timeScale().fitContent()
+    if (candles.length > 0) {
+      chartRef.current.timeScale().fitContent()
+    }
   }, [candles])
 
   useEffect(() => {
@@ -401,7 +340,7 @@ export function PairChart({
 
           <select
             value={timeframe}
-            onChange={(event) => setTimeframe(event.target.value as Timeframe)}
+            onChange={(event) => setTimeframe(event.target.value as ChartPeriod)}
             className="h-12 min-w-[110px] rounded-2xl border px-4 text-sm font-medium outline-none transition"
             style={{
               backgroundColor: 'var(--surface-2)',
@@ -409,16 +348,18 @@ export function PairChart({
               borderColor: 'var(--border-color)',
             }}
           >
-            {TIMEFRAMES.map((item) => (
-              <option key={item} value={item}>
-                {item}
+            {CHART_PERIODS.map((item) => (
+              <option key={item.value} value={item.value}>
+                {item.label}
               </option>
             ))}
           </select>
 
           <button
             type="button"
-            onClick={() => setRefreshTick((current) => current + 1)}
+            onClick={() => {
+              void refetch()
+            }}
             className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border transition hover:scale-[1.02]"
             style={{
               backgroundColor: '#2563eb',
@@ -428,7 +369,7 @@ export function PairChart({
             aria-label="Atualizar gráfico"
             title="Atualizar gráfico"
           >
-            <RefreshCw size={18} />
+            <RefreshCw size={18} className={isFetching ? 'animate-spin' : undefined} />
           </button>
         </div>
       </div>
@@ -440,14 +381,40 @@ export function PairChart({
           borderColor: 'var(--border-color)',
         }}
       >
-        <div
-          ref={containerRef}
-          className="h-[380px] w-full"
-          style={{
-            backgroundColor: palette.surface,
-            borderRadius: 18,
-          }}
-        />
+        <div className="relative">
+          <div
+            ref={containerRef}
+            className="h-[380px] w-full"
+            style={{
+              backgroundColor: palette.surface,
+              borderRadius: 18,
+              opacity: isLoading ? 0.5 : 1,
+            }}
+          />
+
+          {error && (
+            <div
+              className="absolute inset-0 flex flex-col items-center justify-center gap-3 rounded-[18px] text-center"
+              style={{ backgroundColor: 'rgba(15, 23, 42, 0.72)' }}
+            >
+              <AlertCircle className="h-8 w-8 text-error" />
+              <div>
+                <p className="font-medium text-white">
+                  Não foi possível carregar o gráfico
+                </p>
+                <p className="mt-1 text-sm text-slate-200">
+                  Tente atualizar novamente em alguns instantes.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {candles.length === 0 && !isLoading && !error && (
+          <div className="mt-3 text-center text-sm" style={{ color: 'var(--text-secondary)' }}>
+            Nenhuma vela retornada para este par e período.
+          </div>
+        )}
       </div>
     </section>
   )

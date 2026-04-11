@@ -10,15 +10,16 @@ import { Skeleton } from '../../../shared/components/ui/Skeleton'
 import { Button } from '../../../shared/components/ui/Button'
 import { ChevronLeft, ChevronRight, Download, TrendingUp, TrendingDown, Bot, User } from 'lucide-react'
 import { formatCurrency, formatDate, formatPercent, getProfitColor, cn } from '../../../shared/utils/formatters'
-import type { Transaction, OrderFilters } from '../types/transactions.types'
+import type { TransactionsResponse, OrderFilters } from '../types/transactions.types'
 
 interface TransactionsTableProps {
-  data?: { items: Transaction[]; total: number }
+  data?: TransactionsResponse
   isLoading: boolean
   filters: OrderFilters
   onFiltersChange: (filters: OrderFilters) => void
   displayCurrency: string
   onExport: () => void
+  isExporting?: boolean
 }
 
 export function TransactionsTable({
@@ -28,6 +29,7 @@ export function TransactionsTable({
   onFiltersChange,
   displayCurrency,
   onExport,
+  isExporting = false,
 }: TransactionsTableProps) {
   const totalPages = data ? Math.ceil(data.total / filters.limit) : 0
 
@@ -73,7 +75,7 @@ export function TransactionsTable({
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
-        <Button variant="outline" size="sm" onClick={onExport}>
+        <Button variant="outline" size="sm" onClick={onExport} isLoading={isExporting}>
           <Download className="w-4 h-4 mr-2" />
           Exportar CSV
         </Button>

@@ -1,0 +1,1106 @@
+================================================================================
+ESPECIFICAÇÃO TÉCNICA – BOTS DE IA PARA TRADING DE CRIPTOMOEDAS
+================================================================================
+Versão: 1.0 – Camada de Inteligência Artificial
+Data: 11 de abril de 2026
+Status: Especificação completa para implementação
+
+
+================================================================================
+ÍNDICE
+================================================================================
+
+1. VISÃO GERAL DA CAMADA DE IA
+2. ARQUITETURA DOS BOTS
+3. ESTRATÉGIAS DISPONÍVEIS
+4. FLUXO DE DECISÃO DO BOT
+5. MÓDULO DE ANÁLISE DE MERCADO
+6. MÓDULO DE SOCIAL SENTIMENT
+7. MÓDULO DE GESTÃO DE RISCO
+8. MÓDULO DE DECISÃO (IA)
+9. MÓDULO DE EXECUÇÃO (SIMULADO/REAL)
+10. MÓDULO DE TREINAMENTO DE MODELOS
+11. MÓDULO DE TRACING E LOGS
+12. CONFIGURAÇÕES DOS BOTS
+13. APIS DE CONSUMO (BACKEND)
+14. APIS DE AÇÃO (BACKEND)
+15. EXEMPLO DE IMPLEMENTAÇÃO
+16. RESUMO DAS RESPONSABILIDADES
+
+
+================================================================================
+1. VISÃO GERAL DA CAMADA DE IA
+================================================================================
+
+1.1 PROPÓSITO
+
+A camada de IA é o cérebro do sistema – responsável por:
+- Consumir dados persistidos no backend (candles, indicadores, sentimento social)
+- Aplicar análises baseadas em estratégias configuradas
+- Tomar decisões de compra/venda/hold com nível de confiança
+- Executar ordens (simulado ou real) através das APIs do backend
+- Aprender e evoluir via treinamento de modelos de ML
+
+1.2 PRINCÍPIOS FUNDAMENTAIS
+
+| Princípio                 | Descrição |
+|---------------------------|-----------|
+| Bot por Estratégia        | Cada bot é especialista em um tipo de análise |
+| Análise Multi-Moeda       | Cada bot analisa dinamicamente todas as moedas disponíveis |
+| Decisão Autônoma          | O bot decide qual moeda negociar no momento |
+| Recomendação com Confiança| Cada ação tem nível de confiança (0-100%) |
+| Configurável              | Parâmetros lidos do backend |
+| Rastreável                | Cada passo da análise é registrado via trace |
+
+1.3 RELAÇÃO COM O BACKEND
+
+Os bots NÃO acessam APIs externas diretamente. Eles:
+1. CONSOEM dados já persistidos no backend via APIs REST
+2. ANALISAM os dados com suas estratégias
+3. DECIDEM ações (buy/sell/hold) com nível de confiança
+4. ACIONAM execução de ordens via APIs do backend
+5. REGISTRAM traces e logs via APIs do backend
+
+
+================================================================================
+2. ARQUITETURA DOS BOTS
+================================================================================
+
+2.1 HIERARQUIA DE CLASSES
+
+Bot (base abstrata)
+├── ScalperBot
+├── MomentumBot
+├── TrendFollowerBot
+├── MeanReversionBot
+└── ArbitrageBot
+
+2.2 INTERFACE BASE DO BOT
+
+interface IMarketData {
+  pair: string
+  timestamp: Date
+  currentPrice: number
+  candles: {
+    '1m': Candle[]
+    '5m': Candle[]
+    '15m': Candle[]
+    '1h': Candle[]
+    '4h': Candle[]
+    '1d': Candle[]
+  }
+  orderbook: {
+    bids: [price: number, quantity: number][]
+    asks: [price: number, quantity: number][]
+  }
+  volume24h: number
+  socialScore?: number      // 0-1, do Reddit (ApeWisdom)
+  newsScore?: number        // -1 a 1, do RSS
+}
+
+interface AnalysisResult {
+  pair: string
+  action: 'buy' | 'sell' | 'hold'
+  confidence: number        // 0-100
+  indicators: Record<string, number>
+  reason: string
+  timestamp: Date
+}
+
+interface BotConfig {
+  id: string
+  name: string
+  type: string
+  isActive: boolean
+  parameters: Record<string, any>
+  allowedPairs: string[]
+  risk: RiskConfig
+}
+
+2.3 CICLO DE VIDA DO BOT
+
+O bot executa um loop contínuo a cada intervalo configurável:
+
+1. Carregar dados do backend (candles, preço atual, order book, social)
+2. Para cada moeda na lista de permitidas:
+   a. Calcular indicadores específicos da estratégia
+   b. Gerar recomendação (buy/sell/hold)
+   c. Calcular nível de confiança (0-100)
+3. Selecionar a melhor oportunidade (maior confiança)
+4. Aplicar gestão de risco (stop loss, take profit, exposição)
+5. Se confiança > threshold, executar ordem via backend
+6. Registrar traces de cada passo
+
+
+================================================================================
+3. ESTRATÉGIAS DISPONÍVEIS
+================================================================================
+
+3.1 SCALPER BOT
+
+Objetivo: Operações rápidas com pequenos lucros (1-5 ticks)
+
+Parâmetros configuráveis:
+{
+  "timeframe": "1m",
+  "maxSpreadPercent": 0.1,
+  "minVolume": 100000,
+  "takeProfitTicks": 5,
+  "stopLossTicks": 3,
+  "maxTradeDurationSeconds": 300
+}
+
+Indicadores calculados:
+- Spread = (ask - bid) / mid
+- Micro momentum = (price - price_5s_ago) / price_5s_ago
+- Volume spike = volume / avg_volume_1h
+- Order book imbalance = (bid_vol - ask_vol) / total_vol
+
+Lógica de decisão:
+- COMPRA: spread < maxSpreadPercent E volume > minVolume 
+         E micro_momentum > 0.1% E order_imbalance > 0.6
+- VENDA: preço atingiu take profit OU stop loss
+
+3.2 MOMENTUM BOT
+
+Objetivo: Identificar moedas com forte aceleração de preço
+
+Parâmetros configuráveis:
+{
+  "rsiPeriod": 14,
+  "rsiOverbought": 70,
+  "rsiOversold": 30,
+  "macdFast": 12,
+  "macdSlow": 26,
+  "macdSignal": 9,
+  "momentumThreshold": 2.5,
+  "lookbackPeriods": [1, 4, 24]
+}
+
+Indicadores calculados:
+- RSI = 100 - (100 / (1 + RS))
+- MACD = EMA12 - EMA26, sinal EMA9
+- Momentum = (price / price_n_periods_ago - 1) * 100
+
+Lógica de decisão:
+- COMPRA: RSI > 30 E MACD_linha > MACD_sinal 
+         E momentum_1h > threshold E volume_ratio > 1.5
+- VENDA: RSI > overbought E MACD_linha < MACD_sinal
+
+3.3 TREND FOLLOWER BOT
+
+Objetivo: Seguir tendências de médio/longo prazo
+
+Parâmetros configuráveis:
+{
+  "fastEma": 20,
+  "slowEma": 50,
+  "trendEma": 200,
+  "adxPeriod": 14,
+  "adxThreshold": 25,
+  "minTrendStrength": 30
+}
+
+Indicadores calculados:
+- EMA20, EMA50, EMA200 (médias móveis exponenciais)
+- ADX = Average Directional Index
+- Slope = (EMA20 - EMA20_10periods_ago)
+
+Lógica de decisão:
+- COMPRA: price > EMA200 E EMA20 > EMA50 E slope > 0 E ADX > threshold
+- VENDA: price < EMA200 E EMA20 < EMA50 E slope < 0 E ADX > threshold
+
+3.4 MEAN REVERSION BOT
+
+Objetivo: Apostar na reversão à média (sobrecomprado/sobrevendido)
+
+Parâmetros configuráveis:
+{
+  "bbPeriod": 20,
+  "bbStdDev": 2,
+  "rsiPeriod": 14,
+  "rsiLower": 30,
+  "rsiUpper": 70,
+  "zscoreThreshold": 2,
+  "minReversionStrength": 0.6
+}
+
+Indicadores calculados:
+- Bollinger Bands = MA ± k * σ
+- Z-score = (price - MA) / σ
+- RSI = Índice de força relativa
+
+Lógica de decisão:
+- COMPRA: price < BB_lower E RSI < rsiLower E zscore < -threshold
+- VENDA: price > BB_upper E RSI > rsiUpper E zscore > threshold
+
+3.5 ARBITRAGE BOT
+
+Objetivo: Explorar diferenças de preço entre pares
+
+Parâmetros configuráveis:
+{
+  "minSpreadPercent": 0.5,
+  "maxLatencyMs": 100,
+  "minLiquidity": 50000,
+  "maxTradeSize": 1000
+}
+
+Indicadores calculados:
+- Spread = (price_pairA - price_pairB) / price_pairB
+- Liquidity = bid_volume + ask_volume
+
+Lógica de decisão:
+- PARA CADA par correlacionado:
+  SE spread > minSpreadPercent E liquidity > minLiquidity E latency < maxLatencyMs
+  ENTÃO comprar no mais barato, vender no mais caro
+
+
+================================================================================
+4. FLUXO DE DECISÃO DO BOT
+================================================================================
+
+4.1 DIAGRAMA DE SEQUÊNCIA
+
+Bot → Backend → Database → Executor
+
+1. loadConfig() → GET /api/configurations
+2. loadMarketData() → GET /api/exchange/candles
+                    → GET /api/exchange/price
+                    → GET /api/exchange/orderbook
+                    → GET /api/social/latest
+3. analyzeAllPairs() - cálculos internos
+4. getBestOpportunity() - seleciona melhor confiança
+5. applyRiskManagement() - valida stop/take profit
+6. recordTrace() → POST /api/traces
+7. execute(order) → POST /api/orders
+
+4.2 ALGORITMO DE DECISÃO MULTI-MOEDA
+
+async function analyzeAllPairs(bot, marketData):
+  results = []
+  
+  for each pair in bot.allowedPairs:
+    indicators = bot.calculateIndicators(marketData[pair])
+    action = bot.getRecommendation(indicators)
+    confidence = bot.calculateConfidence(indicators, action)
+    
+    if confidence >= bot.minConfidence:
+      results.append({ pair, action, confidence, indicators })
+  
+  return results.sort(by confidence DESC)
+
+function getBestOpportunity(analyses):
+  if analyses.empty(): return null
+  return analyses[0]  // já ordenado por confiança
+
+4.3 GESTÃO DE RISCO
+
+function applyRiskManagement(analysis, currentPositions, riskConfig, balance):
+  position = currentPositions.get(analysis.pair)
+  
+  // Se venda e não tem posição, ignorar
+  if analysis.action == 'sell' and not position: return null
+  
+  // Se tem posição, verificar stop loss e take profit
+  if position:
+    currentPrice = getCurrentPrice(analysis.pair)
+    pnlPercent = (currentPrice - position.entryPrice) / position.entryPrice * 100
+    
+    if pnlPercent <= -riskConfig.stopLossPercent:
+      return { action: 'sell', reason: 'Stop loss', confidence: 100 }
+    
+    if pnlPercent >= riskConfig.takeProfitPercent:
+      return { action: 'sell', reason: 'Take profit', confidence: 100 }
+  
+  // Se compra, verificar exposição máxima
+  if analysis.action == 'buy':
+    currentExposure = calculateTotalExposure(currentPositions, balance)
+    newExposure = currentExposure + riskConfig.maxPositionSize
+    maxAllowed = balance * riskConfig.maxExposurePerCoin
+    
+    if newExposure > maxAllowed:
+      return null  // Exposição máxima atingida
+  
+  return analysis
+
+
+================================================================================
+5. MÓDULO DE ANÁLISE DE MERCADO
+================================================================================
+
+5.1 CÁLCULO DE INDICADORES TÉCNICOS
+
+interface TechnicalIndicators {
+  sma: (periods) => number[]           // Média móvel simples
+  ema: (periods) => number[]           // Média móvel exponencial
+  rsi: (periods) => number             // Índice de força relativa
+  macd: () => { macd, signal, histogram }
+  bb: (periods, stdDev) => { upper, middle, lower }
+  atr: (periods) => number             // Average True Range
+  roc: (periods) => number             // Rate of Change
+}
+
+Implementações:
+
+function calculateRSI(closes, period = 14):
+  gains = 0, losses = 0
+  for i = length - period to length:
+    change = closes[i] - closes[i-1]
+    if change >= 0: gains += change
+    else: losses -= change
+  avgGain = gains / period
+  avgLoss = losses / period
+  rs = avgGain / avgLoss
+  return 100 - (100 / (1 + rs))
+
+function calculateMACD(closes, fast=12, slow=26, signal=9):
+  emaFast = calculateEMA(closes, fast)
+  emaSlow = calculateEMA(closes, slow)
+  macdLine = emaFast - emaSlow
+  signalLine = calculateEMA(macdLine, signal)
+  histogram = macdLine - signalLine
+  return { macd: macdLine, signal: signalLine, histogram }
+
+5.2 ANÁLISE DE ORDER BOOK
+
+interface OrderBookAnalysis {
+  bidLiquidity: number      // Soma dos volumes de compra
+  askLiquidity: number      // Soma dos volumes de venda
+  imbalance: number         // (bid - ask) / (bid + ask)
+  spread: number            // (ask[0] - bid[0]) / mid
+}
+
+function analyzeOrderBook(orderbook):
+  bidLiquidity = sum(orderbook.bids[0:10].volume)
+  askLiquidity = sum(orderbook.asks[0:10].volume)
+  bestBid = orderbook.bids[0].price
+  bestAsk = orderbook.asks[0].price
+  mid = (bestBid + bestAsk) / 2
+  
+  return {
+    bidLiquidity,
+    askLiquidity,
+    imbalance: (bidLiquidity - askLiquidity) / (bidLiquidity + askLiquidity),
+    spread: (bestAsk - bestBid) / mid
+  }
+
+
+================================================================================
+6. MÓDULO DE SOCIAL SENTIMENT
+================================================================================
+
+6.1 FONTE DE DADOS: REDDIT (APEWISDOM)
+
+API: https://apewisdom.io/api/v1.0/filter/all-stocks/page/1
+Frequência: a cada 12 horas (configurável)
+Custo: gratuito, sem necessidade de token
+
+6.2 ESTRUTURA DOS DADOS
+
+interface SocialData {
+  symbol: string           // BTC, ETH, SOL (sem USDT)
+  score: number            // 0-100
+  rank: number
+  mentions: number
+  sentiment: 'bullish' | 'bearish' | 'neutral'
+  timestamp: Date
+}
+
+6.3 APLICAÇÃO DO BOOST SOCIAL
+
+function applySocialBoost(analysis, socialData):
+  social = socialData.get(analysis.pair.replace('USDT', ''))
+  
+  if not social: return analysis
+  
+  // Boost de confiança para moedas com score alto
+  if social.score > 65:
+    boost = 1 + (social.score - 65) / 100  // até 1.35x
+    analysis.confidence = min(100, analysis.confidence * boost)
+    analysis.reason += " | Social boost: " + social.score + "%"
+  
+  // Penalidade para moedas com sentimento negativo
+  if social.sentiment == 'bearish' and analysis.action == 'buy':
+    analysis.confidence = analysis.confidence * 0.5
+    analysis.reason += " | Sentimento negativo no Reddit"
+  
+  return analysis
+
+
+================================================================================
+7. MÓDULO DE GESTÃO DE RISCO
+================================================================================
+
+7.1 CONFIGURAÇÕES DE RISCO
+
+interface RiskConfig {
+  // Por trade
+  maxPositionSize: number           // USDT
+  stopLossPercent: number           // %
+  takeProfitPercent: number         // %
+  
+  // Exposição
+  maxExposurePerCoin: number        // % do portfólio
+  maxTotalExposure: number          // % do portfólio
+  
+  // Alavancagem (futuros)
+  leverage: number                  // 1-125
+  
+  // Diversificação
+  maxConcurrentTrades: number
+  minCorrelationThreshold: number
+}
+
+7.2 VALIDAÇÃO DE TRADE
+
+function validateTrade(trade, portfolio, riskConfig):
+  // 1. Verificar se é venda e há posição
+  if trade.action == 'sell' and not portfolio.hasPosition(trade.pair):
+    return { isValid: false, reason: 'No position to sell' }
+  
+  // 2. Verificar número máximo de trades concorrentes
+  if portfolio.openPositionsCount >= riskConfig.maxConcurrentTrades:
+    return { isValid: false, reason: 'Max concurrent trades reached' }
+  
+  // 3. Verificar exposição por moeda
+  currentExposure = portfolio.getExposure(trade.pair)
+  newExposure = currentExposure + riskConfig.maxPositionSize
+  maxAllowed = portfolio.totalBalance * riskConfig.maxExposurePerCoin
+  
+  if newExposure > maxAllowed:
+    return { isValid: false, reason: 'Max exposure per coin exceeded' }
+  
+  // 4. Verificar exposição total
+  totalExposure = portfolio.totalExposure + riskConfig.maxPositionSize
+  maxTotal = portfolio.totalBalance * riskConfig.maxTotalExposure
+  
+  if totalExposure > maxTotal:
+    return { isValid: false, reason: 'Max total exposure exceeded' }
+  
+  return { isValid: true }
+
+
+================================================================================
+8. MÓDULO DE DECISÃO (IA)
+================================================================================
+
+8.1 MODELOS DE MACHINE LEARNING
+
+Cada bot pode ter um modelo de IA treinado especificamente para sua estratégia.
+
+interface MLModel {
+  name: string
+  type: 'random_forest' | 'xgboost' | 'lstm'
+  version: string
+  predict(features): { action, confidence, probabilities }
+}
+
+8.2 FEATURES PARA O MODELO
+
+function extractFeatures(marketData, indicators):
+  return [
+    // Preço e retornos
+    marketData.currentPrice,
+    indicators.roc(1),
+    indicators.roc(4),
+    indicators.roc(24),
+    
+    // Médias móveis
+    indicators.ema(20),
+    indicators.ema(50),
+    (indicators.ema(20) - indicators.ema(50)) / indicators.ema(50),
+    
+    // Osciladores
+    indicators.rsi(14),
+    indicators.macd().histogram,
+    
+    // Volatilidade
+    (indicators.bb(20,2).upper - indicators.bb(20,2).lower) / indicators.bb(20,2).middle,
+    indicators.atr(14) / marketData.currentPrice,
+    
+    // Volume
+    marketData.volume24h / indicators.sma(24).last(),
+    
+    // Order book
+    marketData.orderbookImbalance,
+    marketData.orderbookSpread,
+    
+    // Social
+    marketData.socialScore || 0,
+    marketData.newsScore || 0
+  ]
+
+8.3 DECISÃO HÍBRIDA (REGRAS + IA)
+
+async function decide(bot, marketData):
+  // 1. Calcular indicadores (regras)
+  indicators = bot.calculateIndicators(marketData)
+  ruleAction = bot.getRecommendation(indicators)
+  ruleConfidence = bot.calculateConfidence(indicators, ruleAction)
+  
+  // 2. Se tiver modelo de IA, fazer predição
+  if bot.mlModel:
+    features = extractFeatures(marketData, indicators)
+    prediction = bot.mlModel.predict(features)
+    mlAction = prediction.action
+    mlConfidence = prediction.confidence
+  
+  // 3. Combinar decisões
+  if ruleAction == mlAction:
+    finalAction = ruleAction
+    finalConfidence = (ruleConfidence * weights.rules + mlConfidence * weights.ml) / (weights.rules + weights.ml)
+  else:
+    finalAction = 'hold'  // discordância, não agir
+  
+  return { action: finalAction, confidence: finalConfidence }
+
+
+================================================================================
+9. MÓDULO DE EXECUÇÃO (SIMULADO/REAL)
+================================================================================
+
+9.1 INTERFACE DO EXECUTOR
+
+interface IExecutor {
+  execute(order): Promise<ExecutionResult>
+  getBalance(currency): Promise<number>
+  getPositions(): Promise<Position[]>
+  cancelOrder(orderId): Promise<void>
+}
+
+interface Order {
+  pair: string
+  side: 'buy' | 'sell'
+  quantity: number
+  price?: number          // se market, ignora
+  type: 'market' | 'limit'
+  botId: string
+  confidence: number
+}
+
+9.2 SIMULATEDEXECUTOR (CARTEIRA LOCAL)
+
+Regras da simulação:
+- Saldo inicial: 10.000 USDT (configurável)
+- Ordens executadas instantaneamente ao preço de mercado atual
+- Cálculo de PnL baseado em FIFO (First In, First Out)
+- Suporte a stop loss e take profit
+- Reset de carteira via API
+
+Estrutura de dados:
+- balances: Map<currency, amount>
+- positions: Map<pair, { entryPrice, quantity, timestamp }>
+- orders: Order[]
+
+9.3 REALEXECUTOR (BINANCE)
+
+Integração com Binance via API:
+- Autenticação: API Key + Secret Key (HMAC-SHA256)
+- Rate limiting: respeitar limites da Binance (1200 weight/minuto)
+- Suporte a ordens market e limit
+- Uso de BNB para taxas (configurável)
+- Reserva mínima de BNB (configurável)
+
+9.4 CHAVEAMENTO SIMULADO/REAL
+
+function createExecutor(mode, config):
+  if mode == 'simulated':
+    return new SimulatedExecutor(config.initialBalance)
+  else:
+    return new RealExecutor(config.apiKey, config.secretKey)
+
+
+================================================================================
+10. MÓDULO DE TREINAMENTO DE MODELOS
+================================================================================
+
+10.1 PIPELINE DE TREINAMENTO
+
+interface TrainingPipeline {
+  botId: string
+  strategyType: string
+  timeframe: string
+  trainingPeriod: { startDate, endDate }
+  includedPairs: string[]
+  architecture: 'random_forest' | 'xgboost' | 'lstm'
+  hyperparameters: Record<string, any>
+}
+
+10.2 CRIAÇÃO DE LABELS
+
+As labels são criadas baseadas no retorno futuro:
+
+function createLabels(data, horizon, buyThreshold, sellThreshold):
+  labels = []
+  for i = 0 to data.length - horizon:
+    currentPrice = data[i].close
+    futurePrice = data[i + horizon].close
+    returnPct = (futurePrice - currentPrice) / currentPrice * 100
+    
+    if returnPct > buyThreshold:
+      labels.push(1)    // buy
+    else if returnPct < sellThreshold:
+      labels.push(2)    // sell
+    else:
+      labels.push(0)    // hold
+  
+  return labels
+
+Valores padrão:
+- buyThreshold: +0.3% (recomenda compra se subir > 0.3% em 5 minutos)
+- sellThreshold: -0.3% (recomenda venda se cair < -0.3% em 5 minutos)
+- horizon: 5 minutos (baseado na resolução do timeframe)
+
+10.3 MODELOS SUPORTADOS
+
+Random Forest (scikit-learn):
+- n_estimators: 100
+- max_depth: 10
+- random_state: 42
+
+XGBoost:
+- n_estimators: 100
+- learning_rate: 0.01
+- max_depth: 6
+
+LSTM (TensorFlow):
+- camadas: LSTM(64) + Dense(3, softmax)
+- epochs: 50
+- batch_size: 32
+
+10.4 MÉTRICAS DE AVALIAÇÃO
+
+Após o treinamento, o modelo é avaliado com:
+- Acurácia: (TP + TN) / total
+- Matriz de confusão: [TP, FP; FN, TN]
+- Log Loss: -Σ y * log(p)
+- F1-Score: 2 * (precision * recall) / (precision + recall)
+
+
+================================================================================
+11. MÓDULO DE TRACING E LOGS
+================================================================================
+
+11.1 ESTRUTURA DO TRACE
+
+interface TraceEntry {
+  id: string
+  timestamp: Date
+  level: 'DEBUG' | 'TRACE'
+  module: string
+  traceId: string                   // UUID da execução
+  parentTraceId?: string            // Para hierarquia
+  functionName: string
+  message: string
+  durationMs: number
+  botId?: string
+  currentPair?: string
+  recommendedAction?: 'buy' | 'sell' | 'hold'
+  confidence?: number
+  errorFlag?: boolean
+  data?: Record<string, any>
+}
+
+11.2 FUNÇÃO DE TRACE
+
+class Tracer:
+  constructor(botId, currentPair):
+    this.startTime = new Date()
+    this.traceId = uuid()
+    this.botId = botId
+    this.currentPair = currentPair
+  
+  trace(functionName, message, data):
+    entry = {
+      id: uuid(),
+      timestamp: new Date(),
+      level: 'TRACE',
+      module: this.botId,
+      traceId: this.traceId,
+      functionName,
+      message,
+      durationMs: now() - this.startTime,
+      botId: this.botId,
+      currentPair: this.currentPair,
+      data
+    }
+    
+    // Enviar para backend
+    POST /api/traces com entry
+
+11.3 QUANDO REGISTRAR TRACE
+
+- Entrada/saída de funções principais do bot
+- Cálculo de cada indicador
+- Decisão de compra/venda/hold
+- Aplicação de gestão de risco
+- Execução de ordem
+- Erros e exceções
+
+
+================================================================================
+12. CONFIGURAÇÕES DOS BOTS
+================================================================================
+
+12.1 ESTRUTURA DAS CONFIGURAÇÕES
+
+interface BotConfiguration {
+  id: string
+  name: string
+  strategyType: 'scalper' | 'momentum' | 'trend_follower' | 'mean_reversion' | 'arbitrage'
+  isActive: boolean
+  
+  // Parâmetros específicos da estratégia
+  parameters: Record<string, any>
+  
+  // Moedas permitidas
+  allowedPairs: string[]
+  
+  // Configurações de risco
+  risk: {
+    stopLossPercent: number
+    takeProfitPercent: number
+    maxPositionSize: number
+    maxExposurePerCoin: number
+    minConfidence: number
+  }
+  
+  // IA/ML
+  mlModel: {
+    enabled: boolean
+    modelVersion: string
+    modelUrl: string
+    weights: { rules: number, ml: number }
+  }
+  
+  // Frequência
+  analysisIntervalSeconds: number
+  
+  // Social sentiment
+  socialEnabled: boolean
+  socialBoostThreshold: number
+}
+
+12.2 EXEMPLO: SCALPER BOT CONFIG
+
+{
+  "id": "bot_scalper_01",
+  "name": "Scalper V2",
+  "strategyType": "scalper",
+  "isActive": true,
+  "parameters": {
+    "timeframe": "1m",
+    "maxSpreadPercent": 0.1,
+    "minVolume": 100000,
+    "takeProfitTicks": 5,
+    "stopLossTicks": 3,
+    "maxTradeDurationSeconds": 300
+  },
+  "allowedPairs": ["BTC/USDT", "ETH/USDT", "SOL/USDT"],
+  "risk": {
+    "stopLossPercent": 2.0,
+    "takeProfitPercent": 3.0,
+    "maxPositionSize": 500,
+    "maxExposurePerCoin": 0.1,
+    "minConfidence": 70
+  },
+  "mlModel": {
+    "enabled": true,
+    "modelVersion": "v2.1.0",
+    "modelUrl": "/models/scalper_v2_1_0.pkl",
+    "weights": { "rules": 0.6, "ml": 0.4 }
+  },
+  "analysisIntervalSeconds": 5,
+  "socialEnabled": true,
+  "socialBoostThreshold": 65
+}
+
+
+================================================================================
+13. APIS DE CONSUMO (BACKEND)
+================================================================================
+
+Os bots consomem dados do backend através das seguintes APIs:
+
+13.1 CARREGAR CONFIGURAÇÕES
+
+GET /api/configurations
+
+Response:
+{
+  "exchangeApiKeys": { ... },
+  "botParameters": {
+    "riskManagement": { ... },
+    "allowedPairs": [...],
+    "strategies": [...]
+  }
+}
+
+13.2 CARREGAR DADOS DE MERCADO
+
+GET /api/exchange/candles?pair=BTC/USDT&period=1h&limit=100
+
+Response:
+{
+  "success": true,
+  "data": [
+    { "timestamp": "...", "open": 62000, "high": 62500, "low": 61800, "close": 62300, "volume": 1234.5 }
+  ]
+}
+
+13.3 CARREGAR PREÇO ATUAL
+
+GET /api/exchange/price?pair=BTC/USDT
+
+Response:
+{
+  "success": true,
+  "data": { "price": 62345.67 }
+}
+
+13.4 CARREGAR ORDER BOOK
+
+GET /api/exchange/orderbook?pair=BTC/USDT&limit=10
+
+Response:
+{
+  "success": true,
+  "data": {
+    "bids": [[62300, 1.2], [62250, 0.8]],
+    "asks": [[62350, 1.5], [62400, 0.9]]
+  }
+}
+
+13.5 CARREGAR SOCIAL DATA
+
+GET /api/social/latest
+
+Response:
+{
+  "success": true,
+  "data": [
+    { "symbol": "BTC", "score": 78, "sentiment": "bullish" },
+    { "symbol": "ETH", "score": 65, "sentiment": "neutral" }
+  ]
+}
+
+13.6 CARREGAR SALDO (SIMULADO/REAL)
+
+GET /api/balance
+
+Response:
+{
+  "success": true,
+  "data": [
+    { "currency": "USDT", "available": 12500, "reserved": 500, "total": 13000 },
+    { "currency": "BTC", "available": 0.5, "reserved": 0, "total": 0.5 }
+  ]
+}
+
+
+================================================================================
+14. APIS DE AÇÃO (BACKEND)
+================================================================================
+
+Os bots executam ações através das seguintes APIs:
+
+14.1 EXECUTAR ORDEM
+
+POST /api/orders
+
+Request:
+{
+  "pair": "BTC/USDT",
+  "type": "buy",
+  "quantity": 0.05,
+  "orderType": "market",
+  "botId": "bot_scalper_01",
+  "confidence": 78
+}
+
+Response:
+{
+  "success": true,
+  "data": {
+    "id": "tx_123",
+    "status": "executed",
+    "price": 62345.67,
+    "fee": 12.50
+  }
+}
+
+14.2 REGISTRAR TRACE
+
+POST /api/traces
+
+Request:
+{
+  "level": "TRACE",
+  "module": "scalper_bot",
+  "traceId": "abc-123",
+  "functionName": "analyze",
+  "message": "Iniciando análise",
+  "durationMs": 0,
+  "botId": "bot_scalper_01",
+  "currentPair": "BTC/USDT"
+}
+
+14.3 REGISTRAR LOG
+
+POST /api/logs
+
+Request:
+{
+  "level": "INFO",
+  "module": "scalper_bot",
+  "message": "Ordem executada: COMPRA 0.05 BTC/USDT"
+}
+
+
+================================================================================
+15. EXEMPLO DE IMPLEMENTAÇÃO
+================================================================================
+
+15.1 CÓDIGO COMPLETO DO SCALPER BOT
+
+class ScalperBot extends BaseBot:
+  
+  constructor(config):
+    super(config)
+    this.maxSpreadPercent = config.parameters.maxSpreadPercent
+    this.minVolume = config.parameters.minVolume
+    this.takeProfitTicks = config.parameters.takeProfitTicks
+    this.stopLossTicks = config.parameters.stopLossTicks
+  
+  async analyze(pair, marketData):
+    tracer = new Tracer(this.id, pair)
+    tracer.trace('analyze', 'Iniciando análise scalper para ' + pair)
+    
+    // 1. Calcular spread
+    spread = (marketData.ask - marketData.bid) / marketData.mid
+    tracer.trace('analyze', 'Spread: ' + (spread * 100).toFixed(3) + '%')
+    
+    if spread > this.maxSpreadPercent / 100:
+      tracer.trace('analyze', 'Spread muito alto')
+      return null
+    
+    // 2. Verificar volume
+    volumeRatio = marketData.volume24h / marketData.avgVolume24h
+    tracer.trace('analyze', 'Volume ratio: ' + volumeRatio.toFixed(2))
+    
+    if volumeRatio < this.minVolume:
+      tracer.trace('analyze', 'Volume muito baixo')
+      return null
+    
+    // 3. Calcular micro momentum (5s)
+    microMomentum = (marketData.currentPrice - marketData.price5sAgo) / marketData.price5sAgo
+    tracer.trace('analyze', 'Micro momentum: ' + (microMomentum * 100).toFixed(2) + '%')
+    
+    // 4. Calcular order book imbalance
+    imbalance = (marketData.bidVolume - marketData.askVolume) / (marketData.bidVolume + marketData.askVolume)
+    tracer.trace('analyze', 'Order book imbalance: ' + imbalance.toFixed(3))
+    
+    // 5. Decisão
+    if microMomentum > 0.001 and imbalance > 0.6:
+      action = 'buy'
+      confidence = (microMomentum * 10000 + imbalance * 50) / 2
+      tracer.trace('analyze', 'Decisão: COMPRA com confiança ' + confidence.toFixed(1) + '%')
+    
+    else if microMomentum < -0.001 and imbalance < -0.6:
+      action = 'sell'
+      confidence = (abs(microMomentum) * 10000 + abs(imbalance) * 50) / 2
+      tracer.trace('analyze', 'Decisão: VENDA com confiança ' + confidence.toFixed(1) + '%')
+    
+    else:
+      tracer.trace('analyze', 'Decisão: MANTER')
+      return null
+    
+    if confidence < this.risk.minConfidence:
+      tracer.trace('analyze', 'Confiança abaixo do limite')
+      return null
+    
+    return {
+      pair: pair,
+      action: action,
+      confidence: min(100, confidence),
+      indicators: { spread, volumeRatio, microMomentum, imbalance },
+      reason: 'Spread: ' + (spread*100).toFixed(2) + '%, Volume: ' + volumeRatio.toFixed(2) + 'x',
+      timestamp: new Date()
+    }
+  
+  async managePosition(pair, currentPrice, entryPrice):
+    tickSize = this.getTickSize(pair)
+    priceDiff = currentPrice - entryPrice
+    ticksUp = priceDiff / tickSize
+    
+    if ticksUp >= this.takeProfitTicks:
+      return 'sell'
+    
+    if ticksUp <= -this.stopLossTicks:
+      return 'sell'
+    
+    return 'hold'
+
+15.2 ORQUESTRADOR DOS BOTS
+
+class BotOrchestrator:
+  
+  async loadBots():
+    configs = await this.fetchBotConfigurations()
+    
+    for config in configs:
+      switch config.strategyType:
+        case 'scalper': bot = new ScalperBot(config); break
+        case 'momentum': bot = new MomentumBot(config); break
+        case 'trend_follower': bot = new TrendFollowerBot(config); break
+        case 'mean_reversion': bot = new MeanReversionBot(config); break
+        case 'arbitrage': bot = new ArbitrageBot(config); break
+        default: continue
+      
+      this.bots.set(config.id, bot)
+      
+      if config.isActive:
+        await bot.start()
+        console.log('Bot ' + config.name + ' iniciado')
+  
+  async startAll():
+    for bot in this.bots.values():
+      if not bot.isRunning:
+        await bot.start()
+  
+  async stopAll():
+    for bot in this.bots.values():
+      await bot.stop()
+  
+  async pauseBot(botId):
+    bot = this.bots.get(botId)
+    if bot: await bot.pause()
+  
+  async resumeBot(botId):
+    bot = this.bots.get(botId)
+    if bot: await bot.resume()
+
+
+================================================================================
+16. RESUMO DAS RESPONSABILIDADES
+================================================================================
+
+| Módulo               | Responsabilidade |
+|----------------------|------------------|
+| BaseBot              | Ciclo de vida, análise multi-moeda, seleção da melhor oportunidade |
+| ScalperBot           | Análise de spread, micro momentum, operações rápidas |
+| MomentumBot          | Análise de RSI, MACD, tendência de curto prazo |
+| TrendFollowerBot     | Análise de EMAs, ADX, tendência de médio/longo prazo |
+| MeanReversionBot     | Análise de Bollinger Bands, Z-score, reversão à média |
+| ArbitrageBot         | Análise de spreads entre pares |
+| RiskManager          | Stop loss, take profit, exposição máxima, validação de trades |
+| Tracer               | Registro detalhado de cada passo da análise |
+| ModelTrainer         | Coleta de dados, treinamento, salvamento de modelos ML |
+| Executor             | Execução de ordens (simulado/real) |
+| BotOrchestrator      | Gerenciamento de múltiplos bots simultâneos |
+
+
+================================================================================
+FIM DA ESPECIFICAÇÃO DOS BOTS DE IA
+================================================================================

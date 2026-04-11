@@ -1,17 +1,25 @@
 import { useEffect, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import toast from 'react-hot-toast'
+import { useWebSocket } from '../../app/providers/WebSocketProvider'
 import { CurrencySelector } from './components/CurrencySelector'
 import { PairChart } from './components/PairChart'
 import { AvailableBalance } from './components/AvailableBalance'
 import { ManualOrderForm } from './components/ManualOrderForm'
 import { TransactionFilters } from './components/TransactionFilters'
 import { TransactionsTable } from './components/TransactionsTable'
-import { useBalance, useExchangeRate, useTransactions } from './hooks/useTransactions'
+import { TRANSACTIONS_QUERY_KEYS, useBalance, useExchangeRate, useTransactions } from './hooks/useTransactions'
+import { transactionsService } from './services/transactions.service'
 import { Skeleton } from '../../shared/components/ui/Skeleton'
+import { formatDate } from '../../shared/utils/formatters'
 import type { OrderFilters } from './types/transactions.types'
 
 export default function TransacoesPage() {
+  const queryClient = useQueryClient()
+  const { isConnected, on, off } = useWebSocket()
   const [displayCurrency, setDisplayCurrency] = useState('BRL')
   const [selectedPair, setSelectedPair] = useState('BTC/USDT')
+  const [isExporting, setIsExporting] = useState(false)
   const [filters, setFilters] = useState<OrderFilters>({
     page: 1,
     limit: 20,
@@ -20,7 +28,6 @@ export default function TransacoesPage() {
   const {
     data: transactionsData,
     isLoading: isLoadingTransactions,
-    refetch: refetchTransactions,
   } = useTransactions(filters)
   const { data: balance, isLoading: isLoadingBalance } = useBalance()
   const { data: exchangeRate } = useExchangeRate('USDT', displayCurrency)
@@ -30,11 +37,98 @@ export default function TransacoesPage() {
   }, [selectedPair])
 
   useEffect(() => {
-    refetchTransactions()
-  }, [filters, refetchTransactions])
+    if (!isConnected) {
+      return
+    }
 
-  const handleExport = () => {
-    console.log('Exportando transações...')
+    const handleOrderCreated = () => {
+      void queryClient.invalidateQueries({ queryKey: TRANSACTIONS_QUERY_KEYS.transactions })
+      void queryClient.invalidateQueries({ queryKey: TRANSACTIONS_QUERY_KEYS.balance })
+    }
+
+    const handleOrderUpdated = () => {
+      void queryClient.invalidateQueries({ queryKey: TRANSACTIONS_QUERY_KEYS.transactions })
+      void queryClient.invalidateQueries({ queryKey: TRANSACTIONS_QUERY_KEYS.balance })
+    }
+
+    on('order:created', handleOrderCreated)
+    on('order:updated', handleOrderUpdated)
+
+    return () => {
+      off('order:created', handleOrderCreated)
+      off('order:updated', handleOrderUpdated)
+    }
+  }, [isConnected, off, on, queryClient])
+
+  const handleExport = async () => {
+    try {
+      setIsExporting(true)
+      const items = await transactionsService.exportTransactions(filters)
+
+      if (items.length === 0) {
+        toast.error('Nenhuma transação encontrada para exportação')
+        return
+      }
+
+      const csvHeader = [
+        'id',
+        'data',
+        'pair',
+        'origin',
+        'botName',
+        'type',
+        'quantity',
+        'price',
+        'total',
+        'fee',
+        'status',
+        'profitBrl',
+        'profitPercent',
+      ]
+
+      const escapeCsvValue = (value: string | number | null | undefined) => {
+        if (value === null || value === undefined) {
+          return ''
+        }
+
+        const stringValue = String(value).replace(/"/g, '""')
+        return /[;"\n]/.test(stringValue) ? `"${stringValue}"` : stringValue
+      }
+
+      const csvRows = items.map((item) => [
+        item.id,
+        formatDate(item.date, 'full'),
+        item.pair,
+        item.origin,
+        item.botName ?? '',
+        item.type,
+        item.quantity,
+        item.price,
+        item.total,
+        item.fee,
+        item.status,
+        item.profitBrl ?? '',
+        item.profitPercent ?? '',
+      ].map(escapeCsvValue).join(';'))
+
+      const csvContent = [csvHeader.join(';'), ...csvRows].join('\n')
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+      const url = window.URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `transacoes_${new Date().toISOString().slice(0, 10)}.csv`
+      document.body.appendChild(anchor)
+      anchor.click()
+      document.body.removeChild(anchor)
+      window.URL.revokeObjectURL(url)
+
+      toast.success(`CSV exportado com ${items.length} transações`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Falha ao exportar transações'
+      toast.error(message)
+    } finally {
+      setIsExporting(false)
+    }
   }
 
   if (!balance) {
@@ -87,6 +181,7 @@ export default function TransacoesPage() {
               onFiltersChange={setFilters}
               displayCurrency={displayCurrency}
               onExport={handleExport}
+              isExporting={isExporting}
             />
           </div>
         </div>

@@ -1,5 +1,6 @@
 import winston from 'winston'
 import { prisma } from '../config/database'
+import { emitLogNew, emitSystemLogNew } from '../services/socket.service'
 import { getObservabilityContext } from './observability-context'
 
 const { combine, timestamp, printf, colorize } = winston.format
@@ -28,6 +29,17 @@ const SENSITIVE_KEYS = new Set([
   'access_token',
   'refresh_token',
 ])
+const FRONTEND_LOG_MODULES = new Set([
+  'dashboard',
+  'configurations',
+  'training',
+  'transactions',
+  'bot',
+  'system',
+  'api',
+  'database',
+])
+const SYSTEM_BACKED_MODULES = new Set(['system', 'app', 'console', 'auth', 'profile', 'logs', 'tracer'])
 
 let consolePatched = false
 let systemUserIdPromise: Promise<string | null> | null = null
@@ -211,6 +223,35 @@ function sanitizeMessage(message: string): string {
   return message.replace(/^\[[^\]]+\]\s*/, '').trim()
 }
 
+function normalizeRealtimeLogLevel(level: string): 'INFO' | 'WARN' | 'ERROR' {
+  if (level === 'WARN') {
+    return 'WARN'
+  }
+
+  if (level === 'ERROR') {
+    return 'ERROR'
+  }
+
+  return 'INFO'
+}
+
+function normalizeRealtimeLogModule(moduleName: string): 'dashboard' | 'configurations' | 'training' | 'transactions' | 'bot' | 'system' | 'api' | 'database' {
+  if (FRONTEND_LOG_MODULES.has(moduleName)) {
+    return moduleName as 'dashboard' | 'configurations' | 'training' | 'transactions' | 'bot' | 'system' | 'api' | 'database'
+  }
+
+  if (SYSTEM_BACKED_MODULES.has(moduleName)) {
+    return 'system'
+  }
+
+  return 'system'
+}
+
+function compactRecord(record: Record<string, unknown>): Record<string, unknown> | undefined {
+  const entries = Object.entries(record).filter(([, value]) => value !== undefined && value !== null)
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined
+}
+
 async function ensureSystemUserId(): Promise<string | null> {
   if (!systemUserIdPromise) {
     systemUserIdPromise = (async () => {
@@ -277,6 +318,8 @@ async function persistLog(level: string, message: string, meta: LogMeta): Promis
     return
   }
 
+  const systemUserId = await ensureSystemUserId()
+
   const context = getObservabilityContext()
   const detailsPayload: Record<string, unknown> = {
     ...meta,
@@ -292,7 +335,7 @@ async function persistLog(level: string, message: string, meta: LogMeta): Promis
   const details = safeJsonStringify(detailsPayload)
 
   try {
-    await prisma.log.create({
+    const persistedLog = await prisma.log.create({
       data: {
         level,
         module: extractModule(message, meta),
@@ -301,6 +344,23 @@ async function persistLog(level: string, message: string, meta: LogMeta): Promis
         userId,
       },
     })
+
+    const realtimePayload = {
+      id: persistedLog.id,
+      timestamp: persistedLog.timestamp.toISOString(),
+      level: normalizeRealtimeLogLevel(persistedLog.level),
+      module: normalizeRealtimeLogModule(persistedLog.module),
+      message: persistedLog.message,
+      details: compactRecord(detailsPayload),
+      isSystem: systemUserId ? userId === systemUserId : false,
+    }
+
+    if (realtimePayload.isSystem) {
+      emitSystemLogNew(realtimePayload)
+      return
+    }
+
+    emitLogNew(userId, realtimePayload)
   } catch (error) {
     originalConsole.error('Erro ao persistir log no banco:', sanitizeForLogging(error))
   }

@@ -104,6 +104,18 @@ export interface AvailableStrategy {
   description: string
 }
 
+export interface AvailableBot {
+  id: string
+  name: string
+  strategyType: string
+  description?: string
+  status: 'online' | 'offline' | 'training' | 'error'
+  isPaused: boolean
+  lastAnalysis?: string
+  recommendedAction?: 'buy' | 'sell' | 'hold'
+  confidence?: number
+}
+
 export const ARCHITECTURES: { value: Architecture; label: string; description: string }[] = [
   { value: 'lstm', label: 'LSTM', description: 'Long Short-Term Memory - Ideal para séries temporais' },
   { value: 'cnn', label: 'CNN', description: 'Convolutional Neural Network - Bom para padrões locais' },

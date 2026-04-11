@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { useWebSocket } from '../../app/providers/WebSocketProvider'
 import { useLogs, useTraces, useExportLogs, useExportTraces, useAvailableBots } from './hooks/useLogs'
+import { LOGS_QUERY_KEYS } from './hooks/useLogs'
 import { ModeSelector } from './components/ModeSelector'
 import { LogFilters } from './components/LogFilters'
 import { LogTerminal } from './components/LogTerminal'
@@ -114,6 +117,8 @@ function TraceAdvancedFilters({ filters, onFiltersChange }: TraceAdvancedFilters
 }
 
 export default function LogsPage() {
+  const queryClient = useQueryClient()
+  const { isConnected, on, off } = useWebSocket()
   const [mode, setMode] = useState<ViewMode>('logs')
   
   const [logOffset, setLogOffset] = useState(0)
@@ -129,8 +134,8 @@ export default function LogsPage() {
     offset: 0,
   })
 
-  const { data: logsData, isLoading: isLoadingLogs, refetch: refetchLogs } = useLogs(logFilters)
-  const { data: tracesData, isLoading: isLoadingTraces, refetch: refetchTraces } = useTraces(traceFilters)
+  const { data: logsData, isLoading: isLoadingLogs } = useLogs(logFilters)
+  const { data: tracesData, isLoading: isLoadingTraces } = useTraces(traceFilters)
   const { mutate: exportLogs, isPending: isExportingLogs } = useExportLogs()
   const { mutate: exportTraces, isPending: isExportingTraces } = useExportTraces()
 
@@ -148,15 +153,30 @@ export default function LogsPage() {
   }, [traceOffset])
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      if (mode === 'logs') {
-        refetchLogs()
-      } else {
-        refetchTraces()
+    if (!isConnected) {
+      return
+    }
+
+    const handleLogNew = () => {
+      void queryClient.invalidateQueries({ queryKey: LOGS_QUERY_KEYS.logs })
+    }
+
+    const handleTraceNew = (payload: { traceId?: string }) => {
+      void queryClient.invalidateQueries({ queryKey: LOGS_QUERY_KEYS.traces })
+
+      if (payload.traceId) {
+        void queryClient.invalidateQueries({ queryKey: LOGS_QUERY_KEYS.traceGroup(payload.traceId) })
       }
-    }, 5000)
-    return () => clearInterval(interval)
-  }, [mode, refetchLogs, refetchTraces])
+    }
+
+    on('log:new', handleLogNew)
+    on('trace:new', handleTraceNew)
+
+    return () => {
+      off('log:new', handleLogNew)
+      off('trace:new', handleTraceNew)
+    }
+  }, [isConnected, off, on, queryClient])
 
   const handleExport = () => {
     if (mode === 'logs') {
@@ -227,8 +247,8 @@ export default function LogsPage() {
       )}
 
       <div className="flex items-center justify-center gap-2 text-xs text-gray-500">
-        <div className="w-2 h-2 rounded-full bg-success animate-pulse" />
-        <span>Atualização em tempo real (5s)</span>
+        <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-success animate-pulse' : 'bg-yellow-400'}`} />
+        <span>{isConnected ? 'WebSocket conectado com fallback de polling' : 'Fallback de polling ativo'}</span>
       </div>
     </div>
   )

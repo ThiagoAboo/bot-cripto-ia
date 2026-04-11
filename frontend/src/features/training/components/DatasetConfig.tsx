@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { Calendar, ChevronDown, Database, Search, Upload, X } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '../../../shared/components/ui/Card'
 import { Label } from '../../../shared/components/ui/Label'
@@ -19,12 +19,15 @@ interface DatasetConfigProps {
   includedPairs: string[]
   indicators: string[]
   timeframe: Timeframe
+  uploadedFileUrl?: string
+  isUploadingFile?: boolean
   onDataSourceChange: (value: DataSource) => void
   onStartDateChange: (value: string) => void
   onEndDateChange: (value: string) => void
   onPairsChange: (value: string[]) => void
   onIndicatorsChange: (value: string[]) => void
   onTimeframeChange: (value: Timeframe) => void
+  onUploadFile: (file: File) => void
 }
 
 const dataSources = [
@@ -40,15 +43,19 @@ export function DatasetConfig({
   includedPairs,
   indicators,
   timeframe,
+  uploadedFileUrl,
+  isUploadingFile = false,
   onDataSourceChange,
   onStartDateChange,
   onEndDateChange,
   onPairsChange,
   onIndicatorsChange,
   onTimeframeChange,
+  onUploadFile,
 }: DatasetConfigProps) {
   const [isPairsDropdownOpen, setIsPairsDropdownOpen] = useState(false)
   const [pairSearchTerm, setPairSearchTerm] = useState('')
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const { data: availablePairs, isLoading } = useAvailablePairs()
 
@@ -89,6 +96,18 @@ export function DatasetConfig({
     onIndicatorsChange([...indicators, indicatorValue])
   }
 
+  const uploadedFilename = uploadedFileUrl?.split('/').pop()
+
+  const handleFileSelection = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) {
+      return
+    }
+
+    onUploadFile(file)
+    event.target.value = ''
+  }
+
   return (
     <Card variant="hover">
       <CardHeader>
@@ -125,6 +144,51 @@ export function DatasetConfig({
             })}
           </div>
         </div>
+
+        {dataSource === 'synthetic' && (
+          <div className="rounded-2xl border p-4 text-sm" style={{ backgroundColor: 'var(--surface-2)', borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}>
+            Os dados serão gerados sinteticamente com base no período, timeframe e pares selecionados. Isso ajuda a validar o fluxo completo mesmo sem candles externos.
+          </div>
+        )}
+
+        {dataSource === 'upload' && (
+          <div className="space-y-3 rounded-2xl border p-4" style={{ backgroundColor: 'var(--surface-2)', borderColor: 'var(--border-color)' }}>
+            <div>
+              <Label>Upload do dataset CSV</Label>
+              <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                Envie um CSV com colunas como `timestamp`, `open`, `high`, `low`, `close`, `volume` e, opcionalmente, `pair`.
+              </p>
+            </div>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,text/csv"
+              aria-label="Upload do dataset CSV"
+              className="hidden"
+              onChange={handleFileSelection}
+            />
+
+            <div className="flex flex-wrap items-center gap-3">
+              <Button variant="outline" onClick={() => fileInputRef.current?.click()} isLoading={isUploadingFile}>
+                <Upload className="h-4 w-4" />
+                {isUploadingFile ? 'Enviando CSV...' : 'Selecionar CSV'}
+              </Button>
+
+              {uploadedFilename && (
+                <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                  Arquivo atual: {uploadedFilename}
+                </span>
+              )}
+            </div>
+
+            {uploadedFileUrl && (
+              <div className="rounded-xl border border-primary-500/20 bg-primary-500/5 px-3 py-2 text-sm text-primary-600">
+                Dataset pronto para uso: {uploadedFileUrl}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="grid gap-4 md:grid-cols-2">
           <div>

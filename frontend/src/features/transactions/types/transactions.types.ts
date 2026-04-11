@@ -21,6 +21,14 @@ export interface Transaction {
   profitPercent?: number
 }
 
+export interface TransactionsResponse {
+  items: Transaction[]
+  total: number
+  page: number
+  limit: number
+  totalPages: number
+}
+
 export interface ManualOrderRequest {
   pair: string
   type: 'buy' | 'sell'

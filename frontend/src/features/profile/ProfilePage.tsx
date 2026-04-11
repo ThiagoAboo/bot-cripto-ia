@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Bell, Key, Save, User } from 'lucide-react'
 import { useTheme } from '../../app/providers/ThemeProvider'
 import { Button } from '../../shared/components/ui/Button'
@@ -26,14 +26,13 @@ export default function ProfilePage() {
     confirmPassword: ''
   })
 
-  // Inicializar formulário quando perfil carregar
-  useState(() => {
+  useEffect(() => {
     if (profile) {
       setName(profile.name)
       setEmail(profile.email)
       setNotificationsEnabled(profile.preferences?.notificationsEnabled ?? true)
     }
-  })
+  }, [profile?.id, profile?.name, profile?.email, profile?.preferences?.notificationsEnabled])
 
   const handleSaveProfile = () => {
     updateProfile({ name, email })

@@ -19,6 +19,7 @@ export interface LogEntry {
   module: LogModule
   message: string
   details?: Record<string, any>
+  isSystem?: boolean
 }
 
 export interface TraceEntry {

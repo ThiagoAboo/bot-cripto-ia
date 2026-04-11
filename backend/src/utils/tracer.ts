@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid'
 import { prisma } from '../config/database'
+import { emitTraceNew } from '../services/socket.service'
 import {
   getObservabilityContext,
   setObservabilityContext,
@@ -19,6 +20,17 @@ export interface TraceExtra {
   userId?: string | null
   [key: string]: unknown
 }
+
+const FRONTEND_TRACE_MODULES = new Set([
+  'dashboard',
+  'configurations',
+  'training',
+  'transactions',
+  'bot',
+  'system',
+  'api',
+  'database',
+])
 
 function isTraceEnabled(): boolean {
   return process.env.TRACE_ENABLED !== 'false'
@@ -60,7 +72,7 @@ async function saveTrace(
   }
 
   try {
-    await prisma.trace.create({
+    const persistedTrace = await prisma.trace.create({
       data: {
         traceId: context.traceId,
         parentTraceId: context.parentTraceId ?? null,
@@ -76,6 +88,23 @@ async function saveTrace(
         confidence: extra?.confidence ?? null,
         errorFlag: extra?.errorFlag ?? level === 'ERROR',
       },
+    })
+
+    emitTraceNew(userId, {
+      id: persistedTrace.id,
+      timestamp: persistedTrace.timestamp.toISOString(),
+      level: persistedTrace.level === 'DEBUG' ? 'DEBUG' : 'TRACE',
+      module: FRONTEND_TRACE_MODULES.has(persistedTrace.module) ? persistedTrace.module : 'system',
+      traceId: persistedTrace.traceId,
+      parentTraceId: persistedTrace.parentTraceId ?? undefined,
+      functionName: persistedTrace.functionName,
+      message: persistedTrace.message,
+      durationMs: persistedTrace.durationMs,
+      botId: persistedTrace.botId ?? undefined,
+      currentPair: persistedTrace.currentPair ?? undefined,
+      recommendedAction: persistedTrace.recommendedAction ?? undefined,
+      confidence: persistedTrace.confidence ?? undefined,
+      errorFlag: persistedTrace.errorFlag,
     })
   } catch (error) {
     logger.error('[tracer] Erro ao salvar trace no banco', {

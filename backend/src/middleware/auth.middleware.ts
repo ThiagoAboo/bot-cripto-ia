@@ -19,6 +19,36 @@ interface JwtPayload {
   email?: string
 }
 
+export interface AuthenticatedUser {
+  id: string
+  email: string
+  name: string
+}
+
+async function resolveUserById(userId: string): Promise<AuthenticatedUser | null> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, email: true, name: true },
+  })
+
+  return user
+}
+
+export async function resolveAuthenticatedUserFromToken(token: string): Promise<AuthenticatedUser> {
+  const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload
+
+  if (!decoded.userId) {
+    throw new Error('Token inválido')
+  }
+
+  const user = await resolveUserById(decoded.userId)
+  if (!user) {
+    throw new Error('Usuário não encontrado')
+  }
+
+  return user
+}
+
 export async function authMiddleware(
   req: AuthRequest,
   res: Response,
@@ -50,34 +80,25 @@ export async function authMiddleware(
       return res.status(401).json({ success: false, error: 'Token inválido' })
     }
 
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload
+    let user: AuthenticatedUser
+    try {
+      user = await resolveAuthenticatedUserFromToken(token)
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Falha ao resolver token'
+      const isUserMissing = errorMessage === 'Usuário não encontrado'
 
-    if (!decoded.userId) {
-      logger.warn('[auth] Token sem userId', {
+      logger.warn('[auth] Falha ao resolver autenticação do token', {
         module: 'auth',
-        event: 'auth_token_without_user',
+        event: isUserMissing ? 'auth_user_not_found' : 'auth_token_resolution_failed',
         method: req.method,
         path: req.originalUrl,
+        error,
       })
 
-      return res.status(401).json({ success: false, error: 'Token inválido' })
-    }
-
-    const user = await prisma.user.findUnique({
-      where: { id: decoded.userId },
-      select: { id: true, email: true, name: true },
-    })
-
-    if (!user) {
-      logger.warn('[auth] Usuário do token não encontrado', {
-        module: 'auth',
-        event: 'auth_user_not_found',
-        method: req.method,
-        path: req.originalUrl,
-        tokenUserId: decoded.userId,
+      return res.status(401).json({
+        success: false,
+        error: isUserMissing ? 'Usuário não encontrado' : 'Token inválido ou expirado',
       })
-
-      return res.status(401).json({ success: false, error: 'Usuário não encontrado' })
     }
 
     req.userId = user.id

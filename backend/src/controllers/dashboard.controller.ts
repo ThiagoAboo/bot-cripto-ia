@@ -4,6 +4,7 @@ import { prisma } from '../config/database'
 import { AuthRequest } from '../middleware/auth.middleware'
 import { getCurrencyRateToBrl } from '../services/market-valuation.service'
 import { recordBalanceHistorySnapshotValue } from '../services/portfolio.service'
+import { emitDashboardUpdate } from '../services/socket.service'
 import { logger } from '../utils/logger'
 import { endTrace, startTrace } from '../utils/tracer'
 
@@ -267,6 +268,7 @@ export async function pauseBot(req: AuthRequest, res: Response): Promise<Respons
 
   try {
     const { id } = req.params
+    const userId = req.userId!
 
     await prisma.bot.update({
       where: { id },
@@ -276,11 +278,18 @@ export async function pauseBot(req: AuthRequest, res: Response): Promise<Respons
     logger.info('[dashboard] Bot pausado', {
       module: 'dashboard',
       event: 'bot_paused',
-      userId: req.userId,
+      userId,
       botId: id,
     })
 
-    endTrace('pauseBot', { userId: req.userId, botId: id })
+    emitDashboardUpdate(userId, {
+      scope: 'bots',
+      reason: 'bot_paused',
+      botId: id,
+      updatedAt: new Date().toISOString(),
+    })
+
+    endTrace('pauseBot', { userId, botId: id })
     return res.json({ success: true })
   } catch (error) {
     logger.error('[dashboard] Erro ao pausar bot', {
@@ -301,6 +310,7 @@ export async function resumeBot(req: AuthRequest, res: Response): Promise<Respon
 
   try {
     const { id } = req.params
+    const userId = req.userId!
 
     await prisma.bot.update({
       where: { id },
@@ -310,11 +320,18 @@ export async function resumeBot(req: AuthRequest, res: Response): Promise<Respon
     logger.info('[dashboard] Bot retomado', {
       module: 'dashboard',
       event: 'bot_resumed',
-      userId: req.userId,
+      userId,
       botId: id,
     })
 
-    endTrace('resumeBot', { userId: req.userId, botId: id })
+    emitDashboardUpdate(userId, {
+      scope: 'bots',
+      reason: 'bot_resumed',
+      botId: id,
+      updatedAt: new Date().toISOString(),
+    })
+
+    endTrace('resumeBot', { userId, botId: id })
     return res.json({ success: true })
   } catch (error) {
     logger.error('[dashboard] Erro ao retomar bot', {

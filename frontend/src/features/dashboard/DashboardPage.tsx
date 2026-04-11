@@ -1,4 +1,8 @@
+import { useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { useWebSocket } from '../../app/providers/WebSocketProvider'
 import { useTotalBalance, useCurrenciesBalance, useRecentTransactions, useBotsStatus, usePauseBot, useResumeBot } from './hooks/useDashboardData'
+import { DASHBOARD_QUERY_KEYS } from './hooks/useDashboardData'
 import { usePerformanceData } from './hooks/usePerformanceData'
 import { TotalBalanceCard } from './components/TotalBalanceCard'
 import { CurrencyBalanceCard } from './components/CurrencyBalanceCard'
@@ -7,6 +11,8 @@ import { RecentTransactionsTable } from './components/RecentTransactionsTable'
 import { BotsStatusList } from './components/BotsStatusList'
 
 export function DashboardPage() {
+  const queryClient = useQueryClient()
+  const { isConnected, on, off } = useWebSocket()
   const { data: totalBalance, isLoading: isLoadingTotal } = useTotalBalance()
   const { data: currenciesBalance, isLoading: isLoadingCurrencies } = useCurrenciesBalance()
   const { data: recentTransactions, isLoading: isLoadingTransactions } = useRecentTransactions(5)
@@ -16,6 +22,46 @@ export function DashboardPage() {
   const { mutate: resumeBot, isPending: isResuming } = useResumeBot()
 
   const isMutating = isPausing || isResuming
+
+  useEffect(() => {
+    if (!isConnected) {
+      return
+    }
+
+    const invalidatePortfolio = () => {
+      void queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.totalBalance })
+      void queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.currenciesBalance })
+      void queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.recentTransactions })
+      void queryClient.invalidateQueries({ queryKey: ['dashboard', 'performance'] })
+    }
+
+    const handleDashboardUpdate = (payload: { scope: 'portfolio' | 'bots' }) => {
+      if (payload.scope === 'bots') {
+        void queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.botsStatus })
+        return
+      }
+
+      invalidatePortfolio()
+    }
+
+    const handleOrderCreated = () => {
+      invalidatePortfolio()
+    }
+
+    const handleOrderUpdated = () => {
+      invalidatePortfolio()
+    }
+
+    on('dashboard:update', handleDashboardUpdate)
+    on('order:created', handleOrderCreated)
+    on('order:updated', handleOrderUpdated)
+
+    return () => {
+      off('dashboard:update', handleDashboardUpdate)
+      off('order:created', handleOrderCreated)
+      off('order:updated', handleOrderUpdated)
+    }
+  }, [isConnected, off, on, queryClient])
 
   return (
     <div className="space-y-6">

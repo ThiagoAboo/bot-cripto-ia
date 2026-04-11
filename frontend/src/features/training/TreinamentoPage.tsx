@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import {
+  useAvailableBots,
   useStrategies,
   useCreateSession,
+  useUploadDataset,
   useSessions,
   useSession,
   usePauseSession,
@@ -16,25 +18,20 @@ import { DatasetConfig } from './components/DatasetConfig'
 import { HyperparametersForm } from './components/HyperparametersForm'
 import { MetricsChart } from './components/MetricsChart'
 import { TrainingLogTerminal } from './components/TrainingLogTerminal'
+import { BacktestSummaryCard } from './components/BacktestSummaryCard'
 import { Button } from '../../shared/components/ui/Button'
 import { Skeleton } from '../../shared/components/ui/Skeleton'
 import { History, Brain, AlertCircle, Play, Pause, Square, Download, Save, TestTube } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useWebSocket } from '../../app/providers/WebSocketProvider'
-import type { TrainingConfig, Architecture, DataSource, Timeframe, TrainingSession } from './types/training.types'
-
-const availableBots = [
-  { id: 'bot1', name: 'Scalper V2', strategy: 'scalper' },
-  { id: 'bot2', name: 'Momentum Trader', strategy: 'momentum' },
-  { id: 'bot3', name: 'Trend Follower', strategy: 'trend_follower' },
-  { id: 'bot4', name: 'Mean Reversion', strategy: 'mean_reversion' },
-  { id: 'bot5', name: 'Arbitrage Hunter', strategy: 'arbitrage' },
-]
+import type { TrainingConfig, Architecture, DataSource, Timeframe, TrainingSession, BacktestResult } from './types/training.types'
 
 export default function TreinamentoPage() {
+  const { data: availableBots, isLoading: isLoadingBots } = useAvailableBots()
   const { data: strategies, isLoading: isLoadingStrategies } = useStrategies()
   const { data: sessions, refetch: refetchSessions } = useSessions()
   const { mutate: createSession, isPending: isCreating } = useCreateSession()
+  const { mutate: uploadDataset, isPending: isUploadingDataset } = useUploadDataset()
   const { mutate: pauseSession, isPending: isPausing } = usePauseSession()
   const { mutate: resumeSession, isPending: isResuming } = useResumeSession()
   const { mutate: cancelSession, isPending: isCancelling } = useCancelSession()
@@ -47,6 +44,7 @@ export default function TreinamentoPage() {
   const [selectedStrategyId, setSelectedStrategyId] = useState('')
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const [showHistory, setShowHistory] = useState(false)
+  const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null)
 
   const [config, setConfig] = useState<Partial<TrainingConfig>>({
     architecture: 'lstm',
@@ -101,6 +99,33 @@ export default function TreinamentoPage() {
   }, [fallbackSession, selectedSessionId, sessions])
 
   useEffect(() => {
+    setBacktestResult(null)
+  }, [activeSessionId])
+
+  useEffect(() => {
+    if (!availableBots || availableBots.length === 0) {
+      return
+    }
+
+    if (!selectedBotId || !availableBots.some((bot) => bot.id === selectedBotId)) {
+      setSelectedBotId(availableBots[0].id)
+    }
+  }, [availableBots, selectedBotId])
+
+  useEffect(() => {
+    if (!availableBots || availableBots.length === 0 || !strategies || strategies.length === 0) {
+      return
+    }
+
+    const selectedBot = availableBots.find((bot) => bot.id === selectedBotId) ?? availableBots[0]
+    const matchingStrategy = strategies.find((strategy) => strategy.strategyType === selectedBot.strategyType)
+
+    if (matchingStrategy && matchingStrategy.id !== selectedStrategyId) {
+      setSelectedStrategyId(matchingStrategy.id)
+    }
+  }, [availableBots, selectedBotId, selectedStrategyId, strategies])
+
+  useEffect(() => {
     if (!activeSessionId || !isConnected) {
       return
     }
@@ -136,6 +161,7 @@ export default function TreinamentoPage() {
     on('training:log', handleTrainingLog)
 
     return () => {
+      emit('unsubscribe:training', activeSessionId)
       off('training:status', handleTrainingStatus)
       off('training:metrics', handleTrainingMetric)
       off('training:log', handleTrainingLog)
@@ -148,12 +174,18 @@ export default function TreinamentoPage() {
       return
     }
 
+    if (config.dataSource === 'upload' && !config.uploadedFileUrl) {
+      toast.error('Envie um arquivo CSV antes de iniciar o treinamento')
+      return
+    }
+
     const trainingConfig: TrainingConfig = {
       botId: selectedBotId,
       strategyId: selectedStrategyId,
       architecture: config.architecture as Architecture,
       modelVersion: config.modelVersion!,
       dataSource: config.dataSource as DataSource,
+      uploadedFileUrl: config.uploadedFileUrl,
       trainingPeriod: config.trainingPeriod!,
       includedPairs: config.includedPairs!,
       indicators: config.indicators!,
@@ -172,7 +204,11 @@ export default function TreinamentoPage() {
   const handlePause = () => activeSession && pauseSession(activeSession.id)
   const handleResume = () => activeSession && resumeSession(activeSession.id)
   const handleCancel = () => activeSession && cancelSession(activeSession.id)
-  const handleTest = () => activeSession && testSession(activeSession.id)
+  const handleTest = () => activeSession && testSession(activeSession.id, {
+    onSuccess: (result) => {
+      setBacktestResult(result)
+    },
+  })
   const handleSave = () => activeSession && saveModel(activeSession.id)
   const handleDownload = () => activeSession && downloadModel(activeSession.id)
   const handleExportLogs = () => {
@@ -203,7 +239,7 @@ export default function TreinamentoPage() {
   const canUseModel = activeSession?.status === 'completed'
   const isMutatingSession = isPausing || isResuming || isCancelling
 
-  if (isLoadingStrategies) {
+  if (isLoadingBots || isLoadingStrategies) {
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between gap-4">
@@ -244,7 +280,7 @@ export default function TreinamentoPage() {
             strategyId={selectedStrategyId}
             architecture={config.architecture as Architecture}
             modelVersion={config.modelVersion!}
-            availableBots={availableBots}
+            availableBots={availableBots || []}
             availableStrategies={strategies || []}
             onBotChange={setSelectedBotId}
             onStrategyChange={setSelectedStrategyId}
@@ -266,12 +302,24 @@ export default function TreinamentoPage() {
             includedPairs={config.includedPairs!}
             indicators={config.indicators!}
             timeframe={config.timeframe as Timeframe}
+            uploadedFileUrl={config.uploadedFileUrl}
+            isUploadingFile={isUploadingDataset}
             onDataSourceChange={(value) => setConfig({ ...config, dataSource: value })}
             onStartDateChange={(value) => setConfig({ ...config, trainingPeriod: { ...config.trainingPeriod!, startDate: value } })}
             onEndDateChange={(value) => setConfig({ ...config, trainingPeriod: { ...config.trainingPeriod!, endDate: value } })}
             onPairsChange={(value) => setConfig({ ...config, includedPairs: value })}
             onIndicatorsChange={(value) => setConfig({ ...config, indicators: value })}
             onTimeframeChange={(value) => setConfig({ ...config, timeframe: value })}
+            onUploadFile={(file) => {
+              uploadDataset(file, {
+                onSuccess: (result) => {
+                  setConfig((current) => ({
+                    ...current,
+                    uploadedFileUrl: result.url,
+                  }))
+                },
+              })
+            }}
           />
         </div>
       </div>
@@ -326,6 +374,9 @@ export default function TreinamentoPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-6">
+        {backtestResult && activeSession && backtestResult.sessionId === activeSession.id && (
+          <BacktestSummaryCard result={backtestResult} />
+        )}
         <MetricsChart metrics={activeSession?.metrics || []} isLoading={Boolean(activeSessionId) && isLoadingActiveSession} />
         <TrainingLogTerminal
           logs={activeSession?.logs || []}
