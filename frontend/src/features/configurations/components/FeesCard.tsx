@@ -1,6 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from '../../../shared/components/ui/Card'
 import { Input } from '../../../shared/components/ui/Input'
 import { Label } from '../../../shared/components/ui/Label'
+import { Switch } from '../../../shared/components/ui/Switch'
 import { Percent, Coins, Wallet } from 'lucide-react'
 import type { FeesConfig } from '../types/configurations.types'
 
@@ -10,7 +11,11 @@ interface FeesCardProps {
 }
 
 export function FeesCard({ data, onChange }: FeesCardProps) {
-  const handleChange = (field: keyof FeesConfig, value: number) => {
+  const handleNumberChange = (field: keyof FeesConfig, value: number) => {
+    onChange({ ...data, [field]: value })
+  }
+
+  const handleToggle = (field: keyof FeesConfig, value: boolean) => {
     onChange({ ...data, [field]: value })
   }
 
@@ -24,6 +29,34 @@ export function FeesCard({ data, onChange }: FeesCardProps) {
       </CardHeader>
       
       <CardContent className="space-y-4">
+        <div className="space-y-3 rounded-lg border border-dark-400 bg-dark-300 p-4">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium text-white">Usar BNB para taxas</p>
+              <p className="text-xs text-gray-500">
+                Prioriza o desconto da Binance quando houver saldo utilizável em BNB
+              </p>
+            </div>
+            <Switch
+              checked={data.useBnbForFees}
+              onCheckedChange={(checked) => handleToggle('useBnbForFees', checked)}
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className="text-sm font-medium text-white">Preservar reserva mínima de BNB</p>
+              <p className="text-xs text-gray-500">
+                Impede que trades comuns consumam o saldo reservado para pagamento de taxas
+              </p>
+            </div>
+            <Switch
+              checked={data.reserveBnbForFeesEnabled}
+              onCheckedChange={(checked) => handleToggle('reserveBnbForFeesEnabled', checked)}
+            />
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Desconto USDT */}
           <div className="space-y-2">
@@ -38,10 +71,10 @@ export function FeesCard({ data, onChange }: FeesCardProps) {
               min="0"
               max="1"
               value={data.discountUsdtPercent}
-              onChange={(e) => handleChange('discountUsdtPercent', parseFloat(e.target.value))}
+              onChange={(e) => handleNumberChange('discountUsdtPercent', parseFloat(e.target.value))}
             />
             <p className="text-xs text-gray-500">
-              Percentual da taxa de trading paga com USDT
+              Desconto aplicado quando a taxa for debitada na moeda cotada em USDT
             </p>
           </div>
 
@@ -58,10 +91,10 @@ export function FeesCard({ data, onChange }: FeesCardProps) {
               min="0"
               max="1"
               value={data.discountBnbPercent}
-              onChange={(e) => handleChange('discountBnbPercent', parseFloat(e.target.value))}
+              onChange={(e) => handleNumberChange('discountBnbPercent', parseFloat(e.target.value))}
             />
             <p className="text-xs text-gray-500">
-              Percentual da taxa com desconto em BNB
+              Desconto aplicado quando a taxa for debitada em BNB
             </p>
           </div>
         </div>
@@ -78,7 +111,7 @@ export function FeesCard({ data, onChange }: FeesCardProps) {
             step="0.001"
             min="0"
             value={data.minBnbBalance}
-            onChange={(e) => handleChange('minBnbBalance', parseFloat(e.target.value))}
+            onChange={(e) => handleNumberChange('minBnbBalance', parseFloat(e.target.value))}
           />
           <p className="text-xs text-gray-500">
             Quantidade mínima de BNB mantida como reserva

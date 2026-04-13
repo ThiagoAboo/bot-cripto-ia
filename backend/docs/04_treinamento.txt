@@ -16,22 +16,29 @@ RESPONSE (200 - Sucesso):
   "success": true,
   "data": [
     {
-      "id": "strategy_scalper",
-      "name": "Scalper V2",
-      "strategyType": "scalper",
-      "description": "Operações rápidas com pequenos lucros"
+      "id": "template_macd_momentum",
+      "slug": "macd-momentum-specialist",
+      "name": "MACD Momentum Specialist",
+      "strategyType": "momentum",
+      "indicatorType": "MACD",
+      "specialization": "macd_momentum",
+      "description": "Especialista em aceleração de momentum usando cruzamentos de MACD"
     },
     {
-      "id": "strategy_momentum",
-      "name": "Momentum Trader",
-      "strategyType": "momentum",
-      "description": "Identifica moedas com forte momentum"
+      "id": "template_rsi_reversion",
+      "slug": "rsi-reversion-specialist",
+      "name": "RSI Reversion Specialist",
+      "strategyType": "mean_reversion",
+      "indicatorType": "RSI",
+      "specialization": "rsi_reversion",
+      "description": "Especialista em reversão à média usando RSI"
     }
   ]
 }
 
 TABELAS ENVOLVIDAS:
-- Bot (para obter as estratégias disponíveis)
+- BotTemplate (catálogo de especialistas)
+- Bot (fallback legado, quando não houver template persistido)
 
 -------------------------------------------------------------------------------
 2. API: GET /api/training/sessions
@@ -52,8 +59,8 @@ RESPONSE (200 - Sucesso):
     {
       "id": "session_1",
       "botId": "bot1",
-      "strategyId": "strategy_scalper",
-      "strategyName": "Scalper V2",
+      "strategyId": "template_macd_momentum",
+      "strategyName": "MACD Momentum Specialist",
       "status": "completed",
       "startTime": "2024-01-10T10:00:00Z",
       "endTime": "2024-01-10T11:00:00Z",
@@ -66,7 +73,8 @@ RESPONSE (200 - Sucesso):
 
 TABELAS ENVOLVIDAS:
 - TrainingSession
-- Bot (para obter strategyName)
+- Bot (instância operacional)
+- BotTemplate (para obter strategyName/template)
 
 -------------------------------------------------------------------------------
 3. API: POST /api/training/sessions
@@ -81,7 +89,7 @@ HEADERS:
 REQUEST BODY:
 {
   "botId": "bot1",
-  "strategyId": "strategy_scalper",
+  "strategyId": "template_macd_momentum",
   "architecture": "lstm",
   "modelVersion": "v1.0.0",
   "baseModelId": "session_0",
@@ -117,8 +125,8 @@ RESPONSE (200 - Sucesso):
   "data": {
     "id": "session_123",
     "botId": "bot1",
-    "strategyId": "strategy_scalper",
-    "strategyName": "Scalper V2",
+    "strategyId": "template_macd_momentum",
+    "strategyName": "MACD Momentum Specialist",
     "status": "pending",
     "startTime": "2024-01-15T10:30:00Z",
     "config": { ... }
@@ -127,7 +135,8 @@ RESPONSE (200 - Sucesso):
 
 TABELAS ENVOLVIDAS:
 - TrainingSession (criação)
-- Bot (leitura para strategyName)
+- Bot (instância operacional)
+- BotTemplate (validação de compatibilidade estratégica)
 
 CAMPOS INSERIDOS:
 - id (UUID)
@@ -135,6 +144,10 @@ CAMPOS INSERIDOS:
 - status = 'pending'
 - startTime = now()
 - config (JSON com todos os parâmetros)
+
+OBSERVAÇÃO:
+- `botId` identifica a instância operacional do bot
+- `strategyId` identifica o template estratégico compatível com a instância
 
 -------------------------------------------------------------------------------
 4. API: GET /api/training/sessions/{id}

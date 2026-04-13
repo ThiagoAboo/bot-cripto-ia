@@ -6,6 +6,7 @@ import { AuthRequest } from '../middleware/auth.middleware'
 import { getExchangeRate as getExternalExchangeRate } from '../services/awesomeapi.service'
 import { ExternalApiError } from '../services/external-http.service'
 import { getAccountBalances, getCandles as getBinanceCandles, getTickerPrice } from '../services/binance.service'
+import { normalizeFeeSettings, type FeeSettings } from '../services/configuration.service'
 import { getCurrencyRateToBrl } from '../services/market-valuation.service'
 import { recordBalanceHistorySnapshot } from '../services/portfolio.service'
 import { emitDashboardUpdate, emitOrderCreated, emitOrderUpdated } from '../services/socket.service'
@@ -43,11 +44,28 @@ const orderFiltersSchema = z.object({
 })
 
 const ORDER_FEE_RATE = 0.001
+const BALANCE_EPSILON = 1e-8
 const FIFO_EPSILON = 1e-8
 
 interface FifoLot {
   remainingQuantity: number
   unitCostInQuote: number
+}
+
+interface BalanceState {
+  id: string
+  currency: string
+  available: number
+  reserved: number
+  total: number
+}
+
+interface OrderFeePolicy {
+  fee: number
+  feeCurrency: string
+  feeRateApplied: number
+  feeDiscountSource: 'bnb' | 'usdt' | 'standard'
+  feeInQuote: number
 }
 
 function getPairCurrencies(pair: string): { baseCurrency: string; quoteCurrency: string } {
@@ -174,6 +192,174 @@ async function getUserExchangeCredentials(userId: string): Promise<{ apiKey: str
   }
 }
 
+function getProtectedBnbFloor(currentBnbAvailable: number, feeSettings: FeeSettings): number {
+  if (!feeSettings.reserveBnbForFeesEnabled) {
+    return 0
+  }
+
+  return Math.min(currentBnbAvailable, feeSettings.minBnbBalance)
+}
+
+function addBalanceDelta(deltas: Record<string, number>, currency: string, delta: number): void {
+  if (Math.abs(delta) <= BALANCE_EPSILON) {
+    return
+  }
+
+  const normalizedCurrency = currency.trim().toUpperCase()
+  const nextValue = (deltas[normalizedCurrency] ?? 0) + delta
+
+  if (Math.abs(nextValue) <= BALANCE_EPSILON) {
+    delete deltas[normalizedCurrency]
+    return
+  }
+
+  deltas[normalizedCurrency] = nextValue
+}
+
+function buildCoreOrderDeltas(
+  type: 'buy' | 'sell',
+  baseCurrency: string,
+  quoteCurrency: string,
+  quantity: number,
+  totalValue: number,
+): Record<string, number> {
+  const deltas: Record<string, number> = {}
+
+  if (type === 'buy') {
+    addBalanceDelta(deltas, quoteCurrency, -totalValue)
+    addBalanceDelta(deltas, baseCurrency, quantity)
+    return deltas
+  }
+
+  addBalanceDelta(deltas, baseCurrency, -quantity)
+  addBalanceDelta(deltas, quoteCurrency, totalValue)
+  return deltas
+}
+
+async function getAssetPriceInQuote(asset: string, quoteCurrency: string): Promise<number> {
+  const normalizedAsset = asset.trim().toUpperCase()
+  const normalizedQuote = quoteCurrency.trim().toUpperCase()
+
+  if (normalizedAsset === normalizedQuote) {
+    return 1
+  }
+
+  const [assetToBrl, quoteToBrl] = await Promise.all([
+    getCurrencyRateToBrl(normalizedAsset),
+    getCurrencyRateToBrl(normalizedQuote),
+  ])
+
+  if (!Number.isFinite(assetToBrl) || assetToBrl <= 0 || !Number.isFinite(quoteToBrl) || quoteToBrl <= 0) {
+    throw new Error(`Não foi possível calcular a conversão de ${normalizedAsset} para ${normalizedQuote}`)
+  }
+
+  return assetToBrl / quoteToBrl
+}
+
+async function getUserFeeSettings(userId: string): Promise<FeeSettings> {
+  const configuration = await prisma.configuration.findUnique({
+    where: { userId },
+    select: {
+      useBnbForFees: true,
+      discountUsdtPercent: true,
+      discountBnbPercent: true,
+      minBnbBalance: true,
+      reserveBnbForFeesEnabled: true,
+    },
+  })
+
+  return normalizeFeeSettings(configuration ?? undefined)
+}
+
+async function calculateOrderFeePolicy(params: {
+  totalValue: number
+  quoteCurrency: string
+  currentBnbAvailable: number
+  projectedBnbAvailableBeforeFee: number
+  feeSettings: FeeSettings
+}): Promise<OrderFeePolicy> {
+  const { totalValue, quoteCurrency, currentBnbAvailable, projectedBnbAvailableBeforeFee, feeSettings } = params
+  const quoteCurrencyUpper = quoteCurrency.trim().toUpperCase()
+  const usdtDiscountRate = quoteCurrencyUpper === 'USDT'
+    ? ORDER_FEE_RATE * (1 - feeSettings.discountUsdtPercent)
+    : ORDER_FEE_RATE
+
+  const fallbackPolicy: OrderFeePolicy = {
+    fee: totalValue * usdtDiscountRate,
+    feeCurrency: quoteCurrencyUpper,
+    feeRateApplied: usdtDiscountRate,
+    feeDiscountSource: quoteCurrencyUpper === 'USDT' && feeSettings.discountUsdtPercent > 0 ? 'usdt' : 'standard',
+    feeInQuote: totalValue * usdtDiscountRate,
+  }
+
+  if (!feeSettings.useBnbForFees) {
+    return fallbackPolicy
+  }
+
+  const protectedFloor = getProtectedBnbFloor(currentBnbAvailable, feeSettings)
+  const usableBnb = projectedBnbAvailableBeforeFee - protectedFloor
+
+  if (usableBnb <= BALANCE_EPSILON) {
+    return fallbackPolicy
+  }
+
+  const feeRateApplied = ORDER_FEE_RATE * (1 - feeSettings.discountBnbPercent)
+  const feeInQuote = totalValue * feeRateApplied
+  const bnbPriceInQuote = await getAssetPriceInQuote('BNB', quoteCurrencyUpper)
+  const feeInBnb = feeInQuote / bnbPriceInQuote
+
+  if (!Number.isFinite(feeInBnb) || feeInBnb <= 0 || feeInBnb > usableBnb + BALANCE_EPSILON) {
+    return fallbackPolicy
+  }
+
+  return {
+    fee: feeInBnb,
+    feeCurrency: 'BNB',
+    feeRateApplied,
+    feeDiscountSource: 'bnb',
+    feeInQuote,
+  }
+}
+
+async function persistBalanceDeltas(
+  userId: string,
+  balancesByCurrency: Map<string, BalanceState>,
+  deltas: Record<string, number>,
+): Promise<void> {
+  const updates = Object.entries(deltas).map(async ([currency, delta]) => {
+    if (Math.abs(delta) <= BALANCE_EPSILON) {
+      return
+    }
+
+    const existingBalance = balancesByCurrency.get(currency)
+
+    if (existingBalance) {
+      await prisma.balance.update({
+        where: { id: existingBalance.id },
+        data: {
+          available: { increment: delta },
+          total: { increment: delta },
+          updatedAt: new Date(),
+        },
+      })
+
+      return
+    }
+
+    await prisma.balance.create({
+      data: {
+        userId,
+        currency,
+        available: delta,
+        reserved: 0,
+        total: delta,
+      },
+    })
+  })
+
+  await Promise.all(updates)
+}
+
 async function syncExternalBalances(userId: string, balances: Array<{ currency: string; available: number; reserved: number; total: number }>): Promise<void> {
   await Promise.all(
     balances.map((balance) => prisma.balance.upsert({
@@ -261,6 +447,9 @@ export async function getOrders(req: AuthRequest, res: Response): Promise<Respon
       price: transaction.price,
       total: transaction.total,
       fee: transaction.fee,
+      feeCurrency: transaction.feeCurrency,
+      feeRateApplied: transaction.feeRateApplied,
+      feeDiscountSource: transaction.feeDiscountSource ?? undefined,
       status: transaction.status,
       profitBrl: transaction.profitBrl,
       profitPercent: transaction.profitPercent,
@@ -327,6 +516,9 @@ export async function getOrderById(req: AuthRequest, res: Response): Promise<Res
       price: transaction.price,
       total: transaction.total,
       fee: transaction.fee,
+      feeCurrency: transaction.feeCurrency,
+      feeRateApplied: transaction.feeRateApplied,
+      feeDiscountSource: transaction.feeDiscountSource ?? undefined,
       status: transaction.status,
       profitBrl: transaction.profitBrl,
       profitPercent: transaction.profitPercent,
@@ -399,59 +591,72 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
 
     const userId = req.userId!
     const { baseCurrency, quoteCurrency } = getPairCurrencies(pair)
-    const currency = type === 'buy' ? quoteCurrency : baseCurrency
-    const balance = await prisma.balance.findUnique({
+    const trackedCurrencies = Array.from(new Set([baseCurrency, quoteCurrency, 'BNB']))
+    const balances = await prisma.balance.findMany({
       where: {
-        userId_currency: {
-          userId,
-          currency,
-        },
+        userId,
+        currency: { in: trackedCurrencies },
       },
     })
+    const balancesByCurrency = new Map(
+      balances.map((balance) => [balance.currency.toUpperCase(), balance as BalanceState]),
+    )
 
     const marketPrice = !price ? await getTickerPrice(pair).catch(() => null) : null
     const estimatedPrice = price || marketPrice || 50000
     const totalValue = quantity * estimatedPrice
-    const fee = totalValue * ORDER_FEE_RATE
+    const feeSettings = await getUserFeeSettings(userId)
+    const coreDeltas = buildCoreOrderDeltas(type, baseCurrency, quoteCurrency, quantity, totalValue)
+    const currentBnbAvailable = balancesByCurrency.get('BNB')?.available ?? 0
+    const projectedBnbAvailableBeforeFee = currentBnbAvailable + (coreDeltas.BNB ?? 0)
+    const feePolicy = await calculateOrderFeePolicy({
+      totalValue,
+      quoteCurrency,
+      currentBnbAvailable,
+      projectedBnbAvailableBeforeFee,
+      feeSettings,
+    })
+    const deltas = { ...coreDeltas }
+    addBalanceDelta(deltas, feePolicy.feeCurrency, -feePolicy.fee)
 
-    if (type === 'buy' && (!balance || balance.available < totalValue + fee)) {
-      logger.warn('[transactions] Saldo insuficiente para compra', {
+    try {
+      Object.entries(deltas).forEach(([currency, delta]) => {
+        const currentAvailable = balancesByCurrency.get(currency)?.available ?? 0
+        const finalAvailable = currentAvailable + delta
+
+        if (finalAvailable < -BALANCE_EPSILON) {
+          throw new Error(`Saldo insuficiente de ${currency}`)
+        }
+
+        if (currency === 'BNB' && feeSettings.reserveBnbForFeesEnabled) {
+          const protectedFloor = getProtectedBnbFloor(currentAvailable, feeSettings)
+          if (finalAvailable + BALANCE_EPSILON < protectedFloor) {
+            throw new Error('A reserva mínima de BNB para taxas seria violada')
+          }
+        }
+      })
+    } catch (balanceError) {
+      logger.warn('[transactions] Saldo insuficiente para ordem', {
         module: 'transactions',
-        event: 'create_order_insufficient_balance_buy',
+        event: 'create_order_insufficient_balance',
         userId,
         pair,
-        required: totalValue + fee,
-        available: balance?.available,
-        currency,
+        type,
+        deltas,
+        error: balanceError,
       })
 
       trace('DEBUG', 'transactions', 'createOrder', 'Saldo insuficiente', 0, {
-        currency,
-        required: totalValue + fee,
-        available: balance?.available,
-      })
-      endTrace('createOrder', { userId, errorFlag: true })
-      return res.status(400).json({ success: false, error: 'Saldo insuficiente' })
-    }
-
-    if (type === 'sell' && (!balance || balance.available < quantity)) {
-      logger.warn('[transactions] Saldo insuficiente para venda', {
-        module: 'transactions',
-        event: 'create_order_insufficient_balance_sell',
-        userId,
         pair,
-        required: quantity,
-        available: balance?.available,
-        currency,
-      })
-
-      trace('DEBUG', 'transactions', 'createOrder', 'Saldo insuficiente', 0, {
-        currency,
-        required: quantity,
-        available: balance?.available,
+        type,
+        deltas,
+        error: balanceError instanceof Error ? balanceError.message : balanceError,
       })
       endTrace('createOrder', { userId, errorFlag: true })
-      return res.status(400).json({ success: false, error: 'Saldo insuficiente' })
+      return res.status(400).json({
+        success: false,
+        error: balanceError instanceof Error ? balanceError.message : 'Saldo insuficiente',
+      })
     }
 
     let profitBrl: number | null = null
@@ -459,7 +664,7 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
 
     if (type === 'sell') {
       try {
-        const sellProfit = await calculateSellProfitUsingFifo(userId, pair, quantity, estimatedPrice, fee)
+        const sellProfit = await calculateSellProfitUsingFifo(userId, pair, quantity, estimatedPrice, feePolicy.feeInQuote)
         profitBrl = sellProfit.profitBrl
         profitPercent = sellProfit.profitPercent
       } catch (fifoError) {
@@ -489,7 +694,10 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
         quantity,
         price: estimatedPrice,
         total: totalValue,
-        fee,
+        fee: feePolicy.fee,
+        feeCurrency: feePolicy.feeCurrency,
+        feeRateApplied: feePolicy.feeRateApplied,
+        feeDiscountSource: feePolicy.feeDiscountSource,
         status: 'executed',
         profitBrl,
         profitPercent,
@@ -506,62 +714,15 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
       price: transaction.price,
       total: transaction.total,
       fee: transaction.fee,
+      feeCurrency: transaction.feeCurrency,
+      feeRateApplied: transaction.feeRateApplied,
+      feeDiscountSource: transaction.feeDiscountSource ?? undefined,
       status: transaction.status,
       profitBrl: transaction.profitBrl,
       profitPercent: transaction.profitPercent,
     }
 
-    if (type === 'buy') {
-      await prisma.balance.update({
-        where: { userId_currency: { userId, currency: quoteCurrency } },
-        data: {
-          available: { decrement: totalValue + fee },
-          total: { decrement: totalValue + fee },
-          updatedAt: new Date(),
-        },
-      })
-
-      await prisma.balance.upsert({
-        where: { userId_currency: { userId, currency: baseCurrency } },
-        update: {
-          available: { increment: quantity },
-          total: { increment: quantity },
-          updatedAt: new Date(),
-        },
-        create: {
-          userId,
-          currency: baseCurrency,
-          available: quantity,
-          reserved: 0,
-          total: quantity,
-        },
-      })
-    } else {
-      await prisma.balance.update({
-        where: { userId_currency: { userId, currency: baseCurrency } },
-        data: {
-          available: { decrement: quantity },
-          total: { decrement: quantity },
-          updatedAt: new Date(),
-        },
-      })
-
-      await prisma.balance.upsert({
-        where: { userId_currency: { userId, currency: quoteCurrency } },
-        update: {
-          available: { increment: totalValue - fee },
-          total: { increment: totalValue - fee },
-          updatedAt: new Date(),
-        },
-        create: {
-          userId,
-          currency: quoteCurrency,
-          available: totalValue - fee,
-          reserved: 0,
-          total: totalValue - fee,
-        },
-      })
-    }
+    await persistBalanceDeltas(userId, balancesByCurrency, deltas)
 
     await recordBalanceHistorySnapshot(userId).catch((snapshotError) => {
       logger.warn('[transactions] Falha ao registrar snapshot após ordem', {
@@ -587,7 +748,10 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
       quantity,
       price: estimatedPrice,
       total: totalValue,
-      fee,
+      fee: feePolicy.fee,
+      feeCurrency: feePolicy.feeCurrency,
+      feeRateApplied: feePolicy.feeRateApplied,
+      feeDiscountSource: feePolicy.feeDiscountSource,
       status: 'executed',
       profitBrl,
       profitPercent,
@@ -614,7 +778,10 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
         orderType,
         price: estimatedPrice,
         total: totalValue,
-        fee,
+        fee: feePolicy.fee,
+        feeCurrency: feePolicy.feeCurrency,
+        feeRateApplied: feePolicy.feeRateApplied,
+        feeDiscountSource: feePolicy.feeDiscountSource,
         profitBrl,
         profitPercent,
       },

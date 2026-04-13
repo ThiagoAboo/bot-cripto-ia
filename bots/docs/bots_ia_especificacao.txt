@@ -1,7 +1,7 @@
 ================================================================================
 ESPECIFICAÇÃO TÉCNICA – BOTS DE IA PARA TRADING DE CRIPTOMOEDAS
 ================================================================================
-Versão: 1.0 – Camada de Inteligência Artificial
+Versão: 1.2 – Camada de Inteligência Artificial
 Data: 11 de abril de 2026
 Status: Especificação completa para implementação
 
@@ -75,7 +75,61 @@ Bot (base abstrata)
 ├── MeanReversionBot
 └── ArbitrageBot
 
-2.2 INTERFACE BASE DO BOT
+2.2 SEPARAÇÃO DE CONCEITOS DE DOMÍNIO
+
+Diretriz arquitetural obrigatória:
+- O catálogo do bot não deve ser confundido com a instância em execução
+- A camada bots deve separar definição, execução, treino e artefato salvo
+
+Objetos recomendados:
+
+interface BotTemplate {
+  id: string
+  code: string
+  name: string
+  specializationType: string
+  indicatorFamily: string[]
+  defaultParameters: Record<string, any>
+  riskProfile: RiskConfig
+  isActive: boolean
+}
+
+interface BotInstance {
+  id: string
+  templateId: string
+  userId: string
+  name: string
+  status: 'offline' | 'online' | 'paused' | 'training' | 'error'
+  allowedPairs: string[]
+  config: BotConfig
+  currentModelArtifactId?: string
+}
+
+interface TrainingRun {
+  id: string
+  botInstanceId: string
+  status: 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'
+  datasetVersion: string
+  featureSetVersion: string
+  randomSeed: number
+}
+
+interface ModelArtifact {
+  id: string
+  botInstanceId: string
+  modelVersion: string
+  storageUrl: string
+  metrics: Record<string, number>
+  createdAt: Date
+}
+
+Resumo de responsabilidade:
+- BotTemplate: catálogo reutilizável de especialistas
+- BotInstance: bot configurado para um usuário/conta
+- TrainingRun: execução isolada do pipeline de treinamento
+- ModelArtifact: resultado versionado e rastreável do treinamento
+
+2.3 INTERFACE BASE DO BOT
 
 interface IMarketData {
   pair: string
@@ -115,9 +169,35 @@ interface BotConfig {
   parameters: Record<string, any>
   allowedPairs: string[]
   risk: RiskConfig
+  execution: ExecutionConfig
+  pairDiscovery?: PairDiscoveryConfig
 }
 
-2.3 CICLO DE VIDA DO BOT
+interface ExecutionConfig {
+  mode: 'paper' | 'semi_auto' | 'full_auto'
+  useBnbForFees: boolean
+  reserveBnbForFeesEnabled: boolean
+  minBnbBalance: number
+}
+
+interface PairDiscoveryConfig {
+  autoDiscoveryEnabled: boolean
+  autoAddToAllowedPairs: boolean
+  autoRemoveFromAllowedPairs: boolean
+  reviewRequired: boolean
+  minSocialScore: number
+  minMentions: number
+  maxPairs: number
+  excludedAssets: string[]
+  sources: {
+    reddit: boolean
+    rss: boolean
+    x: boolean
+    telegram: boolean
+  }
+}
+
+2.4 CICLO DE VIDA DO BOT
 
 O bot executa um loop contínuo a cada intervalo configurável:
 
@@ -130,6 +210,39 @@ O bot executa um loop contínuo a cada intervalo configurável:
 4. Aplicar gestão de risco (stop loss, take profit, exposição)
 5. Se confiança > threshold, executar ordem via backend
 6. Registrar traces de cada passo
+
+2.5 MÁQUINAS DE ESTADO
+
+BotInstance:
+- offline -> online
+- online -> paused
+- paused -> online
+- online -> training
+- training -> online
+- online -> error
+- error -> offline
+
+TrainingRun:
+- pending -> running
+- running -> paused
+- paused -> running
+- running -> completed
+- running -> failed
+- pending -> cancelled
+- running -> cancelled
+- paused -> cancelled
+
+OrderExecution:
+- draft -> submitted
+- submitted -> partially_filled
+- submitted -> filled
+- partially_filled -> filled
+- submitted -> cancelled
+- partially_filled -> cancelled
+- submitted -> rejected
+
+Regra:
+- O backend deve impedir transições inválidas e registrar auditoria sempre que houver mudança de estado
 
 
 ================================================================================
@@ -254,6 +367,31 @@ Lógica de decisão:
 - PARA CADA par correlacionado:
   SE spread > minSpreadPercent E liquidity > minLiquidity E latency < maxLatencyMs
   ENTÃO comprar no mais barato, vender no mais caro
+
+3.6 BOTS ESPECIALISTAS POR INDICADOR
+
+Diretriz arquitetural:
+- Além dos bots por estratégia, o sistema pode operar bots especialistas por indicador
+- Cada especialista é responsável por um conjunto pequeno e coerente de sinais
+- O orquestrador pode combinar múltiplos especialistas para formar uma decisão final
+
+Especialistas previstos:
+- RsiBot: foco em sobrecompra/sobrevenda e reversão curta
+- MacdBot: foco em cruzamentos e aceleração de momentum
+- EmaTrendBot: foco em cruzamento e inclinação de EMAs
+- BollingerBot: foco em bandas, compressão e reversão à média
+- AtrVolatilityBot: foco em regime de volatilidade e sizing
+- ObvVolumeBot: foco em confirmação de fluxo/volume
+- OrderBookImbalanceBot: foco em microestrutura
+- SocialDiscoveryBot: foco em descoberta e priorização de moedas emergentes
+
+Regras:
+- Cada bot especialista deve ter parâmetros próprios
+- Cada bot especialista produz action, confidence e rationale
+- O ensemble final pode:
+  - votar por maioria
+  - ponderar por peso
+  - vetar execução quando houver conflito forte
 
 
 ================================================================================
@@ -426,6 +564,24 @@ function applySocialBoost(analysis, socialData):
     analysis.reason += " | Sentimento negativo no Reddit"
   
   return analysis
+
+6.4 DESCOBERTA AUTOMÁTICA DE NOVAS MOEDAS
+
+Objetivo:
+- Alimentar dinamicamente allowedPairs com moedas em alta tração social
+
+Fluxo:
+1. Coletar score social por ativo
+2. Aplicar filtros de score, menções, liquidez e blacklist
+3. Gerar lista candidata
+4. Incluir/remover ativos em allowedPairs conforme a política configurada
+
+Regras obrigatórias:
+- Nunca incluir ativo presente em excludedAssets
+- Nunca ultrapassar maxPairs
+- Quando reviewRequired = true, a alteração vira sugestão e não autoexecução
+- A remoção automática não deve afetar ativos fixados manualmente
+- O ativo BNB pode ser excluído da descoberta automática para proteger a reserva de taxas
 
 
 ================================================================================
@@ -601,6 +757,20 @@ Integração com Binance via API:
 - Suporte a ordens market e limit
 - Uso de BNB para taxas (configurável)
 - Reserva mínima de BNB (configurável)
+
+Regras de execução:
+- Se useBnbForFees = true:
+  - tentar pagar taxa em BNB
+  - respeitar minBnbBalance
+- Se reserveBnbForFeesEnabled = true:
+  - o bot nunca pode consumir o saldo reservado de BNB em ordens comuns
+- Se o ativo negociado for BNB:
+  - a quantidade máxima deve preservar a reserva mínima
+- O executor deve persistir:
+  - fee
+  - feeCurrency
+  - feeRateApplied
+  - feeDiscountSource
 
 9.4 CHAVEAMENTO SIMULADO/REAL
 
@@ -780,6 +950,32 @@ interface BotConfiguration {
   // Social sentiment
   socialEnabled: boolean
   socialBoostThreshold: number
+
+  // Descoberta dinâmica de pares
+  pairDiscovery: {
+    autoDiscoveryEnabled: boolean
+    autoAddToAllowedPairs: boolean
+    autoRemoveFromAllowedPairs: boolean
+    reviewRequired: boolean
+    minSocialScore: number
+    minMentions: number
+    maxPairs: number
+    excludedAssets: string[]
+    sources: {
+      reddit: boolean
+      rss: boolean
+      x: boolean
+      telegram: boolean
+    }
+  }
+
+  // Execução real
+  execution: {
+    mode: 'paper' | 'semi_auto' | 'full_auto'
+    useBnbForFees: boolean
+    reserveBnbForFeesEnabled: boolean
+    minBnbBalance: number
+  }
 }
 
 12.2 EXEMPLO: SCALPER BOT CONFIG
@@ -813,7 +1009,29 @@ interface BotConfiguration {
   },
   "analysisIntervalSeconds": 5,
   "socialEnabled": true,
-  "socialBoostThreshold": 65
+  "socialBoostThreshold": 65,
+  "pairDiscovery": {
+    "autoDiscoveryEnabled": true,
+    "autoAddToAllowedPairs": false,
+    "autoRemoveFromAllowedPairs": false,
+    "reviewRequired": true,
+    "minSocialScore": 70,
+    "minMentions": 25,
+    "maxPairs": 20,
+    "excludedAssets": ["BNB", "USDC"],
+    "sources": {
+      "reddit": true,
+      "rss": true,
+      "x": false,
+      "telegram": false
+    }
+  },
+  "execution": {
+    "mode": "paper",
+    "useBnbForFees": true,
+    "reserveBnbForFeesEnabled": true,
+    "minBnbBalance": 0.01
+  }
 }
 
 
@@ -880,10 +1098,29 @@ Response:
 {
   "success": true,
   "data": [
-    { "symbol": "BTC", "score": 78, "sentiment": "bullish" },
-    { "symbol": "ETH", "score": 65, "sentiment": "neutral" }
+    {
+      "symbol": "BTC",
+      "pair": "BTC/USDT",
+      "score": 78,
+      "mentions": 12,
+      "sentiment": "bullish",
+      "sources": ["reddit", "rss"]
+    },
+    {
+      "symbol": "ETH",
+      "pair": "ETH/USDT",
+      "score": 65,
+      "mentions": 8,
+      "sentiment": "neutral",
+      "sources": ["reddit"]
+    }
   ]
 }
+
+Observações:
+- `pair` já vem resolvido para o par preferencial da exchange, priorizando USDT quando disponível
+- `sources` informa quais canais contribuíram para o score agregado
+- os bots de descoberta podem usar esse endpoint junto com `POST /api/configurations/pair-discovery/preview` e `POST /api/configurations/pair-discovery/apply`
 
 13.6 CARREGAR SALDO (SIMULADO/REAL)
 
@@ -897,6 +1134,73 @@ Response:
     { "currency": "BTC", "available": 0.5, "reserved": 0, "total": 0.5 }
   ]
 }
+
+13.7 EXECUTAR ANÁLISE SECA DE UM BOT
+
+GET /api/dashboard/bots/{id}/analysis?limit=6
+
+Objetivo:
+- Permitir que frontend e operadores visualizem a leitura atual do bot
+- Validar especialistas por indicador antes de acoplar execução automática
+- Atualizar o radar do dashboard com melhor oportunidade e ranking de pares
+
+Response:
+{
+  "success": true,
+  "data": {
+    "botId": "bot_macd_01",
+    "botName": "MACD Momentum Bot",
+    "primarySpecialist": "macd_momentum",
+    "timeframe": "1h",
+    "generatedAt": "2026-04-12T18:40:00.000Z",
+    "analyzedPairs": ["BTC/USDT", "ETH/USDT", "SOL/USDT"],
+    "summary": {
+      "analyzedPairs": 3,
+      "actionablePairs": 2,
+      "buySignals": 1,
+      "sellSignals": 1,
+      "holdSignals": 1
+    },
+    "bestOpportunity": {
+      "pair": "BTC/USDT",
+      "action": "buy",
+      "confidence": 78,
+      "price": 62345.67,
+      "reason": "Consenso inclinado para compra entre os especialistas ativos",
+      "specialists": [
+        {
+          "specialist": "macd_momentum",
+          "action": "buy",
+          "confidence": 74,
+          "reason": "Cruzamento positivo de MACD com aceleracao",
+          "indicators": {
+            "macd": 1.12,
+            "signal": 0.91,
+            "histogram": 0.21
+          }
+        },
+        {
+          "specialist": "social_discovery",
+          "action": "buy",
+          "confidence": 61,
+          "reason": "Tracao social positiva reforcando o ativo",
+          "indicators": {
+            "socialScore": 82,
+            "mentions": 22
+          }
+        }
+      ]
+    },
+    "opportunities": [],
+    "socialSignals": []
+  }
+}
+
+Regras:
+- Nao envia ordem
+- Deve usar candles reais e sinais sociais agregados
+- Deve atualizar `currentPair`, `recommendedAction`, `confidence` e `lastAnalysis`
+  do bot para o dashboard refletir a leitura mais recente
 
 
 ================================================================================
@@ -1080,6 +1384,16 @@ class BotOrchestrator:
   async resumeBot(botId):
     bot = this.bots.get(botId)
     if bot: await bot.resume()
+
+  async loadSpecialists():
+    // Exemplo de especialistas por indicador
+    this.specialists = [
+      new RsiBot(...),
+      new MacdBot(...),
+      new EmaTrendBot(...),
+      new BollingerBot(...),
+      new SocialDiscoveryBot(...)
+    ]
 
 
 ================================================================================

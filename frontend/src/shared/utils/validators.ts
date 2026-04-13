@@ -27,9 +27,27 @@ export const botParametersSchema = z.object({
     maxTradeAmountUnit: z.enum(['USDT', 'percent']),
   }),
   fees: z.object({
+    useBnbForFees: z.boolean(),
     discountUsdtPercent: z.number().min(0).max(1),
     discountBnbPercent: z.number().min(0).max(1),
     minBnbBalance: z.number().min(0),
+    reserveBnbForFeesEnabled: z.boolean(),
+  }),
+  pairDiscovery: z.object({
+    autoDiscoveryEnabled: z.boolean(),
+    autoAddToAllowedPairs: z.boolean(),
+    autoRemoveFromAllowedPairs: z.boolean(),
+    reviewRequired: z.boolean(),
+    sources: z.object({
+      reddit: z.boolean(),
+      rss: z.boolean(),
+      x: z.boolean(),
+      telegram: z.boolean(),
+    }),
+    minSocialScore: z.number().min(0).max(100),
+    minMentions: z.number().min(0),
+    maxPairs: z.number().positive(),
+    excludedAssets: z.array(z.string()),
   }),
   advanced: z.object({
     mode: z.enum(['spot', 'futures']),

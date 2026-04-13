@@ -16,6 +16,9 @@ export interface Transaction {
   price: number
   total: number
   fee: number
+  feeCurrency?: string
+  feeRateApplied?: number
+  feeDiscountSource?: 'bnb' | 'usdt' | 'standard'
   status: OrderStatus
   profitBrl?: number
   profitPercent?: number

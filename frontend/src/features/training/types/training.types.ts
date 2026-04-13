@@ -99,15 +99,26 @@ export interface BacktestResult {
 
 export interface AvailableStrategy {
   id: string
+  slug?: string
   name: string
   strategyType: string
   description: string
+  indicatorType?: string
+  specialization?: string
+  source?: 'template' | 'legacy'
 }
 
 export interface AvailableBot {
   id: string
   name: string
   strategyType: string
+  strategyId?: string
+  templateId?: string
+  templateSlug?: string
+  templateName?: string
+  indicatorType?: string
+  specialization?: string
+  executionMode?: string
   description?: string
   status: 'online' | 'offline' | 'training' | 'error'
   isPaused: boolean

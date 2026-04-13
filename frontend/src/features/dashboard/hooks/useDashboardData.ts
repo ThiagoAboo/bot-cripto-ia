@@ -7,6 +7,7 @@ export const DASHBOARD_QUERY_KEYS = {
   currenciesBalance: ['dashboard', 'currencies-balance'],
   recentTransactions: ['dashboard', 'recent-transactions'],
   botsStatus: ['dashboard', 'bots-status'],
+  botAnalysis: (botId: string) => ['dashboard', 'bot-analysis', botId],
 }
 
 export function useTotalBalance() {
@@ -42,6 +43,16 @@ export function useBotsStatus() {
     queryFn: () => dashboardService.getBotsStatus(),
     refetchInterval: 5000,
     staleTime: 3000,
+  })
+}
+
+export function useBotAnalysis(botId?: string) {
+  return useQuery({
+    enabled: Boolean(botId),
+    queryKey: DASHBOARD_QUERY_KEYS.botAnalysis(botId ?? 'none'),
+    queryFn: () => dashboardService.getBotAnalysis(botId!),
+    refetchInterval: 10000,
+    staleTime: 5000,
   })
 }
 

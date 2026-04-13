@@ -92,6 +92,12 @@ export function BotsStatusList({ data, isLoading, onPause, onResume, isMutating 
                   <p className="mt-0.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
                     {bot.description}
                   </p>
+                  {(bot.indicatorType || bot.specialization) && (
+                    <p className="mt-1 text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                      {bot.indicatorType ? `Indicador: ${bot.indicatorType}` : 'Especializado'}
+                      {bot.specialization ? ` · ${bot.specialization}` : ''}
+                    </p>
+                  )}
                 </div>
 
                 {isOnline && (

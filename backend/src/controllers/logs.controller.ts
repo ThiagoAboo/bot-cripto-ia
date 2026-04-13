@@ -1,6 +1,7 @@
 import { Response } from 'express'
 import { AuthRequest } from '../middleware/auth.middleware'
 import { prisma } from '../config/database'
+import { listBotInstances } from '../services/bot-registry.service'
 import { getSystemLogUserId, logger } from '../utils/logger'
 import { startTrace, endTrace } from '../utils/tracer'
 import { z } from 'zod'
@@ -547,12 +548,16 @@ export async function getBotsForFilter(req: AuthRequest, res: Response) {
   startTrace(req.userId!, 'getBotsForFilter', 'logs')
 
   try {
-    const bots = await prisma.bot.findMany({
-      select: { id: true, name: true },
-    })
+    const bots = await listBotInstances(req.userId!)
 
     endTrace('getBotsForFilter')
-    return res.json({ success: true, data: bots })
+    return res.json({
+      success: true,
+      data: bots.map((bot) => ({
+        id: bot.id,
+        name: bot.name,
+      })),
+    })
   } catch (error) {
     logger.error('Erro ao buscar bots:', error)
     endTrace('getBotsForFilter', { errorFlag: true })

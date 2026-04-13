@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { configurationsService } from '../services/configurations.service'
-import type { Configurations, ExchangeApiKeys } from '../types/configurations.types'
+import type { Configurations, ExchangeApiKeys, FeesConfig, PairDiscoveryConfig } from '../types/configurations.types'
 import toast from 'react-hot-toast'
 
 export const CONFIGURATIONS_QUERY_KEYS = {
@@ -9,6 +9,8 @@ export const CONFIGURATIONS_QUERY_KEYS = {
   botParameters: ['configurations', 'bot-parameters'],
   strategies: ['configurations', 'strategies'],
   pairs: ['exchange', 'pairs'],
+  socialSignals: ['configurations', 'social-signals'],
+  pairDiscoveryPreview: ['configurations', 'pair-discovery', 'preview'],
 }
 
 export function useConfigurations() {
@@ -55,5 +57,52 @@ export function useAvailablePairs() {
     queryKey: CONFIGURATIONS_QUERY_KEYS.pairs,
     queryFn: () => configurationsService.getAvailablePairs(),
     staleTime: 300000, // 5 minutos
+  })
+}
+
+export function useLatestSocialSignals() {
+  return useQuery({
+    queryKey: CONFIGURATIONS_QUERY_KEYS.socialSignals,
+    queryFn: () => configurationsService.getLatestSocialSignals(),
+    staleTime: 300000,
+  })
+}
+
+export function usePairDiscoveryPreview() {
+  return useMutation({
+    mutationFn: (payload: {
+      allowedPairs: string[]
+      fees: FeesConfig
+      pairDiscovery: PairDiscoveryConfig
+    }) => configurationsService.previewPairDiscovery(payload),
+    onError: (error: Error) => {
+      toast.error(`Erro ao gerar preview da descoberta: ${error.message}`)
+    },
+  })
+}
+
+export function usePairDiscoveryApply() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (payload: {
+      allowedPairs: string[]
+      fees: FeesConfig
+      pairDiscovery: PairDiscoveryConfig
+      force?: boolean
+    }) => configurationsService.applyPairDiscovery(payload),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: CONFIGURATIONS_QUERY_KEYS.socialSignals })
+      queryClient.invalidateQueries({ queryKey: CONFIGURATIONS_QUERY_KEYS.all })
+
+      if (result.applied) {
+        toast.success('Sugestões de descoberta aplicadas com sucesso!')
+      } else if (result.requiresConfirmation) {
+        toast('Revise as sugestões e confirme a aplicação.')
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(`Erro ao aplicar sugestões: ${error.message}`)
+    },
   })
 }

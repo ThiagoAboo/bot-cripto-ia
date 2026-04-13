@@ -3,6 +3,16 @@
 import { PrismaClient } from '@prisma/client'
 import bcrypt from 'bcryptjs'
 
+function normalizeDatabaseUrlForHostExecution(value: string | undefined): string | undefined {
+  if (!value || !value.includes('@postgres:5432')) {
+    return value
+  }
+
+  return value.replace('@postgres:5432', '@localhost:5432')
+}
+
+process.env.DATABASE_URL = normalizeDatabaseUrlForHostExecution(process.env.DATABASE_URL)
+
 const prisma = new PrismaClient()
 
 const DEFAULT_STRATEGIES = JSON.stringify([
@@ -75,6 +85,119 @@ const DEFAULT_ALLOWED_PAIRS = JSON.stringify([
   "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "DOT/USDT", "LINK/USDT"
 ])
 
+const BOT_TEMPLATES = [
+  {
+    id: 'template_rsi_reversion',
+    slug: 'rsi-reversion-specialist',
+    name: 'RSI Reversion Specialist',
+    strategyType: 'mean_reversion',
+    indicatorType: 'RSI',
+    specialization: 'rsi_reversion',
+    description: 'Especialista em reversão à média usando RSI e sobrevenda/sobrecompra',
+    defaultParameters: {
+      rsiPeriod: 14,
+      rsiLower: 30,
+      rsiUpper: 70,
+      confirmationCandles: 2,
+    },
+  },
+  {
+    id: 'template_macd_momentum',
+    slug: 'macd-momentum-specialist',
+    name: 'MACD Momentum Specialist',
+    strategyType: 'momentum',
+    indicatorType: 'MACD',
+    specialization: 'macd_momentum',
+    description: 'Especialista em aceleração de momentum usando cruzamentos de MACD',
+    defaultParameters: {
+      fastPeriod: 12,
+      slowPeriod: 26,
+      signalPeriod: 9,
+      minHistogram: 0.2,
+    },
+  },
+  {
+    id: 'template_ema_trend',
+    slug: 'ema-trend-specialist',
+    name: 'EMA Trend Specialist',
+    strategyType: 'trend_follower',
+    indicatorType: 'EMA',
+    specialization: 'ema_trend',
+    description: 'Especialista em tendência usando cruzamento de médias exponenciais',
+    defaultParameters: {
+      fastEma: 20,
+      slowEma: 50,
+      adxThreshold: 25,
+    },
+  },
+  {
+    id: 'template_bbands_reversion',
+    slug: 'bollinger-reversion-specialist',
+    name: 'Bollinger Reversion Specialist',
+    strategyType: 'mean_reversion',
+    indicatorType: 'BB',
+    specialization: 'bollinger_reversion',
+    description: 'Especialista em retorno à média com Bandas de Bollinger',
+    defaultParameters: {
+      bbPeriod: 20,
+      bbStdDev: 2,
+      minBandWidth: 0.015,
+    },
+  },
+  {
+    id: 'template_volume_breakout',
+    slug: 'volume-breakout-specialist',
+    name: 'Volume Breakout Specialist',
+    strategyType: 'momentum',
+    indicatorType: 'Volume',
+    specialization: 'volume_breakout',
+    description: 'Especialista em rompimentos confirmados por expansão de volume',
+    defaultParameters: {
+      volumeMultiplier: 1.8,
+      breakoutLookback: 20,
+      atrFilter: true,
+    },
+  },
+]
+
+const BOT_INSTANCES = [
+  {
+    id: 'bot1',
+    templateId: 'template_rsi_reversion',
+    name: 'RSI Reversion Bot',
+    strategyType: 'mean_reversion',
+    description: 'Bot operacional focado em sinais de RSI para reversão',
+  },
+  {
+    id: 'bot2',
+    templateId: 'template_macd_momentum',
+    name: 'MACD Momentum Bot',
+    strategyType: 'momentum',
+    description: 'Bot operacional focado em aceleração de momentum via MACD',
+  },
+  {
+    id: 'bot3',
+    templateId: 'template_ema_trend',
+    name: 'EMA Trend Bot',
+    strategyType: 'trend_follower',
+    description: 'Bot operacional focado em tendência com cruzamento de EMAs',
+  },
+  {
+    id: 'bot4',
+    templateId: 'template_bbands_reversion',
+    name: 'Bollinger Reversion Bot',
+    strategyType: 'mean_reversion',
+    description: 'Bot operacional focado em retorno à média com Bandas de Bollinger',
+  },
+  {
+    id: 'bot5',
+    templateId: 'template_volume_breakout',
+    name: 'Volume Breakout Bot',
+    strategyType: 'momentum',
+    description: 'Bot operacional focado em rompimentos com confirmação de volume',
+  },
+]
+
 async function main() {
   console.log('🌱 Iniciando seed do banco de dados...')
 
@@ -119,29 +242,63 @@ async function main() {
   })
   console.log(`✅ Configurações criadas`)
 
-  // Criar bots (estratégias)
-  const bots = [
-    { id: "bot1", name: "Scalper V2", strategyType: "scalper", description: "Operações rápidas com pequenos lucros" },
-    { id: "bot2", name: "Momentum Trader", strategyType: "momentum", description: "Identifica moedas com forte momentum" },
-    { id: "bot3", name: "Trend Follower", strategyType: "trend_follower", description: "Segue tendências de médio/longo prazo" },
-    { id: "bot4", name: "Mean Reversion", strategyType: "mean_reversion", description: "Identifica moedas sobrecompradas/sobrevendidas" },
-    { id: "bot5", name: "Arbitrage Hunter", strategyType: "arbitrage", description: "Identifica oportunidades de arbitragem" }
-  ]
+  // Criar catálogo de templates especializados
+  for (const template of BOT_TEMPLATES) {
+    await prisma.botTemplate.upsert({
+      where: { id: template.id },
+      update: {
+        slug: template.slug,
+        name: template.name,
+        strategyType: template.strategyType,
+        indicatorType: template.indicatorType,
+        specialization: template.specialization,
+        description: template.description,
+        defaultParameters: JSON.stringify(template.defaultParameters),
+        isActive: true,
+      },
+      create: {
+        id: template.id,
+        slug: template.slug,
+        name: template.name,
+        strategyType: template.strategyType,
+        indicatorType: template.indicatorType,
+        specialization: template.specialization,
+        description: template.description,
+        defaultParameters: JSON.stringify(template.defaultParameters),
+        isActive: true,
+      },
+    })
+  }
+  console.log(`✅ Templates de bots criados`)
 
-  for (const botData of bots) {
+  // Criar instâncias operacionais de bots
+  for (const botData of BOT_INSTANCES) {
     await prisma.bot.upsert({
       where: { id: botData.id },
-      update: {},
-      create: {
-        id: botData.id,
+      update: {
+        userId: user.id,
+        templateId: botData.templateId,
         name: botData.name,
         strategyType: botData.strategyType,
         description: botData.description,
+        executionMode: 'paper',
+        isSystemManaged: true,
+        status: 'online',
+      },
+      create: {
+        id: botData.id,
+        userId: user.id,
+        templateId: botData.templateId,
+        name: botData.name,
+        strategyType: botData.strategyType,
+        description: botData.description,
+        executionMode: 'paper',
+        isSystemManaged: true,
         status: 'online'
       }
     })
   }
-  console.log(`✅ Bots criados`)
+  console.log(`✅ Instâncias de bots criadas`)
 
   // Criar saldos iniciais
   const balances = [

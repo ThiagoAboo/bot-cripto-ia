@@ -35,7 +35,9 @@ export function ModelSelector({
   const selectedArchitecture = ARCHITECTURES.find((item) => item.value === architecture)
   const selectedBot = availableBots.find((item) => item.id === botId)
   const compatibleStrategies = selectedBot
-    ? availableStrategies.filter((item) => item.strategyType === selectedBot.strategyType)
+    ? selectedBot.strategyId
+      ? availableStrategies.filter((item) => item.id === selectedBot.strategyId)
+      : availableStrategies.filter((item) => item.strategyType === selectedBot.strategyType)
     : availableStrategies
 
   return (
@@ -59,14 +61,20 @@ export function ModelSelector({
               <SelectContent>
                 {availableBots.map((bot) => (
                   <SelectItem key={bot.id} value={bot.id}>
-                    {bot.name} ({bot.strategyType})
+                    {bot.name} ({bot.indicatorType || bot.strategyType})
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
             <p className="text-xs text-gray-500">
-              Bot que receberá o modelo treinado
+              Bot instanciado que receberá o modelo treinado
             </p>
+            {selectedBot && (
+              <p className="text-xs text-gray-500">
+                Template: {selectedBot.templateName || selectedBot.name}
+                {selectedBot.specialization ? ` · ${selectedBot.specialization}` : ''}
+              </p>
+            )}
           </div>
 
           {/* Estratégia */}
@@ -85,8 +93,13 @@ export function ModelSelector({
               </SelectContent>
             </Select>
             <p className="text-xs text-gray-500">
-              Tipo de estratégia a ser treinada
+              Template estratégico base para o treinamento
             </p>
+            {compatibleStrategies.length > 0 && (
+              <p className="text-xs text-gray-500">
+                Indicador principal: {compatibleStrategies[0].indicatorType || compatibleStrategies[0].strategyType}
+              </p>
+            )}
           </div>
         </div>
 

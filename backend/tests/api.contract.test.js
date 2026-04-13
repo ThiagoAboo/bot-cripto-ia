@@ -4,6 +4,7 @@ process.env.NODE_ENV = 'test'
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret'
 process.env.TRAINING_MODEL_STORAGE_DIR = process.env.TRAINING_MODEL_STORAGE_DIR || require('node:path').join(__dirname, '.tmp-models')
 process.env.TRAINING_UPLOAD_STORAGE_DIR = process.env.TRAINING_UPLOAD_STORAGE_DIR || require('node:path').join(__dirname, '.tmp-uploads')
+process.env.TRAINING_CHECKPOINT_STORAGE_DIR = process.env.TRAINING_CHECKPOINT_STORAGE_DIR || require('node:path').join(__dirname, '.tmp-checkpoints')
 
 const assert = require('node:assert/strict')
 const fs = require('node:fs/promises')
@@ -21,6 +22,7 @@ const marketValuationService = require('../src/services/market-valuation.service
 const portfolioService = require('../src/services/portfolio.service')
 const socketService = require('../src/services/socket.service')
 const binanceService = require('../src/services/binance.service')
+const pairDiscoveryService = require('../src/services/pair-discovery.service')
 const trainingDataService = require('../src/services/training-data.service')
 const trainingSessionService = require('../src/services/training-session.service')
 const webhookService = require('../src/services/webhook.service')
@@ -88,6 +90,47 @@ function buildPersistedUser(user) {
     preferences: '{}',
     createdAt: new Date('2026-04-11T10:00:00.000Z'),
     updatedAt: new Date('2026-04-11T10:00:00.000Z'),
+  }
+}
+
+function buildPersistedConfiguration(overrides = {}) {
+  return {
+    exchange: 'binance',
+    apiKey: 'api-key',
+    secretKey: 'secret-key',
+    stopLossPercent: 5,
+    takeProfitPercent: 10,
+    leverage: 1,
+    maxTradeAmount: 1000,
+    maxTradeAmountUnit: 'USDT',
+    allowedPairs: JSON.stringify(['BTC/USDT', 'ETH/USDT']),
+    useBnbForFees: true,
+    discountUsdtPercent: 0.075,
+    discountBnbPercent: 0.075,
+    minBnbBalance: 0.01,
+    reserveBnbForFeesEnabled: true,
+    pairDiscovery: JSON.stringify({
+      autoDiscoveryEnabled: true,
+      autoAddToAllowedPairs: true,
+      autoRemoveFromAllowedPairs: false,
+      reviewRequired: true,
+      sources: {
+        reddit: true,
+        rss: true,
+        x: false,
+        telegram: false,
+      },
+      minSocialScore: 70,
+      minMentions: 30,
+      maxPairs: 20,
+      excludedAssets: ['BNB', 'USDC'],
+      managedPairs: [],
+    }),
+    mode: 'spot',
+    orderType: 'market',
+    slippagePercent: 0.5,
+    strategies: JSON.stringify([]),
+    ...overrides,
   }
 }
 
@@ -197,9 +240,11 @@ describe('API contract tests', () => {
     }
 
     await wait(50)
+    trainingSessionService.stopTrainingSessionProcessing()
     await Promise.all([
       fs.rm(process.env.TRAINING_MODEL_STORAGE_DIR, { recursive: true, force: true }),
       fs.rm(process.env.TRAINING_UPLOAD_STORAGE_DIR, { recursive: true, force: true }),
+      fs.rm(process.env.TRAINING_CHECKPOINT_STORAGE_DIR, { recursive: true, force: true }),
     ])
     restoreAll()
   })
@@ -303,13 +348,531 @@ describe('API contract tests', () => {
     })
   })
 
+  it('GET /api/configurations returns fees and pair discovery settings in the configuration contract', async () => {
+    stubAuthenticatedUser()
+    stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration())
+
+    const { response, body } = await requestJson('/api/configurations', {
+      headers: authHeaders(),
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(body.success, true)
+    assert.equal(body.data.botParameters.fees.useBnbForFees, true)
+    assert.equal(body.data.botParameters.fees.reserveBnbForFeesEnabled, true)
+    assert.equal(body.data.botParameters.pairDiscovery.autoDiscoveryEnabled, true)
+    assert.deepEqual(body.data.botParameters.pairDiscovery.excludedAssets, ['BNB', 'USDC'])
+  })
+
+  it('GET /api/social/latest returns normalized social signals for the authenticated user', async () => {
+    stubAuthenticatedUser()
+    stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration())
+    stub(pairDiscoveryService, 'getLatestSocialSignals', async () => [
+      {
+        symbol: 'BTC',
+        pair: 'BTC/USDT',
+        score: 84,
+        mentions: 12,
+        sentiment: 'bullish',
+        sources: ['reddit', 'rss'],
+        references: [
+          {
+            source: 'reddit',
+            title: '$BTC breaks resistance',
+            url: 'https://example.com/btc',
+          },
+        ],
+      },
+    ])
+
+    const { response, body } = await requestJson('/api/social/latest', {
+      headers: authHeaders(),
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(body.success, true)
+    assert.equal(body.data.length, 1)
+    assert.equal(body.data[0].pair, 'BTC/USDT')
+    assert.equal(body.data[0].score, 84)
+    assert.deepEqual(body.data[0].sources, ['reddit', 'rss'])
+  })
+
+  it('GET /api/dashboard/bots-status returns bot instances enriched with template metadata', async () => {
+    stubAuthenticatedUser()
+    stub(prisma.bot, 'findMany', async () => [
+      {
+        id: 'bot-macd-1',
+        userId: TEST_USER.id,
+        templateId: 'template_macd',
+        name: 'MACD Momentum Bot',
+        strategyType: 'momentum',
+        description: 'Bot de momentum com especialização em MACD',
+        executionMode: 'paper',
+        isSystemManaged: true,
+        status: 'online',
+        isPaused: false,
+        currentPair: 'BTC/USDT',
+        lastAnalysis: new Date('2026-04-11T13:00:00.000Z'),
+        recommendedAction: 'buy',
+        confidence: 88,
+        modelVersion: 'v1.0.0',
+        modelUrl: null,
+        parameters: '{}',
+        template: {
+          id: 'template_macd',
+          slug: 'macd-momentum-specialist',
+          name: 'MACD Momentum Specialist',
+          strategyType: 'momentum',
+          indicatorType: 'MACD',
+          specialization: 'macd_momentum',
+          description: 'Especialista em MACD',
+          defaultParameters: '{}',
+          isActive: true,
+        },
+      },
+    ])
+
+    const { response, body } = await requestJson('/api/dashboard/bots-status', {
+      headers: authHeaders(),
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(body.success, true)
+    assert.deepEqual(body.data, [
+      {
+        id: 'bot-macd-1',
+        name: 'MACD Momentum Bot',
+        strategy: 'momentum',
+        strategyId: 'template_macd',
+        templateId: 'template_macd',
+        templateSlug: 'macd-momentum-specialist',
+        templateName: 'MACD Momentum Specialist',
+        indicatorType: 'MACD',
+        specialization: 'macd_momentum',
+        executionMode: 'paper',
+        description: 'Bot de momentum com especialização em MACD',
+        currentPair: 'BTC/USDT',
+        status: 'online',
+        isPaused: false,
+        recommendedAction: 'buy',
+        confidence: 88,
+        lastAnalysis: '2026-04-11T13:00:00.000Z',
+      },
+      ])
+    })
+
+    it('GET /api/dashboard/bots/:id/analysis returns a specialist-driven market reading for the selected bot', async () => {
+      stubAuthenticatedUser()
+      stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration())
+      stub(prisma.bot, 'findFirst', async () => ({
+        id: 'bot-macd-1',
+        userId: TEST_USER.id,
+        templateId: 'template_macd',
+        name: 'MACD Momentum Bot',
+        strategyType: 'momentum',
+        description: 'Bot de momentum com especialização em MACD',
+        executionMode: 'paper',
+        isSystemManaged: true,
+        status: 'online',
+        isPaused: false,
+        currentPair: 'BTC/USDT',
+        lastAnalysis: null,
+        recommendedAction: null,
+        confidence: null,
+        modelVersion: 'v1.0.0',
+        modelUrl: null,
+        parameters: JSON.stringify({
+          timeframe: '1h',
+          momentumThreshold: 0.5,
+          macdFast: 12,
+          macdSlow: 26,
+          macdSignal: 9,
+        }),
+        template: {
+          id: 'template_macd',
+          slug: 'macd-momentum-specialist',
+          name: 'MACD Momentum Specialist',
+          strategyType: 'momentum',
+          indicatorType: 'MACD',
+          specialization: 'macd_momentum',
+          description: 'Especialista em MACD',
+          defaultParameters: '{}',
+          isActive: true,
+        },
+      }))
+      stub(prisma.bot, 'update', async (payload) => ({
+        id: payload.where.id,
+        ...payload.data,
+      }))
+      stub(binanceService, 'getCandles', async (pair) => {
+        if (pair === 'BTC/USDT') {
+          return [
+            { timestamp: '2026-04-11T00:00:00.000Z', open: 100, high: 101, low: 99, close: 100, volume: 900 },
+            { timestamp: '2026-04-11T01:00:00.000Z', open: 100, high: 102, low: 99.5, close: 101, volume: 940 },
+            { timestamp: '2026-04-11T02:00:00.000Z', open: 101, high: 103, low: 100, close: 102, volume: 970 },
+            { timestamp: '2026-04-11T03:00:00.000Z', open: 102, high: 104, low: 101, close: 103, volume: 990 },
+            { timestamp: '2026-04-11T04:00:00.000Z', open: 103, high: 105, low: 102, close: 104, volume: 1030 },
+            { timestamp: '2026-04-11T05:00:00.000Z', open: 104, high: 106, low: 103, close: 105, volume: 1080 },
+            { timestamp: '2026-04-11T06:00:00.000Z', open: 105, high: 107, low: 104, close: 106, volume: 1110 },
+            { timestamp: '2026-04-11T07:00:00.000Z', open: 106, high: 108, low: 105, close: 107, volume: 1140 },
+            { timestamp: '2026-04-11T08:00:00.000Z', open: 107, high: 109, low: 106, close: 108, volume: 1170 },
+            { timestamp: '2026-04-11T09:00:00.000Z', open: 108, high: 110, low: 107, close: 109, volume: 1200 },
+            { timestamp: '2026-04-11T10:00:00.000Z', open: 109, high: 111, low: 108, close: 110, volume: 1250 },
+            { timestamp: '2026-04-11T11:00:00.000Z', open: 110, high: 112, low: 109, close: 111, volume: 1280 },
+            { timestamp: '2026-04-11T12:00:00.000Z', open: 111, high: 113, low: 110, close: 112, volume: 1320 },
+            { timestamp: '2026-04-11T13:00:00.000Z', open: 112, high: 114, low: 111, close: 113, volume: 1360 },
+            { timestamp: '2026-04-11T14:00:00.000Z', open: 113, high: 115, low: 112, close: 114, volume: 1390 },
+            { timestamp: '2026-04-11T15:00:00.000Z', open: 114, high: 116, low: 113, close: 115, volume: 1430 },
+            { timestamp: '2026-04-11T16:00:00.000Z', open: 115, high: 117, low: 114, close: 116, volume: 1480 },
+            { timestamp: '2026-04-11T17:00:00.000Z', open: 116, high: 118, low: 115, close: 117, volume: 1510 },
+            { timestamp: '2026-04-11T18:00:00.000Z', open: 117, high: 119, low: 116, close: 118, volume: 1560 },
+            { timestamp: '2026-04-11T19:00:00.000Z', open: 118, high: 120, low: 117, close: 119, volume: 1600 },
+            { timestamp: '2026-04-11T20:00:00.000Z', open: 119, high: 121, low: 118, close: 120, volume: 1660 },
+            { timestamp: '2026-04-11T21:00:00.000Z', open: 120, high: 122, low: 119, close: 121, volume: 1700 },
+            { timestamp: '2026-04-11T22:00:00.000Z', open: 121, high: 123, low: 120, close: 122, volume: 1740 },
+            { timestamp: '2026-04-11T23:00:00.000Z', open: 122, high: 124, low: 121, close: 123, volume: 1780 },
+            { timestamp: '2026-04-12T00:00:00.000Z', open: 123, high: 125, low: 122, close: 124, volume: 1820 },
+            { timestamp: '2026-04-12T01:00:00.000Z', open: 124, high: 126, low: 123, close: 125, volume: 1860 },
+            { timestamp: '2026-04-12T02:00:00.000Z', open: 125, high: 127, low: 124, close: 126, volume: 1900 },
+            { timestamp: '2026-04-12T03:00:00.000Z', open: 126, high: 128, low: 125, close: 127, volume: 1940 },
+          ]
+        }
+
+        return [
+          { timestamp: '2026-04-11T00:00:00.000Z', open: 80, high: 80.5, low: 79.5, close: 80, volume: 900 },
+          { timestamp: '2026-04-11T01:00:00.000Z', open: 80, high: 80.2, low: 79.2, close: 79.5, volume: 910 },
+          { timestamp: '2026-04-11T02:00:00.000Z', open: 79.5, high: 79.8, low: 78.9, close: 79.1, volume: 920 },
+          { timestamp: '2026-04-11T03:00:00.000Z', open: 79.1, high: 79.4, low: 78.5, close: 78.9, volume: 930 },
+          { timestamp: '2026-04-11T04:00:00.000Z', open: 78.9, high: 79.1, low: 78.2, close: 78.6, volume: 940 },
+          { timestamp: '2026-04-11T05:00:00.000Z', open: 78.6, high: 78.9, low: 78.1, close: 78.4, volume: 950 },
+          { timestamp: '2026-04-11T06:00:00.000Z', open: 78.4, high: 78.7, low: 77.9, close: 78.2, volume: 960 },
+          { timestamp: '2026-04-11T07:00:00.000Z', open: 78.2, high: 78.5, low: 77.7, close: 78.1, volume: 970 },
+          { timestamp: '2026-04-11T08:00:00.000Z', open: 78.1, high: 78.4, low: 77.6, close: 78.0, volume: 980 },
+          { timestamp: '2026-04-11T09:00:00.000Z', open: 78.0, high: 78.2, low: 77.5, close: 77.9, volume: 990 },
+          { timestamp: '2026-04-11T10:00:00.000Z', open: 77.9, high: 78.1, low: 77.4, close: 77.8, volume: 1000 },
+          { timestamp: '2026-04-11T11:00:00.000Z', open: 77.8, high: 78.0, low: 77.2, close: 77.6, volume: 1010 },
+          { timestamp: '2026-04-11T12:00:00.000Z', open: 77.6, high: 77.9, low: 77.0, close: 77.4, volume: 1020 },
+          { timestamp: '2026-04-11T13:00:00.000Z', open: 77.4, high: 77.8, low: 76.9, close: 77.3, volume: 1030 },
+          { timestamp: '2026-04-11T14:00:00.000Z', open: 77.3, high: 77.6, low: 76.8, close: 77.2, volume: 1040 },
+          { timestamp: '2026-04-11T15:00:00.000Z', open: 77.2, high: 77.5, low: 76.7, close: 77.1, volume: 1050 },
+          { timestamp: '2026-04-11T16:00:00.000Z', open: 77.1, high: 77.4, low: 76.6, close: 77.0, volume: 1060 },
+          { timestamp: '2026-04-11T17:00:00.000Z', open: 77.0, high: 77.3, low: 76.5, close: 76.9, volume: 1070 },
+          { timestamp: '2026-04-11T18:00:00.000Z', open: 76.9, high: 77.2, low: 76.4, close: 76.8, volume: 1080 },
+          { timestamp: '2026-04-11T19:00:00.000Z', open: 76.8, high: 77.1, low: 76.3, close: 76.7, volume: 1090 },
+          { timestamp: '2026-04-11T20:00:00.000Z', open: 76.7, high: 77.0, low: 76.2, close: 76.6, volume: 1100 },
+          { timestamp: '2026-04-11T21:00:00.000Z', open: 76.6, high: 76.9, low: 76.1, close: 76.5, volume: 1110 },
+          { timestamp: '2026-04-11T22:00:00.000Z', open: 76.5, high: 76.8, low: 76.0, close: 76.4, volume: 1120 },
+          { timestamp: '2026-04-11T23:00:00.000Z', open: 76.4, high: 76.7, low: 75.9, close: 76.3, volume: 1130 },
+          { timestamp: '2026-04-12T00:00:00.000Z', open: 76.3, high: 76.6, low: 75.8, close: 76.2, volume: 1140 },
+          { timestamp: '2026-04-12T01:00:00.000Z', open: 76.2, high: 76.5, low: 75.7, close: 76.1, volume: 1150 },
+          { timestamp: '2026-04-12T02:00:00.000Z', open: 76.1, high: 76.4, low: 75.6, close: 76.0, volume: 1160 },
+          { timestamp: '2026-04-12T03:00:00.000Z', open: 76.0, high: 76.3, low: 75.5, close: 75.9, volume: 1170 },
+        ]
+      })
+      stub(binanceService, 'getTickerPrice', async (pair) => (pair === 'BTC/USDT' ? 127 : 75.9))
+      stub(pairDiscoveryService, 'getLatestSocialSignals', async () => [
+        {
+          symbol: 'BTC',
+          pair: 'BTC/USDT',
+          score: 82,
+          mentions: 22,
+          sentiment: 'bullish',
+          sources: ['reddit'],
+          references: [],
+        },
+      ])
+
+      const { response, body } = await requestJson('/api/dashboard/bots/bot-macd-1/analysis', {
+        headers: authHeaders(),
+      })
+
+      assert.equal(response.status, 200)
+      assert.equal(body.success, true)
+      assert.equal(body.data.botId, 'bot-macd-1')
+      assert.equal(body.data.primarySpecialist, 'macd_momentum')
+      assert.equal(body.data.timeframe, '1h')
+      assert.equal(body.data.summary.analyzedPairs, 2)
+      assert.equal(Array.isArray(body.data.opportunities), true)
+      assert.equal(body.data.opportunities.length, 2)
+      assert.equal(body.data.opportunities[0].pair, 'BTC/USDT')
+      assert.equal(Array.isArray(body.data.opportunities[0].specialists), true)
+      assert.equal(body.data.socialSignals[0].pair, 'BTC/USDT')
+    })
+
+  it('POST /api/configurations/pair-discovery/preview returns the next suggestion set for the current draft', async () => {
+    stubAuthenticatedUser()
+    stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration())
+
+    let previewPayload = null
+    stub(pairDiscoveryService, 'generatePairDiscoveryPreview', async (payload) => {
+      previewPayload = payload
+      return {
+        generatedAt: '2026-04-11T14:00:00.000Z',
+        autoDiscoveryEnabled: true,
+        reviewRequired: true,
+        sourcesUsed: ['reddit'],
+        signals: [],
+        items: [
+          {
+            action: 'add',
+            symbol: 'SOL',
+            pair: 'SOL/USDT',
+            score: 82,
+            mentions: 14,
+            sentiment: 'bullish',
+            sources: ['reddit'],
+            reason: 'Score 82 com 14 menções',
+          },
+        ],
+        nextAllowedPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
+        managedPairs: ['SOL/USDT'],
+        summary: {
+          currentAllowed: 2,
+          nextAllowed: 3,
+          additions: 1,
+          removals: 0,
+        },
+      }
+    })
+
+    const { response, body } = await requestJson('/api/configurations/pair-discovery/preview', {
+      method: 'POST',
+      headers: {
+        ...authHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        allowedPairs: ['BTC/USDT', 'ETH/USDT'],
+        fees: {
+          useBnbForFees: true,
+          discountUsdtPercent: 0.075,
+          discountBnbPercent: 0.075,
+          minBnbBalance: 0.01,
+          reserveBnbForFeesEnabled: true,
+        },
+        pairDiscovery: {
+          autoDiscoveryEnabled: true,
+          autoAddToAllowedPairs: true,
+          autoRemoveFromAllowedPairs: false,
+          reviewRequired: true,
+          sources: {
+            reddit: true,
+            rss: false,
+            x: false,
+            telegram: false,
+          },
+          minSocialScore: 70,
+          minMentions: 30,
+          maxPairs: 20,
+          excludedAssets: ['BNB'],
+        },
+      }),
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(body.success, true)
+    assert.equal(body.data.summary.additions, 1)
+    assert.deepEqual(body.data.nextAllowedPairs, ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'])
+    assert.deepEqual(previewPayload.allowedPairs, ['BTC/USDT', 'ETH/USDT'])
+    assert.equal(previewPayload.pairDiscovery.sources.reddit, true)
+    assert.equal(previewPayload.fees.useBnbForFees, true)
+  })
+
+  it('POST /api/configurations/pair-discovery/apply requires confirmation when review is enabled', async () => {
+    stubAuthenticatedUser()
+    stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration())
+    stub(pairDiscoveryService, 'generatePairDiscoveryPreview', async () => ({
+      generatedAt: '2026-04-11T14:10:00.000Z',
+      autoDiscoveryEnabled: true,
+      reviewRequired: true,
+      sourcesUsed: ['reddit'],
+      signals: [],
+      items: [
+        {
+          action: 'add',
+          symbol: 'SOL',
+          pair: 'SOL/USDT',
+          score: 82,
+          mentions: 14,
+          sentiment: 'bullish',
+          sources: ['reddit'],
+          reason: 'Score 82 com 14 menções',
+        },
+      ],
+      nextAllowedPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
+      managedPairs: ['SOL/USDT'],
+      summary: {
+        currentAllowed: 2,
+        nextAllowed: 3,
+        additions: 1,
+        removals: 0,
+      },
+    }))
+
+    let updateCalled = false
+    stub(prisma.configuration, 'update', async () => {
+      updateCalled = true
+      return buildPersistedConfiguration()
+    })
+
+    const { response, body } = await requestJson('/api/configurations/pair-discovery/apply', {
+      method: 'POST',
+      headers: {
+        ...authHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        allowedPairs: ['BTC/USDT', 'ETH/USDT'],
+        fees: {
+          useBnbForFees: true,
+          discountUsdtPercent: 0.075,
+          discountBnbPercent: 0.075,
+          minBnbBalance: 0.01,
+          reserveBnbForFeesEnabled: true,
+        },
+        pairDiscovery: {
+          autoDiscoveryEnabled: true,
+          autoAddToAllowedPairs: true,
+          autoRemoveFromAllowedPairs: false,
+          reviewRequired: true,
+          sources: {
+            reddit: true,
+            rss: false,
+            x: false,
+            telegram: false,
+          },
+          minSocialScore: 70,
+          minMentions: 30,
+          maxPairs: 20,
+          excludedAssets: ['BNB'],
+        },
+      }),
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(body.success, true)
+    assert.equal(body.data.applied, false)
+    assert.equal(body.data.requiresConfirmation, true)
+    assert.equal(updateCalled, false)
+  })
+
+  it('POST /api/configurations/pair-discovery/apply persists the managed pairs when confirmation is explicit', async () => {
+    stubAuthenticatedUser()
+    stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration())
+    stub(pairDiscoveryService, 'generatePairDiscoveryPreview', async () => ({
+      generatedAt: '2026-04-11T14:15:00.000Z',
+      autoDiscoveryEnabled: true,
+      reviewRequired: true,
+      sourcesUsed: ['reddit'],
+      signals: [],
+      items: [
+        {
+          action: 'add',
+          symbol: 'SOL',
+          pair: 'SOL/USDT',
+          score: 82,
+          mentions: 14,
+          sentiment: 'bullish',
+          sources: ['reddit'],
+          reason: 'Score 82 com 14 menções',
+        },
+      ],
+      nextAllowedPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
+      managedPairs: ['SOL/USDT'],
+      summary: {
+        currentAllowed: 2,
+        nextAllowed: 3,
+        additions: 1,
+        removals: 0,
+      },
+    }))
+
+    let updatedConfigurationPayload = null
+    stub(prisma.configuration, 'update', async ({ data }) => {
+      updatedConfigurationPayload = data
+      return buildPersistedConfiguration({
+        allowedPairs: JSON.stringify(['BTC/USDT', 'ETH/USDT', 'SOL/USDT']),
+        pairDiscovery: JSON.stringify({
+          autoDiscoveryEnabled: true,
+          autoAddToAllowedPairs: true,
+          autoRemoveFromAllowedPairs: false,
+          reviewRequired: true,
+          sources: {
+            reddit: true,
+            rss: true,
+            x: false,
+            telegram: false,
+          },
+          minSocialScore: 70,
+          minMentions: 30,
+          maxPairs: 20,
+          excludedAssets: ['BNB', 'USDC'],
+          managedPairs: ['SOL/USDT'],
+        }),
+      })
+    })
+
+    const { response, body } = await requestJson('/api/configurations/pair-discovery/apply', {
+      method: 'POST',
+      headers: {
+        ...authHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        force: true,
+        allowedPairs: ['BTC/USDT', 'ETH/USDT'],
+        fees: {
+          useBnbForFees: true,
+          discountUsdtPercent: 0.075,
+          discountBnbPercent: 0.075,
+          minBnbBalance: 0.01,
+          reserveBnbForFeesEnabled: true,
+        },
+        pairDiscovery: {
+          autoDiscoveryEnabled: true,
+          autoAddToAllowedPairs: true,
+          autoRemoveFromAllowedPairs: false,
+          reviewRequired: true,
+          sources: {
+            reddit: true,
+            rss: false,
+            x: false,
+            telegram: false,
+          },
+          minSocialScore: 70,
+          minMentions: 30,
+          maxPairs: 20,
+          excludedAssets: ['BNB'],
+        },
+      }),
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(body.success, true)
+    assert.equal(body.data.applied, true)
+    assert.deepEqual(body.data.configuration.botParameters.allowedPairs, ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'])
+    assert.equal(updatedConfigurationPayload.allowedPairs, JSON.stringify(['BTC/USDT', 'ETH/USDT', 'SOL/USDT']))
+    assert.match(updatedConfigurationPayload.pairDiscovery, /SOL\/USDT/)
+  })
+
   it('POST /api/orders returns the executed manual order contract', async () => {
     stubAuthenticatedUser()
-    stub(prisma.balance, 'findUnique', async () => ({
-      available: 1000,
-      reserved: 0,
-      total: 1000,
+    stub(prisma.configuration, 'findUnique', async () => ({
+      useBnbForFees: false,
+      discountUsdtPercent: 0.075,
+      discountBnbPercent: 0.075,
+      minBnbBalance: 0.01,
+      reserveBnbForFeesEnabled: true,
     }))
+    stub(prisma.balance, 'findMany', async () => ([
+      {
+        id: 'balance-usdt',
+        currency: 'USDT',
+        available: 1000,
+        reserved: 0,
+        total: 1000,
+      },
+    ]))
     stub(binanceService, 'getTickerPrice', async () => 100)
     stub(prisma.transaction, 'create', async ({ data }) => ({
       id: 'order-1',
@@ -317,7 +880,7 @@ describe('API contract tests', () => {
       ...data,
     }))
     stub(prisma.balance, 'update', async () => undefined)
-    stub(prisma.balance, 'upsert', async () => undefined)
+    stub(prisma.balance, 'create', async () => undefined)
     stub(portfolioService, 'recordBalanceHistorySnapshot', async () => undefined)
     stub(webhookService, 'sendWebhook', async () => undefined)
 
@@ -340,16 +903,93 @@ describe('API contract tests', () => {
     assert.equal(body.data.id, 'order-1')
     assert.equal(body.data.status, 'executed')
     assert.equal(body.data.total, 200)
-    assert.equal(body.data.fee, 0.2)
+    assert.equal(body.data.fee, 0.185)
+    assert.equal(body.data.feeCurrency, 'USDT')
+    assert.equal(body.data.feeDiscountSource, 'usdt')
+  })
+
+  it('POST /api/orders uses BNB for fees when there is available reserve above the protected floor', async () => {
+    stubAuthenticatedUser()
+    stub(prisma.configuration, 'findUnique', async () => ({
+      useBnbForFees: true,
+      discountUsdtPercent: 0.075,
+      discountBnbPercent: 0.075,
+      minBnbBalance: 0.01,
+      reserveBnbForFeesEnabled: true,
+    }))
+    stub(prisma.balance, 'findMany', async () => ([
+      {
+        id: 'balance-usdt',
+        currency: 'USDT',
+        available: 1000,
+        reserved: 0,
+        total: 1000,
+      },
+      {
+        id: 'balance-bnb',
+        currency: 'BNB',
+        available: 1,
+        reserved: 0,
+        total: 1,
+      },
+    ]))
+    stub(binanceService, 'getTickerPrice', async () => 100)
+    stub(marketValuationService, 'getCurrencyRateToBrl', async (currency) => {
+      if (currency === 'BNB') {
+        return 3000
+      }
+
+      if (currency === 'USDT') {
+        return 5
+      }
+
+      return 1
+    })
+    stub(prisma.transaction, 'create', async ({ data }) => ({
+      id: 'order-bnb-fee',
+      date: new Date('2026-04-11T12:00:00.000Z'),
+      ...data,
+    }))
+    stub(prisma.balance, 'update', async () => undefined)
+    stub(prisma.balance, 'create', async () => undefined)
+    stub(portfolioService, 'recordBalanceHistorySnapshot', async () => undefined)
+    stub(webhookService, 'sendWebhook', async () => undefined)
+
+    const { response, body } = await requestJson('/api/orders', {
+      method: 'POST',
+      headers: {
+        ...authHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        pair: 'BTC/USDT',
+        type: 'buy',
+        quantity: 2,
+        orderType: 'market',
+      }),
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(body.success, true)
+    assert.equal(body.data.feeCurrency, 'BNB')
+    assert.equal(body.data.feeDiscountSource, 'bnb')
+    assert.ok(Math.abs(body.data.fee - 0.0003083333333333333) < 1e-12)
   })
 
   it('POST /api/training/sessions returns the pending session contract', async () => {
     stubAuthenticatedUser()
     stub(prisma.trainingSession, 'findFirst', async () => null)
-    stub(prisma.bot, 'findUnique', async () => ({
+    stub(prisma.bot, 'findFirst', async () => ({
       id: 'bot1',
-      name: 'Scalper V2',
+      userId: TEST_USER.id,
+      templateId: 'template-macd',
+      name: 'MACD Momentum Bot',
       strategyType: 'scalper',
+      template: {
+        id: 'template-macd',
+        slug: 'macd-momentum-specialist',
+        name: 'MACD Momentum Specialist',
+      },
     }))
     stub(prisma.trainingSession, 'create', async ({ data }) => ({
       id: 'session-1',
@@ -370,7 +1010,7 @@ describe('API contract tests', () => {
 
     const payload = {
       botId: 'bot1',
-      strategyId: 'strategy_scalper',
+      strategyId: 'template-macd',
       architecture: 'lstm',
       modelVersion: 'v1.0.0',
       dataSource: 'exchange',
@@ -414,25 +1054,34 @@ describe('API contract tests', () => {
     assert.equal(body.data.status, 'pending')
     assert.deepEqual(body.data.logs, [])
     assert.equal(body.data.botId, 'bot1')
+    assert.equal(body.data.strategyId, 'template-macd')
+    assert.equal(body.data.strategyName, 'MACD Momentum Specialist')
   })
 
-  it('GET /api/training/strategies derives the catalog from persisted bots', async () => {
+  it('GET /api/training/strategies derives the catalog from persisted templates', async () => {
     stubAuthenticatedUser()
-    stub(prisma.bot, 'findMany', async () => [
+    stub(prisma.botTemplate, 'findMany', async () => [
       {
+        id: 'template_macd',
+        slug: 'macd-momentum-specialist',
         name: 'Momentum Trader',
         strategyType: 'momentum',
+        indicatorType: 'MACD',
+        specialization: 'macd_momentum',
         description: 'Identifica moedas com forte momentum',
+        defaultParameters: '{}',
+        isActive: true,
       },
       {
-        name: 'Momentum Trader Replica',
-        strategyType: 'momentum',
-        description: 'Mesmo tipo para validar deduplicação',
-      },
-      {
+        id: 'template_mean_reversion',
+        slug: 'rsi-reversion-specialist',
         name: 'Mean Reversion',
         strategyType: 'mean_reversion',
+        indicatorType: 'RSI',
+        specialization: 'rsi_reversion',
         description: 'Busca reversão à média',
+        defaultParameters: '{}',
+        isActive: true,
       },
     ])
 
@@ -444,16 +1093,26 @@ describe('API contract tests', () => {
     assert.equal(body.success, true)
     assert.deepEqual(body.data, [
       {
-        id: 'strategy_momentum',
+        id: 'template_macd',
+        slug: 'macd-momentum-specialist',
         name: 'Momentum Trader',
         strategyType: 'momentum',
         description: 'Identifica moedas com forte momentum',
+        indicatorType: 'MACD',
+        specialization: 'macd_momentum',
+        defaultParameters: {},
+        source: 'template',
       },
       {
-        id: 'strategy_mean_reversion',
+        id: 'template_mean_reversion',
+        slug: 'rsi-reversion-specialist',
         name: 'Mean Reversion',
         strategyType: 'mean_reversion',
         description: 'Busca reversão à média',
+        indicatorType: 'RSI',
+        specialization: 'rsi_reversion',
+        defaultParameters: {},
+        source: 'template',
       },
     ])
   })
@@ -538,10 +1197,13 @@ describe('API contract tests', () => {
   it('POST /api/training/sessions rejects strategies that do not match the selected bot', async () => {
     stubAuthenticatedUser()
     stub(prisma.trainingSession, 'findFirst', async () => null)
-    stub(prisma.bot, 'findUnique', async () => ({
+    stub(prisma.bot, 'findFirst', async () => ({
       id: 'bot1',
+      userId: TEST_USER.id,
+      templateId: null,
       name: 'Scalper V2',
       strategyType: 'scalper',
+      template: null,
       status: 'online',
     }))
 
@@ -592,6 +1254,10 @@ describe('API contract tests', () => {
 
   it('POST /api/dashboard/bots/:id/pause returns success and updates the bot state', async () => {
     stubAuthenticatedUser()
+    stub(prisma.bot, 'findFirst', async () => ({
+      id: 'bot1',
+      userId: TEST_USER.id,
+    }))
 
     let updatedBotPayload = null
     stub(prisma.bot, 'update', async ({ where, data }) => {
@@ -622,6 +1288,16 @@ describe('API contract tests', () => {
       botId: 'bot1',
       status: 'running',
     }))
+    stub(prisma.trainingSession, 'findUnique', async () => ({
+      id: 'session-1',
+      userId: TEST_USER.id,
+      botId: 'bot1',
+      status: 'paused',
+      config: JSON.stringify({ architecture: 'lstm' }),
+      metrics: JSON.stringify([{ epoch: 1, trainLoss: 0.12, valLoss: 0.14, learningRate: 0.001, duration: 350 }]),
+      bestEpoch: 1,
+      bestValLoss: 0.14,
+    }))
     stub(prisma.trainingSession, 'update', async ({ where, data }) => {
       updatedSessionPayload = { where, data }
       return { id: where.id, ...data }
@@ -636,6 +1312,11 @@ describe('API contract tests', () => {
     assert.deepEqual(body, { success: true })
     assert.deepEqual(updatedSessionPayload.where, { id: 'session-1' })
     assert.equal(updatedSessionPayload.data.status, 'paused')
+
+    const checkpointFile = path.join(process.env.TRAINING_CHECKPOINT_STORAGE_DIR, 'checkpoint_session-1.json')
+    const checkpoint = JSON.parse(await fs.readFile(checkpointFile, 'utf-8'))
+    assert.equal(checkpoint.reason, 'paused')
+    assert.equal(checkpoint.status, 'paused')
   })
 
   it('POST /api/training/sessions/:id/resume returns success for paused sessions', async () => {
@@ -673,6 +1354,16 @@ describe('API contract tests', () => {
       botId: 'bot1',
       status: 'running',
     }))
+    stub(prisma.trainingSession, 'findUnique', async () => ({
+      id: 'session-1',
+      userId: TEST_USER.id,
+      botId: 'bot1',
+      status: 'cancelled',
+      config: JSON.stringify({ architecture: 'lstm' }),
+      metrics: JSON.stringify([{ epoch: 3, trainLoss: 0.08, valLoss: 0.1, learningRate: 0.001, duration: 1050 }]),
+      bestEpoch: 3,
+      bestValLoss: 0.1,
+    }))
     stub(prisma.trainingSession, 'update', async ({ where, data }) => {
       updatedSessionPayload = { where, data }
       return { id: where.id, ...data }
@@ -688,6 +1379,93 @@ describe('API contract tests', () => {
     assert.deepEqual(updatedSessionPayload.where, { id: 'session-1' })
     assert.equal(updatedSessionPayload.data.status, 'cancelled')
     assert.ok(updatedSessionPayload.data.endTime instanceof Date)
+
+    const checkpointFile = path.join(process.env.TRAINING_CHECKPOINT_STORAGE_DIR, 'checkpoint_session-1.json')
+    const checkpoint = JSON.parse(await fs.readFile(checkpointFile, 'utf-8'))
+    assert.equal(checkpoint.reason, 'cancelled')
+    assert.equal(checkpoint.status, 'cancelled')
+  })
+
+  it('processTrainingQueueCycle recovers active sessions from the database queue and writes periodic checkpoints', async () => {
+    stub(prisma.trainingSession, 'findMany', async () => [
+      {
+        id: 'session-recover-1',
+        userId: TEST_USER.id,
+        botId: 'bot1',
+        status: 'running',
+        config: JSON.stringify({
+          architecture: 'lstm',
+          hyperparameters: {
+            epochs: 20,
+            learningRate: 0.001,
+            earlyStopping: {
+              enabled: false,
+              patience: 5,
+            },
+          },
+          includedPairs: ['BTC/USDT'],
+        }),
+        metrics: JSON.stringify(
+          Array.from({ length: 9 }, (_, index) => ({
+            epoch: index + 1,
+            trainLoss: 0.12 - (index * 0.005),
+            valLoss: 0.14 - (index * 0.004),
+            learningRate: 0.001,
+            duration: (index + 1) * 350,
+          })),
+        ),
+      },
+    ])
+    stub(prisma.trainingSession, 'findUnique', async () => ({
+      id: 'session-recover-1',
+      userId: TEST_USER.id,
+      botId: 'bot1',
+      status: 'running',
+      config: JSON.stringify({
+        architecture: 'lstm',
+        hyperparameters: {
+          epochs: 20,
+          learningRate: 0.001,
+          earlyStopping: {
+            enabled: false,
+            patience: 5,
+          },
+        },
+        includedPairs: ['BTC/USDT'],
+      }),
+      metrics: JSON.stringify(
+        Array.from({ length: 9 }, (_, index) => ({
+          epoch: index + 1,
+          trainLoss: 0.12 - (index * 0.005),
+          valLoss: 0.14 - (index * 0.004),
+          learningRate: 0.001,
+          duration: (index + 1) * 350,
+        })),
+      ),
+      bestEpoch: 9,
+      bestValLoss: 0.108,
+    }))
+
+    let updatedSessionPayload = null
+    stub(prisma.trainingSession, 'update', async ({ where, data }) => {
+      updatedSessionPayload = { where, data }
+      return { id: where.id, ...data }
+    })
+
+    await trainingSessionService.processTrainingQueueCycle()
+
+    assert.deepEqual(updatedSessionPayload.where, { id: 'session-recover-1' })
+    assert.equal(updatedSessionPayload.data.status, 'running')
+
+    const persistedMetrics = JSON.parse(updatedSessionPayload.data.metrics)
+    assert.equal(persistedMetrics.length, 10)
+    assert.equal(persistedMetrics[9].epoch, 10)
+
+    const checkpointFile = path.join(process.env.TRAINING_CHECKPOINT_STORAGE_DIR, 'checkpoint_session-recover-1.json')
+    const checkpoint = JSON.parse(await fs.readFile(checkpointFile, 'utf-8'))
+    assert.equal(checkpoint.reason, 'periodic')
+    assert.equal(checkpoint.status, 'running')
+    assert.equal(checkpoint.summary.lastEpoch, 10)
   })
 
   it('POST /api/training/sessions/:id/test returns computed backtest metrics for completed sessions', async () => {

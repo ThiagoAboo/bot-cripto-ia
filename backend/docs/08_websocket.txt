@@ -134,6 +134,39 @@ Descrição: Erro na conexão ou subscrição
 Payload: { "error": "Mensagem de erro" }
 
 
+3.11 PADRÃO DE ENVELOPE DE EVENTOS
+===============================================================================
+
+Diretriz recomendada para evolução do contrato:
+
+{
+  "eventName": "order:created",
+  "eventVersion": 1,
+  "entityId": "tx_123",
+  "userId": "user_001",
+  "timestamp": "2026-04-11T10:30:00Z",
+  "correlationId": "corr_abc123",
+  "idempotencyKey": "idem_order_tx_123_v1",
+  "payload": {
+    "...": "conteudo especifico do evento"
+  }
+}
+
+Campos:
+- eventName: nome lógico do evento
+- eventVersion: versão do payload para evolução sem quebra
+- entityId: id principal do recurso afetado
+- userId: dono do evento
+- timestamp: data/hora exata da emissão
+- correlationId: encadeia requisição, decisão do bot, ordem e logs
+- idempotencyKey: evita processamento duplicado no consumidor
+
+Regras:
+- Eventos novos da camada bots devem seguir esse envelope
+- Eventos legados podem ser migrados gradualmente
+- Todo evento de decisão, execução, falha e reconciliação deve carregar correlationId
+
+
 4. FLUXO TÍPICO (Frontend)
 ===============================================================================
 

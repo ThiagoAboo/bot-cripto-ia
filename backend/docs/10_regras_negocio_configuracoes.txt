@@ -37,11 +37,16 @@ REGRAS:
 4. Estratégias padrão:
    [
      { id: "strategy_scalper", name: "Scalper V2", strategyType: "scalper", isActive: true, parameters: {...} },
-     { id: "strategy_momentum", name: "Momentum Trader", strategyType: "momentum", isActive: true, parameters: {...} },
-     { id: "strategy_trend", name: "Trend Follower", strategyType: "trend_follower", isActive: true, parameters: {...} },
-     { id: "strategy_reversion", name: "Mean Reversion", strategyType: "mean_reversion", isActive: true, parameters: {...} },
-     { id: "strategy_arbitrage", name: "Arbitrage Hunter", strategyType: "arbitrage", isActive: false, parameters: {...} }
+      { id: "strategy_momentum", name: "Momentum Trader", strategyType: "momentum", isActive: true, parameters: {...} },
+      { id: "strategy_trend", name: "Trend Follower", strategyType: "trend_follower", isActive: true, parameters: {...} },
+      { id: "strategy_reversion", name: "Mean Reversion", strategyType: "mean_reversion", isActive: true, parameters: {...} },
+      { id: "strategy_arbitrage", name: "Arbitrage Hunter", strategyType: "arbitrage", isActive: false, parameters: {...} }
    ]
+
+5. A configuração de fees deve ser interpretada assim:
+   - useBnbForFees = verdadeiro quando o usuário optar por usar desconto em BNB
+   - minBnbBalance = saldo mínimo reservado para pagar taxas
+   - reserveBnbForFeesEnabled = impede uso desse saldo mínimo em trades comuns
 
 -------------------------------------------------------------------------------
 RN-CFG-002: Validação de Parâmetros
@@ -62,7 +67,20 @@ REGRAS DE VALIDAÇÃO:
 | minBnbBalance | >= 0 | "Saldo mínimo BNB não pode ser negativo" |
 | slippagePercent | 0 <= valor <= 5 | "Slippage deve ser entre 0 e 5%" |
 | allowedPairs | Array de strings válidas | "Pares inválidos" |
+| useBnbForFees | Boolean | "Uso de BNB para taxas inválido" |
+| reserveBnbForFeesEnabled | Boolean | "Reserva mínima de BNB inválida" |
+| pairDiscovery.autoDiscoveryEnabled | Boolean | "Configuração de descoberta automática inválida" |
+| pairDiscovery.autoAddToAllowedPairs | Boolean | "Configuração de auto inclusão inválida" |
+| pairDiscovery.autoRemoveFromAllowedPairs | Boolean | "Configuração de auto remoção inválida" |
+| pairDiscovery.minSocialScore | 0 <= valor <= 100 | "Score social deve ser entre 0 e 100" |
+| pairDiscovery.minMentions | valor >= 0 | "Mínimo de menções inválido" |
+| pairDiscovery.maxPairs | valor > 0 | "Máximo de pares inválido" |
 | strategies | JSON válido com estrutura correta | "Estratégias inválidas" |
+
+REGRAS ADICIONAIS:
+- Se reserveBnbForFeesEnabled = true, então minBnbBalance deve ser maior que zero
+- BNB pode estar em allowedPairs, mas a reserva mínima deve continuar protegida
+- excludedAssets nunca pode ser auto-incluído pelo pairDiscovery
 
 -------------------------------------------------------------------------------
 RN-CFG-003: Teste de Conexão com Exchange
@@ -107,6 +125,60 @@ REGRAS:
 4. Ordenar alfabeticamente
 
 5. Formato de retorno: ["BTC/USDT", "ETH/USDT", ...]
+
+-------------------------------------------------------------------------------
+RN-CFG-005: Reserva de BNB para Taxas
+-------------------------------------------------------------------------------
+
+Objetivo:
+- Garantir que o usuário mantenha saldo mínimo de BNB para desconto de taxas na Binance
+
+REGRAS:
+1. Se useBnbForFees = false:
+   - Nenhuma reserva especial de BNB é aplicada
+
+2. Se useBnbForFees = true:
+   - O sistema deve tentar pagar a taxa em BNB
+   - minBnbBalance representa o saldo mínimo que deve permanecer livre
+
+3. Se reserveBnbForFeesEnabled = true:
+   - Trades com BNB só podem consumir o excedente acima de minBnbBalance
+   - Caso o trade reduza o saldo abaixo do mínimo, a ordem deve ser bloqueada ou redimensionada
+
+4. Se o saldo de BNB ficar abaixo de minBnbBalance:
+   - Registrar alerta operacional
+   - Permitir fallback para taxa sem desconto apenas se a política operacional permitir
+
+-------------------------------------------------------------------------------
+RN-CFG-006: Descoberta Automática de Moedas
+-------------------------------------------------------------------------------
+
+Objetivo:
+- Automatizar inclusão e exclusão de pares em allowedPairs a partir de sinais sociais e/ou notícias
+
+REGRAS:
+1. O processo só roda se pairDiscovery.autoDiscoveryEnabled = true
+
+2. Fontes elegíveis:
+   - Reddit
+   - RSS/News
+   - X/Twitter
+   - Telegram
+
+3. Inclusão automática:
+   - A moeda deve atingir minSocialScore
+   - A moeda deve atingir minMentions
+   - O ativo não pode estar em excludedAssets
+   - O total final deve respeitar maxPairs
+
+4. Remoção automática:
+   - Só ocorre se autoRemoveFromAllowedPairs = true
+   - Nunca remove pares protegidos/manualmente fixados
+   - Nunca remove BNB se estiver configurado como ativo reservado para taxas
+
+5. Se reviewRequired = true:
+   - O sistema gera sugestão
+   - A alteração só entra em vigor após confirmação
 
 ================================================================================
 FIM DO ARQUIVO 10_regras_negocio_configuracoes.txt

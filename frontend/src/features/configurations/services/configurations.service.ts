@@ -2,6 +2,11 @@ import { apiClient } from '../../../shared/services/api.client'
 import type {
   Configurations,
   ExchangeApiKeys,
+  FeesConfig,
+  PairDiscoveryApplyResponse,
+  PairDiscoveryConfig,
+  PairDiscoveryPreview,
+  SocialSignal,
 } from '../types/configurations.types'
 
 export const configurationsService = {
@@ -20,5 +25,26 @@ export const configurationsService = {
 
   async getAvailablePairs(): Promise<string[]> {
     return apiClient.getData('/exchange/pairs')
+  },
+
+  async getLatestSocialSignals(): Promise<SocialSignal[]> {
+    return apiClient.getData('/social/latest')
+  },
+
+  async previewPairDiscovery(payload: {
+    allowedPairs: string[]
+    fees: FeesConfig
+    pairDiscovery: PairDiscoveryConfig
+  }): Promise<PairDiscoveryPreview> {
+    return apiClient.postData('/configurations/pair-discovery/preview', payload)
+  },
+
+  async applyPairDiscovery(payload: {
+    allowedPairs: string[]
+    fees: FeesConfig
+    pairDiscovery: PairDiscoveryConfig
+    force?: boolean
+  }): Promise<PairDiscoveryApplyResponse> {
+    return apiClient.postData('/configurations/pair-discovery/apply', payload)
   },
 }

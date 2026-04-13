@@ -39,6 +39,7 @@ const {
       currenciesBalance: ['dashboard', 'currencies-balance'],
       recentTransactions: ['dashboard', 'recent-transactions'],
       botsStatus: ['dashboard', 'bots-status'],
+      botAnalysis: (botId: string) => ['dashboard', 'bot-analysis', botId],
     },
   }
 })
@@ -71,7 +72,8 @@ vi.mock('./hooks/useDashboardData', () => ({
   useTotalBalance: () => ({ data: { totalBrl: 1000 }, isLoading: false }),
   useCurrenciesBalance: () => ({ data: [], isLoading: false }),
   useRecentTransactions: () => ({ data: [], isLoading: false }),
-  useBotsStatus: () => ({ data: [], isLoading: false }),
+  useBotsStatus: () => ({ data: [{ id: 'bot-1', name: 'Bot 1', strategy: 'momentum', status: 'online', isPaused: false }], isLoading: false }),
+  useBotAnalysis: () => ({ data: undefined, isLoading: false }),
   usePauseBot: () => ({ mutate: vi.fn(), isPending: false }),
   useResumeBot: () => ({ mutate: vi.fn(), isPending: false }),
 }))
@@ -103,6 +105,10 @@ vi.mock('./components/RecentTransactionsTable', () => ({
 
 vi.mock('./components/BotsStatusList', () => ({
   BotsStatusList: () => <div>BotsStatusList</div>,
+}))
+
+vi.mock('./components/BotInsightsCard', () => ({
+  BotInsightsCard: () => <div>BotInsightsCard</div>,
 }))
 
 import DashboardPage from './DashboardPage'
@@ -143,7 +149,8 @@ describe('DashboardPage realtime updates', () => {
     emitSocketEvent('dashboard:update', { scope: 'bots' })
   })
 
-  expect(invalidateQueries).toHaveBeenCalledTimes(1)
+  expect(invalidateQueries).toHaveBeenCalledTimes(2)
   expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: dashboardQueryKeys.botsStatus })
+  expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['dashboard', 'bot-analysis'] })
 })
 })

@@ -27,6 +27,7 @@ model User {
   traces          Trace[]
   trainingSessions TrainingSession[]
   balanceHistory  BalanceHistory[]
+  bots            Bot[]
 }
 
 // ==============================
@@ -49,9 +50,13 @@ model Configuration {
   
   allowedPairs         String @default("[]")
   
+  useBnbForFees        Boolean @default(true)
   discountUsdtPercent  Float  @default(0.075)
   discountBnbPercent   Float  @default(0.075)
   minBnbBalance        Float  @default(0.01)
+  reserveBnbForFeesEnabled Boolean @default(true)
+  pairDiscovery        String @default("{}")
+  
   
   mode                 String @default("spot")
   orderType            String @default("market")
@@ -66,11 +71,33 @@ model Configuration {
 // ==============================
 // BOT
 // ==============================
+model BotTemplate {
+  id                String   @id @default(cuid())
+  slug              String   @unique
+  name              String
+  strategyType      String
+  indicatorType     String?
+  specialization    String?
+  description       String?
+  defaultParameters String   @default("{}")
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  bots              Bot[]
+}
+
 model Bot {
   id               String   @id @default(cuid())
+  userId           String?
+  user             User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  templateId       String?
+  template         BotTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
   name             String
   strategyType     String
   description      String?
+  executionMode    String   @default("paper")
+  isSystemManaged  Boolean  @default(true)
   status           String   @default("offline")
   isPaused         Boolean  @default(false)
   currentPair      String?
@@ -87,6 +114,9 @@ model Bot {
   transactions     Transaction[]
   trainingSessions TrainingSession[]
   traces           Trace[]
+
+  @@index([userId])
+  @@index([templateId])
 }
 
 // ==============================
@@ -104,6 +134,9 @@ model Transaction {
   price      Float
   total      Float
   fee        Float
+  feeCurrency String @default("USDT")
+  feeRateApplied Float @default(0.001)
+  feeDiscountSource String?
   status     String
   profitBrl  Float?
   profitPercent Float?

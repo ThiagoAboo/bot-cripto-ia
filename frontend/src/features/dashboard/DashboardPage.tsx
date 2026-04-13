@@ -1,7 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useWebSocket } from '../../app/providers/WebSocketProvider'
-import { useTotalBalance, useCurrenciesBalance, useRecentTransactions, useBotsStatus, usePauseBot, useResumeBot } from './hooks/useDashboardData'
+import { useTotalBalance, useCurrenciesBalance, useRecentTransactions, useBotsStatus, usePauseBot, useResumeBot, useBotAnalysis } from './hooks/useDashboardData'
 import { DASHBOARD_QUERY_KEYS } from './hooks/useDashboardData'
 import { usePerformanceData } from './hooks/usePerformanceData'
 import { TotalBalanceCard } from './components/TotalBalanceCard'
@@ -9,19 +9,35 @@ import { CurrencyBalanceCard } from './components/CurrencyBalanceCard'
 import { PerformanceChart } from './components/PerformanceChart'
 import { RecentTransactionsTable } from './components/RecentTransactionsTable'
 import { BotsStatusList } from './components/BotsStatusList'
+import { BotInsightsCard } from './components/BotInsightsCard'
 
 export function DashboardPage() {
   const queryClient = useQueryClient()
   const { isConnected, on, off } = useWebSocket()
+  const [selectedBotId, setSelectedBotId] = useState<string>('')
   const { data: totalBalance, isLoading: isLoadingTotal } = useTotalBalance()
   const { data: currenciesBalance, isLoading: isLoadingCurrencies } = useCurrenciesBalance()
   const { data: recentTransactions, isLoading: isLoadingTransactions } = useRecentTransactions(5)
   const { data: botsStatus, isLoading: isLoadingBots } = useBotsStatus()
+  const { data: botAnalysis, isLoading: isLoadingBotAnalysis } = useBotAnalysis(selectedBotId)
   const { data: performanceData, isLoading: isLoadingPerformance, selectedPeriod, onPeriodChange } = usePerformanceData('7d')
   const { mutate: pauseBot, isPending: isPausing } = usePauseBot()
   const { mutate: resumeBot, isPending: isResuming } = useResumeBot()
 
   const isMutating = isPausing || isResuming
+
+  useEffect(() => {
+    if (!botsStatus || botsStatus.length === 0) {
+      if (selectedBotId) {
+        setSelectedBotId('')
+      }
+      return
+    }
+
+    if (!selectedBotId || !botsStatus.some((bot) => bot.id === selectedBotId)) {
+      setSelectedBotId(botsStatus[0].id)
+    }
+  }, [botsStatus, selectedBotId])
 
   useEffect(() => {
     if (!isConnected) {
@@ -38,6 +54,7 @@ export function DashboardPage() {
     const handleDashboardUpdate = (payload: { scope: 'portfolio' | 'bots' }) => {
       if (payload.scope === 'bots') {
         void queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.botsStatus })
+        void queryClient.invalidateQueries({ queryKey: ['dashboard', 'bot-analysis'] })
         return
       }
 
@@ -46,10 +63,12 @@ export function DashboardPage() {
 
     const handleOrderCreated = () => {
       invalidatePortfolio()
+      void queryClient.invalidateQueries({ queryKey: ['dashboard', 'bot-analysis'] })
     }
 
     const handleOrderUpdated = () => {
       invalidatePortfolio()
+      void queryClient.invalidateQueries({ queryKey: ['dashboard', 'bot-analysis'] })
     }
 
     on('dashboard:update', handleDashboardUpdate)
@@ -91,7 +110,7 @@ export function DashboardPage() {
         onPeriodChange={onPeriodChange}
       />
 
-      <div className="grid grid-cols-1 gap-6 2xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-6 2xl:grid-cols-4">
         <div className="2xl:col-span-2">
           <RecentTransactionsTable data={recentTransactions} isLoading={isLoadingTransactions} />
         </div>
@@ -103,6 +122,16 @@ export function DashboardPage() {
             onPause={pauseBot}
             onResume={resumeBot}
             isMutating={isMutating}
+          />
+        </div>
+
+        <div className="2xl:col-span-1">
+          <BotInsightsCard
+            bots={botsStatus}
+            selectedBotId={selectedBotId}
+            onSelectBot={setSelectedBotId}
+            data={botAnalysis}
+            isLoading={isLoadingBotAnalysis || isLoadingBots}
           />
         </div>
       </div>

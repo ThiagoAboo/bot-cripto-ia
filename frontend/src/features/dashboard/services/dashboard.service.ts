@@ -4,6 +4,7 @@ import type {
   CurrencyBalance,
   RecentTransaction,
   BotStatus,
+  BotAnalysis,
   PerformanceData,
 } from '../types/dashboard.types'
 
@@ -22,6 +23,10 @@ export const dashboardService = {
 
   async getBotsStatus(): Promise<BotStatus[]> {
     return apiClient.getData('/dashboard/bots-status')
+  },
+
+  async getBotAnalysis(botId: string): Promise<BotAnalysis> {
+    return apiClient.getData(`/dashboard/bots/${botId}/analysis`)
   },
 
   async getPerformanceData(period: '24h' | '7d' | '30d' | 'total'): Promise<PerformanceData> {

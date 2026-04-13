@@ -2,6 +2,8 @@ import { Response } from 'express'
 
 import { prisma } from '../config/database'
 import { AuthRequest } from '../middleware/auth.middleware'
+import { analyzeBotInstance } from '../services/bot-analysis.service'
+import { getBotInstanceById, listBotInstances } from '../services/bot-registry.service'
 import { getCurrencyRateToBrl } from '../services/market-valuation.service'
 import { recordBalanceHistorySnapshotValue } from '../services/portfolio.service'
 import { emitDashboardUpdate } from '../services/socket.service'
@@ -233,12 +235,19 @@ export async function getBotsStatus(req: AuthRequest, res: Response): Promise<Re
   startTrace(req.userId!, 'getBotsStatus', 'dashboard')
 
   try {
-    const bots = await prisma.bot.findMany()
+    const bots = await listBotInstances(req.userId!)
 
-    const result = bots.map((bot: any) => ({
+    const result = bots.map((bot) => ({
       id: bot.id,
       name: bot.name,
       strategy: bot.strategyType,
+      strategyId: bot.strategyId,
+      templateId: bot.templateId,
+      templateSlug: bot.templateSlug,
+      templateName: bot.templateName,
+      indicatorType: bot.indicatorType,
+      specialization: bot.specialization,
+      executionMode: bot.executionMode,
       description: bot.description,
       currentPair: bot.currentPair,
       status: bot.status,
@@ -263,15 +272,52 @@ export async function getBotsStatus(req: AuthRequest, res: Response): Promise<Re
   }
 }
 
+export async function getBotAnalysis(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'getBotAnalysis', 'dashboard')
+
+  try {
+    const { id } = req.params
+    const limit = Number.parseInt(req.query.limit as string, 10)
+    const analysis = await analyzeBotInstance(req.userId!, id, {
+      pairLimit: Number.isFinite(limit) && limit > 0 ? limit : 6,
+    })
+
+    if (!analysis) {
+      endTrace('getBotAnalysis', { userId: req.userId, botId: id, errorFlag: true })
+      return res.status(404).json({ success: false, error: 'Bot não encontrado' })
+    }
+
+    endTrace('getBotAnalysis', { userId: req.userId, botId: id })
+    return res.json({ success: true, data: analysis })
+  } catch (error) {
+    logger.error('[dashboard] Erro ao analisar bot', {
+      module: 'dashboard',
+      event: 'dashboard_bot_analysis_error',
+      userId: req.userId,
+      botId: req.params.id,
+      error,
+    })
+
+    endTrace('getBotAnalysis', { userId: req.userId, botId: req.params.id, errorFlag: true })
+    return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
+  }
+}
+
 export async function pauseBot(req: AuthRequest, res: Response): Promise<Response> {
   startTrace(req.userId!, 'pauseBot', 'dashboard')
 
   try {
     const { id } = req.params
     const userId = req.userId!
+    const bot = await getBotInstanceById(userId, id)
+
+    if (!bot) {
+      endTrace('pauseBot', { userId, botId: id, errorFlag: true })
+      return res.status(404).json({ success: false, error: 'Bot não encontrado' })
+    }
 
     await prisma.bot.update({
-      where: { id },
+      where: { id: bot.id },
       data: { isPaused: true, updatedAt: new Date() },
     })
 
@@ -311,9 +357,15 @@ export async function resumeBot(req: AuthRequest, res: Response): Promise<Respon
   try {
     const { id } = req.params
     const userId = req.userId!
+    const bot = await getBotInstanceById(userId, id)
+
+    if (!bot) {
+      endTrace('resumeBot', { userId, botId: id, errorFlag: true })
+      return res.status(404).json({ success: false, error: 'Bot não encontrado' })
+    }
 
     await prisma.bot.update({
-      where: { id },
+      where: { id: bot.id },
       data: { isPaused: false, updatedAt: new Date() },
     })
 

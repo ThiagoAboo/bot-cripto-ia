@@ -14,10 +14,87 @@ export interface ExchangeApiKeys {
     maxTradeAmountUnit: 'USDT' | 'percent'
   }
   
-  export interface FeesConfig {
+export interface FeesConfig {
+    useBnbForFees: boolean
     discountUsdtPercent: number
     discountBnbPercent: number
     minBnbBalance: number
+    reserveBnbForFeesEnabled: boolean
+  }
+
+  export interface PairDiscoverySources {
+    reddit: boolean
+    rss: boolean
+    x: boolean
+    telegram: boolean
+  }
+
+  export interface PairDiscoveryConfig {
+    autoDiscoveryEnabled: boolean
+    autoAddToAllowedPairs: boolean
+    autoRemoveFromAllowedPairs: boolean
+    reviewRequired: boolean
+    sources: PairDiscoverySources
+    minSocialScore: number
+    minMentions: number
+    maxPairs: number
+    excludedAssets: string[]
+    managedPairs?: string[]
+  }
+
+  export type SocialSource = 'reddit' | 'rss' | 'x' | 'telegram'
+  export type SocialSentiment = 'bullish' | 'neutral' | 'bearish'
+
+  export interface SocialSignalReference {
+    source: SocialSource
+    title: string
+    url?: string
+    publishedAt?: string
+  }
+
+  export interface SocialSignal {
+    symbol: string
+    pair: string
+    score: number
+    mentions: number
+    sentiment: SocialSentiment
+    sources: SocialSource[]
+    references: SocialSignalReference[]
+  }
+
+  export interface PairDiscoveryPreviewItem {
+    action: 'add' | 'remove'
+    symbol: string
+    pair: string
+    score: number | null
+    mentions: number
+    sentiment: SocialSentiment | null
+    sources: SocialSource[]
+    reason: string
+  }
+
+  export interface PairDiscoveryPreview {
+    generatedAt: string
+    autoDiscoveryEnabled: boolean
+    reviewRequired: boolean
+    sourcesUsed: SocialSource[]
+    signals: SocialSignal[]
+    items: PairDiscoveryPreviewItem[]
+    nextAllowedPairs: string[]
+    managedPairs: string[]
+    summary: {
+      currentAllowed: number
+      nextAllowed: number
+      additions: number
+      removals: number
+    }
+  }
+
+  export interface PairDiscoveryApplyResponse {
+    applied: boolean
+    requiresConfirmation: boolean
+    preview: PairDiscoveryPreview
+    configuration?: Configurations
   }
   
   export interface AdvancedOptions {
@@ -38,6 +115,7 @@ export interface ExchangeApiKeys {
     riskManagement: RiskManagement
     allowedPairs: string[]  // Moedas permitidas
     fees: FeesConfig
+    pairDiscovery: PairDiscoveryConfig
     advanced: AdvancedOptions
     strategies: StrategyConfig[]
   }

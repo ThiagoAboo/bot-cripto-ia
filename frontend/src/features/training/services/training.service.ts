@@ -13,6 +13,13 @@ export const trainingService = {
       id: string
       name: string
       strategy: string
+      strategyId?: string
+      templateId?: string
+      templateSlug?: string
+      templateName?: string
+      indicatorType?: string
+      specialization?: string
+      executionMode?: string
       description?: string
       status: 'online' | 'offline' | 'training' | 'error'
       isPaused: boolean
@@ -25,6 +32,13 @@ export const trainingService = {
       id: bot.id,
       name: bot.name,
       strategyType: bot.strategy,
+      strategyId: bot.strategyId,
+      templateId: bot.templateId,
+      templateSlug: bot.templateSlug,
+      templateName: bot.templateName,
+      indicatorType: bot.indicatorType,
+      specialization: bot.specialization,
+      executionMode: bot.executionMode,
       description: bot.description,
       status: bot.status,
       isPaused: bot.isPaused,

@@ -15,6 +15,7 @@ import {
   getUserRoom,
   setSocketServer,
 } from './services/socket.service'
+import { startTrainingWorker, stopTrainingWorker } from './services/training-worker.service'
 import { logger } from './utils/logger'
 
 import * as authController from './controllers/auth.controller'
@@ -258,6 +259,7 @@ app.get('/api/dashboard/currencies-balance', authMiddleware, dashboardController
 app.get('/api/dashboard/recent-transactions', authMiddleware, dashboardController.getRecentTransactions)
 app.get('/api/dashboard/transactions/recent', authMiddleware, dashboardController.getRecentTransactions)
 app.get('/api/dashboard/bots-status', authMiddleware, dashboardController.getBotsStatus)
+app.get('/api/dashboard/bots/:id/analysis', authMiddleware, dashboardController.getBotAnalysis)
 app.post('/api/dashboard/bots/:id/pause', authMiddleware, dashboardController.pauseBot)
 app.put('/api/dashboard/bots/:id/pause', authMiddleware, dashboardController.pauseBot)
 app.post('/api/dashboard/bots/:id/resume', authMiddleware, dashboardController.resumeBot)
@@ -269,7 +271,10 @@ app.put('/api/configurations', authMiddleware, configurationsController.putConfi
 app.post('/api/configurations/test-connection', authMiddleware, configurationsController.testConnection)
 app.post('/api/configurations/test', authMiddleware, configurationsController.testConnection)
 app.get('/api/configurations/exchange-pairs', authMiddleware, configurationsController.getExchangePairs)
+app.post('/api/configurations/pair-discovery/preview', authMiddleware, configurationsController.previewPairDiscovery)
+app.post('/api/configurations/pair-discovery/apply', authMiddleware, configurationsController.applyPairDiscovery)
 app.get('/api/exchange/pairs', authMiddleware, configurationsController.getExchangePairs)
+app.get('/api/social/latest', authMiddleware, configurationsController.getSocialLatest)
 
 app.get('/api/training/strategies', authMiddleware, trainingController.getStrategies)
 app.get('/api/training/sessions', authMiddleware, trainingController.getTrainingSessions)
@@ -370,10 +375,17 @@ export async function startServer(port: number = PORT): Promise<typeof httpServe
           : port
 
       logServerStartup(resolvedPort)
+      if (process.env.TRAINING_WORKER_AUTOSTART !== 'false' && process.env.NODE_ENV !== 'test') {
+        startTrainingWorker()
+      }
       resolve(httpServer)
     })
   })
 }
+
+httpServer.on('close', () => {
+  stopTrainingWorker()
+})
 
 if (require.main === module) {
   void startServer().catch((error) => {

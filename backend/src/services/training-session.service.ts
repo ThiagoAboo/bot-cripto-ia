@@ -1,5 +1,6 @@
 import { prisma } from '../config/database'
 import { emitTrainingLog, emitTrainingMetric, emitTrainingStatus } from './socket.service'
+import { readTrainingCheckpoint, saveTrainingCheckpoint } from './training-checkpoint.service'
 import { logger } from '../utils/logger'
 
 type TrainingLogLevel = 'INFO' | 'WARN' | 'ERROR'
@@ -37,7 +38,9 @@ interface TrainingSessionConfig {
 }
 
 const TRAINING_TICK_MS = 350
-const trainingTimers = new Map<string, NodeJS.Timeout>()
+const scheduledSessions = new Map<string, number>()
+const processingSessions = new Set<string>()
+const recoveredSessions = new Set<string>()
 
 function safeJsonParse<T>(value: string | null | undefined, fallback: T): T {
   if (!value) {
@@ -71,12 +74,9 @@ function getSessionPattern(sessionId: string): string {
   return `"sessionId":"${sessionId}"`
 }
 
-function clearTrainingTimer(sessionId: string): void {
-  const currentTimer = trainingTimers.get(sessionId)
-  if (currentTimer) {
-    clearTimeout(currentTimer)
-    trainingTimers.delete(sessionId)
-  }
+function clearScheduledSession(sessionId: string): void {
+  scheduledSessions.delete(sessionId)
+  processingSessions.delete(sessionId)
 }
 
 async function persistTrainingLog(
@@ -109,6 +109,32 @@ async function persistTrainingLog(
     level,
     message,
     epoch,
+  })
+}
+
+async function persistTrainingCheckpoint(
+  input: {
+    sessionId: string
+    userId: string
+    botId: string
+    status: string
+    reason: 'periodic' | 'paused' | 'cancelled' | 'completed' | 'failed' | 'recovered'
+    config: TrainingSessionConfig
+    metrics: TrainingMetricEntry[]
+    bestEpoch?: number | null
+    bestValLoss?: number | null
+  },
+): Promise<void> {
+  await saveTrainingCheckpoint({
+    sessionId: input.sessionId,
+    userId: input.userId,
+    botId: input.botId,
+    status: input.status,
+    reason: input.reason,
+    config: input.config as Record<string, unknown>,
+    metrics: input.metrics,
+    bestEpoch: input.bestEpoch,
+    bestValLoss: input.bestValLoss,
   })
 }
 
@@ -157,7 +183,13 @@ function shouldStopEarly(metrics: TrainingMetricEntry[], patience: number): bool
   return recentMetrics.every((metric) => metric.valLoss >= bestBeforeWindow.valLoss)
 }
 
-async function completeTrainingSession(sessionId: string, userId: string, botId: string, metrics: TrainingMetricEntry[]): Promise<void> {
+async function completeTrainingSession(
+  sessionId: string,
+  userId: string,
+  botId: string,
+  config: TrainingSessionConfig,
+  metrics: TrainingMetricEntry[],
+): Promise<void> {
   const bestMetric = getBestMetric(metrics)
 
   await prisma.trainingSession.update({
@@ -173,11 +205,22 @@ async function completeTrainingSession(sessionId: string, userId: string, botId:
   })
 
   emitTrainingStatus(userId, sessionId, 'completed')
+  await persistTrainingCheckpoint({
+    sessionId,
+    userId,
+    botId,
+    status: 'completed',
+    reason: 'completed',
+    config,
+    metrics,
+    bestEpoch: bestMetric?.epoch ?? null,
+    bestValLoss: bestMetric?.valLoss ?? null,
+  })
   await persistTrainingLog(userId, sessionId, botId, 'INFO', 'Treinamento concluido com sucesso')
 }
 
 async function advanceTrainingSession(sessionId: string): Promise<void> {
-  clearTrainingTimer(sessionId)
+  clearScheduledSession(sessionId)
 
   const session = await prisma.trainingSession.findUnique({
     where: { id: sessionId },
@@ -252,6 +295,20 @@ async function advanceTrainingSession(sessionId: string): Promise<void> {
     )
   }
 
+  if (nextEpoch % 10 === 0) {
+    await persistTrainingCheckpoint({
+      sessionId,
+      userId: session.userId,
+      botId: session.botId,
+      status: 'running',
+      reason: 'periodic',
+      config,
+      metrics: nextMetrics,
+      bestEpoch: bestMetric?.epoch ?? null,
+      bestValLoss: bestMetric?.valLoss ?? null,
+    })
+  }
+
   if (stopEarly) {
     await persistTrainingLog(
       session.userId,
@@ -261,26 +318,141 @@ async function advanceTrainingSession(sessionId: string): Promise<void> {
       `Early stopping acionado na epoca ${nextEpoch}`,
       nextEpoch,
     )
-    await completeTrainingSession(sessionId, session.userId, session.botId, nextMetrics)
+    await completeTrainingSession(sessionId, session.userId, session.botId, config, nextMetrics)
     return
   }
 
   if (nextEpoch >= totalEpochs) {
-    await completeTrainingSession(sessionId, session.userId, session.botId, nextMetrics)
+    await completeTrainingSession(sessionId, session.userId, session.botId, config, nextMetrics)
     return
   }
 
   startTrainingSessionProcessing(sessionId)
 }
 
+async function recoverTrainingSessionsFromDatabase(): Promise<void> {
+  const activeSessions = await prisma.trainingSession.findMany({
+    where: {
+      status: {
+        in: ['pending', 'running'],
+      },
+    },
+    select: {
+      id: true,
+      userId: true,
+      botId: true,
+      metrics: true,
+      config: true,
+      status: true,
+    },
+  })
+
+  for (const session of activeSessions) {
+    if (scheduledSessions.has(session.id) || processingSessions.has(session.id)) {
+      continue
+    }
+
+    scheduledSessions.set(session.id, Date.now())
+
+    if (recoveredSessions.has(session.id)) {
+      continue
+    }
+
+    const metrics = safeJsonParse<TrainingMetricEntry[]>(session.metrics, [])
+    const checkpoint = await readTrainingCheckpoint(session.id)
+
+    if (session.status === 'running' && (metrics.length > 0 || checkpoint)) {
+      const checkpointEpoch = checkpoint?.summary?.lastEpoch ?? metrics.length
+      await persistTrainingLog(
+        session.userId,
+        session.id,
+        session.botId,
+        'INFO',
+        `Sessão recuperada pelo worker a partir da epoca ${checkpointEpoch}`,
+        checkpointEpoch > 0 ? checkpointEpoch : undefined,
+      )
+      await persistTrainingCheckpoint({
+        sessionId: session.id,
+        userId: session.userId,
+        botId: session.botId,
+        status: session.status,
+        reason: 'recovered',
+        config: safeJsonParse<TrainingSessionConfig>(session.config, {}),
+        metrics,
+        bestEpoch: getBestMetric(metrics)?.epoch ?? null,
+        bestValLoss: getBestMetric(metrics)?.valLoss ?? null,
+      })
+    }
+
+    recoveredSessions.add(session.id)
+  }
+}
+
 export function startTrainingSessionProcessing(sessionId: string, delayMs: number = TRAINING_TICK_MS): void {
-  clearTrainingTimer(sessionId)
+  scheduledSessions.set(sessionId, Date.now() + delayMs)
+}
 
-  const timer = setTimeout(() => {
-    trainingTimers.delete(sessionId)
-    void advanceTrainingSession(sessionId).catch((error) => {
-      clearTrainingTimer(sessionId)
+async function failTrainingSession(sessionId: string): Promise<void> {
+  const session = await prisma.trainingSession.findUnique({
+    where: { id: sessionId },
+    select: {
+      userId: true,
+      botId: true,
+      config: true,
+      metrics: true,
+    },
+  })
 
+  if (!session) {
+    return
+  }
+
+  const metrics = safeJsonParse<TrainingMetricEntry[]>(session.metrics, [])
+  const bestMetric = getBestMetric(metrics)
+
+  await prisma.trainingSession.update({
+    where: { id: sessionId },
+    data: {
+      status: 'failed',
+      endTime: new Date(),
+      updatedAt: new Date(),
+    },
+  }).catch(() => undefined)
+
+  emitTrainingStatus(session.userId, sessionId, 'failed')
+  await persistTrainingCheckpoint({
+    sessionId,
+    userId: session.userId,
+    botId: session.botId,
+    status: 'failed',
+    reason: 'failed',
+    config: safeJsonParse<TrainingSessionConfig>(session.config, {}),
+    metrics,
+    bestEpoch: bestMetric?.epoch ?? null,
+    bestValLoss: bestMetric?.valLoss ?? null,
+  })
+  await persistTrainingLog(session.userId, sessionId, session.botId, 'ERROR', 'Treinamento interrompido por erro interno')
+}
+
+export async function processTrainingQueueCycle(): Promise<void> {
+  await recoverTrainingSessionsFromDatabase()
+
+  const dueSessions = Array.from(scheduledSessions.entries())
+    .filter(([, nextRunAt]) => nextRunAt <= Date.now())
+    .sort((left, right) => left[1] - right[1])
+    .map(([sessionId]) => sessionId)
+
+  for (const sessionId of dueSessions) {
+    if (processingSessions.has(sessionId)) {
+      continue
+    }
+
+    processingSessions.add(sessionId)
+    scheduledSessions.delete(sessionId)
+
+    try {
+      await advanceTrainingSession(sessionId)
+    } catch (error) {
       logger.error('[training] Erro no processamento da sessao de treinamento', {
         module: 'training',
         event: 'training_session_runtime_error',
@@ -288,38 +460,60 @@ export function startTrainingSessionProcessing(sessionId: string, delayMs: numbe
         error,
       })
 
-      void prisma.trainingSession.findUnique({
-        where: { id: sessionId },
-        select: { userId: true, botId: true },
-      }).then(async (session) => {
-        if (!session) {
-          return
-        }
-
-        await prisma.trainingSession.update({
-          where: { id: sessionId },
-          data: {
-            status: 'failed',
-            endTime: new Date(),
-            updatedAt: new Date(),
-          },
-        }).catch(() => undefined)
-
-        emitTrainingStatus(session.userId, sessionId, 'failed')
-        await persistTrainingLog(session.userId, sessionId, session.botId, 'ERROR', 'Treinamento interrompido por erro interno')
-      }).catch(() => undefined)
-    })
-  }, delayMs)
-
-  trainingTimers.set(sessionId, timer)
+      await failTrainingSession(sessionId).catch(() => undefined)
+    } finally {
+      processingSessions.delete(sessionId)
+    }
+  }
 }
 
 export function pauseTrainingSessionProcessing(sessionId: string): void {
-  clearTrainingTimer(sessionId)
+  clearScheduledSession(sessionId)
 }
 
 export function cancelTrainingSessionProcessing(sessionId: string): void {
-  clearTrainingTimer(sessionId)
+  clearScheduledSession(sessionId)
+}
+
+export function stopTrainingSessionProcessing(): void {
+  scheduledSessions.clear()
+  processingSessions.clear()
+  recoveredSessions.clear()
+}
+
+export async function captureTrainingSessionCheckpoint(
+  sessionId: string,
+  reason: 'paused' | 'cancelled',
+): Promise<void> {
+  const session = await prisma.trainingSession.findUnique({
+    where: { id: sessionId },
+    select: {
+      id: true,
+      userId: true,
+      botId: true,
+      status: true,
+      config: true,
+      metrics: true,
+      bestEpoch: true,
+      bestValLoss: true,
+    },
+  })
+
+  if (!session) {
+    return
+  }
+
+  await persistTrainingCheckpoint({
+    sessionId: session.id,
+    userId: session.userId,
+    botId: session.botId,
+    status: session.status,
+    reason,
+    config: safeJsonParse<TrainingSessionConfig>(session.config, {}),
+    metrics: safeJsonParse<TrainingMetricEntry[]>(session.metrics, []),
+    bestEpoch: session.bestEpoch ?? null,
+    bestValLoss: session.bestValLoss ?? null,
+  })
 }
 
 export async function getTrainingSessionLogs(userId: string, sessionId: string): Promise<TrainingLogEntry[]> {

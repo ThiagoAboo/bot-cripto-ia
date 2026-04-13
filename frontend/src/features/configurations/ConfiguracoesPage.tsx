@@ -4,6 +4,7 @@ import { ApiKeysCard } from './components/ApiKeysCard'
 import { RiskManagementCard } from './components/RiskManagementCard'
 import { AllowedPairsCard } from './components/AllowedPairsCard'
 import { FeesCard } from './components/FeesCard'
+import { PairDiscoveryCard } from './components/PairDiscoveryCard'
 import { AdvancedOptionsCard } from './components/AdvancedOptionsCard'
 import { StrategiesConfigCard } from './components/StrategiesConfigCard'
 import { Button } from '../../shared/components/ui/Button'
@@ -157,6 +158,34 @@ export default function ConfiguracoesPage() {
                 allowedPairs: value,
               })
             }
+          />
+
+          <PairDiscoveryCard
+            data={localConfig.botParameters.pairDiscovery}
+            allowedPairs={localConfig.botParameters.allowedPairs}
+            fees={localConfig.botParameters.fees}
+            onChange={(value) =>
+              handleChange('botParameters', {
+                ...localConfig.botParameters,
+                pairDiscovery: value,
+              })
+            }
+            onApplyResult={({ allowedPairs, pairDiscovery }) => {
+              setLocalConfig((current) => {
+                if (!current) {
+                  return current
+                }
+
+                return {
+                  ...current,
+                  botParameters: {
+                    ...current.botParameters,
+                    allowedPairs,
+                    pairDiscovery,
+                  },
+                }
+              })
+            }}
           />
           
           <AdvancedOptionsCard

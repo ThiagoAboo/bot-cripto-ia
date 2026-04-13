@@ -220,6 +220,7 @@ RESPONSE (200 - Sucesso):
 TABELAS ENVOLVIDAS:
 - Transaction (criação)
 - Balance (atualização)
+- Configuration (leitura de política de fees/BNB)
 
 CAMPOS INSERIDOS (Transaction):
 - id (UUID)
@@ -230,7 +231,8 @@ CAMPOS INSERIDOS (Transaction):
 - quantity
 - price
 - total = quantity * price
-- fee = total * 0.001 (0.1%)
+- fee = calculada conforme política da exchange e configuração ativa
+- feeCurrency = "BNB" ou moeda padrão da operação
 - status = 'executed'
 
 CAMPOS ATUALIZADOS (Balance):
@@ -239,13 +241,22 @@ CAMPOS ATUALIZADOS (Balance):
 
 FLUXO:
 1. Validar se há saldo suficiente
-2. Reservar saldo (atualizar Balance.reserved)
-3. Executar ordem (simular ou real)
-4. Atualizar saldos
+2. Resolver política de taxas:
+   - verificar useBnbForFees
+   - verificar saldo de BNB
+   - respeitar minBnbBalance reservado para taxas
+3. Reservar saldo (atualizar Balance.reserved)
+4. Executar ordem (simular ou real)
+5. Atualizar saldos
+   - se taxa em BNB, debitar fee em BNB
+   - se taxa sem BNB, debitar fee na moeda padrão da operação
 5. Registrar transação
 6. Registrar log INFO
 7. Registrar trace DEBUG
 8. Emitir WebSocket order:created
+
+REGRA OPERACIONAL:
+- BNB pode ser negociado normalmente, porém o sistema deve preservar o saldo mínimo configurado para pagamento de taxas
 
 -------------------------------------------------------------------------------
 6. API: DELETE /api/orders/{id}/cancel
@@ -396,6 +407,9 @@ DADOS:
   "id": "tx_123",
   "status": "executed"
 }
+
+OBSERVAÇÃO DE EVOLUÇÃO:
+- A resposta da ordem pode ser expandida para incluir feeCurrency, feeRateApplied e feeDiscountSource
 
 ================================================================================
 FIM DO ARQUIVO 05_transacoes.txt

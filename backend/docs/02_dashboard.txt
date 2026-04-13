@@ -69,6 +69,15 @@ CÁLCULOS:
 7. usdtBrlRate:
    Buscar de API externa (ex: AwesomeAPI, Binance) ou tabela de cotações
 
+EVOLUÇÃO RECOMENDADA DO CONTRATO:
+- realizedPnlBrl: lucro/prejuízo já realizado por vendas executadas
+- unrealizedPnlBrl: lucro/prejuízo ainda em aberto com base no mark price atual
+- portfolioValueBrl: valor de mercado total da carteira
+- valuationTimestamp: horário exato da marcação a mercado
+
+Regra recomendada:
+- totalPnlBrl atual pode permanecer como agregado, mas a camada bots deve preferir trabalhar com realizedPnlBrl e unrealizedPnlBrl separados
+
 -------------------------------------------------------------------------------
 2. API: GET /api/dashboard/currencies-balance
 -------------------------------------------------------------------------------
@@ -142,6 +151,10 @@ CÁLCULOS POR MOEDA:
    SELECT (COUNT(CASE WHEN profitBrl > 0 THEN 1 END) * 100.0 / COUNT(*)) 
    FROM Transaction WHERE status = 'executed' AND pair LIKE '{currency}/%'
 
+OBSERVAÇÃO DE EVOLUÇÃO:
+- Para moedas com posição aberta, o dashboard ideal deve expor realizedPnlBrl e unrealizedPnlBrl por ativo
+- A fonte de marcação deve registrar valuationTimestamp para evitar leituras inconsistentes entre frontend, bots e relatórios
+
 -------------------------------------------------------------------------------
 3. API: GET /api/dashboard/transactions/recent
 -------------------------------------------------------------------------------
@@ -206,9 +219,16 @@ RESPONSE (200 - Sucesso):
   "data": [
     {
       "id": "bot1",
-      "name": "Scalper V2",
-      "strategy": "scalper",
-      "description": "Operações rápidas com pequenos lucros",
+      "name": "MACD Momentum Bot",
+      "strategy": "momentum",
+      "strategyId": "template_macd_momentum",
+      "templateId": "template_macd_momentum",
+      "templateSlug": "macd-momentum-specialist",
+      "templateName": "MACD Momentum Specialist",
+      "indicatorType": "MACD",
+      "specialization": "macd_momentum",
+      "executionMode": "paper",
+      "description": "Bot operacional focado em aceleração de momentum via MACD",
       "currentPair": "BTC/USDT",
       "status": "online",
       "isPaused": false,
@@ -221,11 +241,18 @@ RESPONSE (200 - Sucesso):
 
 TABELAS ENVOLVIDAS:
 - Bot
+- BotTemplate
 
 CAMPOS RETORNADOS:
 - id
 - name
-- strategyType → strategy
+- strategyType/template.strategyType → strategy
+- template.id → strategyId/templateId
+- template.slug → templateSlug
+- template.name → templateName
+- template.indicatorType → indicatorType
+- template.specialization → specialization
+- executionMode
 - description
 - currentPair
 - status
@@ -233,6 +260,74 @@ CAMPOS RETORNADOS:
 - recommendedAction
 - confidence
 - lastAnalysis
+
+OBSERVAÇÃO:
+- `Bot` representa a instância operacional do usuário
+- `BotTemplate` representa o catálogo reutilizável do especialista/estratégia
+
+-------------------------------------------------------------------------------
+4.1 API: GET /api/dashboard/bots/{id}/analysis
+-------------------------------------------------------------------------------
+
+Descrição: Executa uma análise seca do bot selecionado com especialistas por
+indicador, candles reais e overlay social, sem enviar ordem.
+
+HEADERS:
+  Authorization: Bearer {token}
+
+PATH PARAMS:
+  id: string (ID do bot)
+
+QUERY PARAMS:
+  limit: number (opcional, padrão = 6 pares)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "botId": "bot1",
+    "botName": "MACD Momentum Bot",
+    "strategyId": "template_macd_momentum",
+    "templateId": "template_macd_momentum",
+    "templateName": "MACD Momentum Specialist",
+    "primarySpecialist": "macd_momentum",
+    "timeframe": "1h",
+    "generatedAt": "2026-04-12T18:40:00.000Z",
+    "analyzedPairs": ["BTC/USDT", "ETH/USDT", "SOL/USDT"],
+    "summary": {
+      "analyzedPairs": 3,
+      "actionablePairs": 2,
+      "buySignals": 1,
+      "sellSignals": 1,
+      "holdSignals": 1
+    },
+    "bestOpportunity": {
+      "pair": "BTC/USDT",
+      "action": "buy",
+      "confidence": 78,
+      "price": 62345.67,
+      "reason": "Consenso inclinado para compra entre os especialistas ativos",
+      "specialists": []
+    },
+    "opportunities": [],
+    "socialSignals": [
+      {
+        "symbol": "BTC",
+        "pair": "BTC/USDT",
+        "score": 82,
+        "mentions": 22,
+        "sentiment": "bullish",
+        "sources": ["reddit"]
+      }
+    ]
+  }
+}
+
+OBSERVAÇÕES:
+- Atualiza `currentPair`, `recommendedAction`, `confidence` e `lastAnalysis`
+  da instância do bot
+- Serve como radar/preview da camada `bots`
+- Usa o runtime compartilhado em `bots/src`
 
 -------------------------------------------------------------------------------
 5. API: PUT /api/dashboard/bots/{id}/pause

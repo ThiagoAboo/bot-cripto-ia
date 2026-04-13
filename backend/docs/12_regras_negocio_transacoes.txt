@@ -50,6 +50,16 @@ REGRAS:
 
 13. Emitir WebSocket order:created
 
+14. Aplicar política de taxas:
+    - Se useBnbForFees = true e houver saldo de BNB suficiente acima da reserva:
+      - Cobrar taxa em BNB com desconto configurado
+    - Caso contrário:
+      - Cobrar taxa na moeda padrão da ordem
+
+15. Respeitar reserva mínima de BNB:
+    - BNB pode ser operado como ativo
+    - Porém o saldo final não pode ficar abaixo de minBnbBalance quando reserveBnbForFeesEnabled = true
+
 -------------------------------------------------------------------------------
 RN-TRN-002: Cálculo de Preço Médio (FIFO)
 -------------------------------------------------------------------------------
@@ -71,6 +81,51 @@ REGRAS (FIFO - First In, First Out):
 3. Somar todos os profits parciais
 
 4. Atualizar quantidade restante das compras
+
+-------------------------------------------------------------------------------
+RN-TRN-005: Taxas com BNB e Reserva Mínima
+-------------------------------------------------------------------------------
+
+REGRAS:
+1. Ler configuração do usuário antes da execução da ordem
+
+2. Se useBnbForFees = true:
+   - Calcular taxa com desconto em BNB
+   - Verificar saldo disponível de BNB
+
+3. O saldo utilizável de BNB é:
+   saldo_disponivel_bnb - minBnbBalance
+
+4. Se reserveBnbForFeesEnabled = false:
+   - O sistema pode usar todo o saldo de BNB para taxas
+
+5. Se reserveBnbForFeesEnabled = true:
+   - Nunca consumir o saldo mínimo reservado
+   - Se não houver BNB excedente suficiente, aplicar fallback para taxa na moeda padrão
+
+6. Se o par negociado for BNB/USDT:
+   - A venda/compra é permitida
+   - Mas o cálculo de quantidade máxima deve preservar a reserva mínima
+
+-------------------------------------------------------------------------------
+RN-TRN-006: Inclusão/Exclusão Automática de Pares
+-------------------------------------------------------------------------------
+
+REGRAS:
+1. allowedPairs é a lista efetiva usada pelos bots para trading automático
+
+2. Essa lista pode receber origem:
+   - manual
+   - descoberta automática por sinais sociais/notícias
+
+3. Uma moeda descoberta automaticamente só entra em allowedPairs se:
+   - passar filtros de score e menções
+   - não estiver em blacklist/excludedAssets
+   - respeitar maxPairs
+
+4. Uma moeda removida automaticamente:
+   - não pode ser removida se estiver marcada como fixa/manual
+   - deve registrar log/trilha de auditoria
 
 -------------------------------------------------------------------------------
 RN-TRN-003: Filtros do Histórico

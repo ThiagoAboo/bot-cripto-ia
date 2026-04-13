@@ -30,9 +30,27 @@ RESPONSE (200 - Sucesso):
       },
       "allowedPairs": ["BTC/USDT", "ETH/USDT", "SOL/USDT"],
       "fees": {
+        "useBnbForFees": true,
         "discountUsdtPercent": 0.075,
         "discountBnbPercent": 0.075,
-        "minBnbBalance": 0.01
+        "minBnbBalance": 0.01,
+        "reserveBnbForFeesEnabled": true
+      },
+      "pairDiscovery": {
+        "autoDiscoveryEnabled": false,
+        "autoAddToAllowedPairs": false,
+        "autoRemoveFromAllowedPairs": false,
+        "reviewRequired": true,
+        "sources": {
+          "reddit": true,
+          "rss": false,
+          "x": false,
+          "telegram": false
+        },
+        "minSocialScore": 65,
+        "minMentions": 25,
+        "maxPairs": 20,
+        "excludedAssets": ["BNB", "USDC"]
       },
       "advanced": {
         "mode": "spot",
@@ -72,9 +90,12 @@ CAMPOS NA TABELA Configuration (mapeamento):
 | botParameters.riskManagement.maxTradeAmount | maxTradeAmount          |
 | botParameters.riskManagement.maxTradeAmountUnit | maxTradeAmountUnit    |
 | botParameters.allowedPairs        | allowedPairs (JSON)             |
+| botParameters.fees.useBnbForFees  | regra derivada das políticas de fee |
 | botParameters.fees.discountUsdtPercent | discountUsdtPercent         |
 | botParameters.fees.discountBnbPercent | discountBnbPercent          |
 | botParameters.fees.minBnbBalance  | minBnbBalance                   |
+| botParameters.fees.reserveBnbForFeesEnabled | regra derivada da reserva BNB |
+| botParameters.pairDiscovery       | extensão futura da configuração |
 | botParameters.advanced.mode       | mode                            |
 | botParameters.advanced.orderType  | orderType                       |
 | botParameters.advanced.slippagePercent | slippagePercent             |
@@ -120,9 +141,19 @@ VALIDAÇÕES:
 | discountUsdtPercent      | 0 ≤ valor ≤ 1                                |
 | discountBnbPercent       | 0 ≤ valor ≤ 1                                |
 | minBnbBalance            | ≥ 0                                          |
+| useBnbForFees            | boolean                                      |
+| reserveBnbForFeesEnabled | boolean                                      |
 | slippagePercent          | 0 ≤ valor ≤ 5                                |
 | allowedPairs             | Array de strings (pares válidos)             |
+| pairDiscovery            | Estrutura válida com fontes, limites e exclusões |
 | strategies               | Array com estrutura válida                   |
+
+REGRAS FUNCIONAIS ADICIONAIS:
+- Se useBnbForFees = true, o sistema deve priorizar taxa em BNB quando houver saldo disponível
+- minBnbBalance representa o saldo mínimo de BNB que deve permanecer livre para pagamento de taxas
+- reserveBnbForFeesEnabled = true impede consumo do saldo reservado de BNB por trades comuns
+- pairDiscovery controla descoberta automática de moedas a partir de sinais externos/sociais
+- autoAddToAllowedPairs/autoRemoveFromAllowedPairs só podem atuar dentro de maxPairs e respeitando excludedAssets
 
 -------------------------------------------------------------------------------
 3. API: POST /api/configurations/test-connection
@@ -196,6 +227,134 @@ TABELAS ENVOLVIDAS:
 OBSERVAÇÃO: Pode ser cacheadado por 5 minutos para evitar chamadas excessivas
 
 -------------------------------------------------------------------------------
+4.1 PARÂMETROS FUTUROS: DESCOBERTA AUTOMÁTICA DE PARES
+-------------------------------------------------------------------------------
+
+Estrutura prevista dentro de botParameters.pairDiscovery:
+
+{
+  "autoDiscoveryEnabled": true,
+  "autoAddToAllowedPairs": true,
+  "autoRemoveFromAllowedPairs": false,
+  "reviewRequired": true,
+  "sources": {
+    "reddit": true,
+    "rss": true,
+    "x": false,
+    "telegram": false
+  },
+  "minSocialScore": 70,
+  "minMentions": 30,
+  "maxPairs": 25,
+  "excludedAssets": ["BNB", "USDC"],
+  "managedPairs": ["SOL/USDT", "LINK/USDT"]
+}
+
+Objetivo:
+- Permitir inclusão automatizada de novas moedas fortes na lista allowedPairs
+- Permitir remoção automatizada de moedas que percam tração, quando habilitado
+- Manter governança via reviewRequired, limites e lista de exclusão
+- managedPairs identifica quais pares foram adicionados pela curadoria automática e podem ser removidos depois sem afetar pares manuais
+
+-------------------------------------------------------------------------------
+4.2 API: GET /api/social/latest
+-------------------------------------------------------------------------------
+
+Descrição: Retorna o radar social consolidado para os ativos detectados nas fontes habilitadas
+
+HEADERS:
+  Authorization: Bearer {token}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": [
+    {
+      "symbol": "BTC",
+      "pair": "BTC/USDT",
+      "score": 84,
+      "mentions": 12,
+      "sentiment": "bullish",
+      "sources": ["reddit", "rss"]
+    }
+  ]
+}
+
+REGRAS:
+- Usa as fontes habilitadas em pairDiscovery.sources
+- Pode devolver lista vazia quando nenhuma fonte estiver configurada ou quando não houver menções válidas
+- O ranking usa score social, número de menções e variedade de fontes
+
+-------------------------------------------------------------------------------
+4.3 API: POST /api/configurations/pair-discovery/preview
+-------------------------------------------------------------------------------
+
+Descrição: Gera um preview da próxima curadoria automática sem persistir mudanças
+
+HEADERS:
+  Authorization: Bearer {token}
+  Content-Type: application/json
+
+REQUEST BODY:
+{
+  "allowedPairs": ["BTC/USDT", "ETH/USDT"],
+  "fees": {
+    "useBnbForFees": true,
+    "discountUsdtPercent": 0.075,
+    "discountBnbPercent": 0.075,
+    "minBnbBalance": 0.01,
+    "reserveBnbForFeesEnabled": true
+  },
+  "pairDiscovery": {
+    "autoDiscoveryEnabled": true,
+    "autoAddToAllowedPairs": true,
+    "autoRemoveFromAllowedPairs": true,
+    "reviewRequired": true,
+    "sources": { "reddit": true, "rss": true, "x": false, "telegram": false },
+    "minSocialScore": 70,
+    "minMentions": 30,
+    "maxPairs": 20,
+    "excludedAssets": ["BNB"],
+    "managedPairs": ["SOL/USDT"]
+  }
+}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "generatedAt": "2026-04-11T14:00:00.000Z",
+    "autoDiscoveryEnabled": true,
+    "reviewRequired": true,
+    "sourcesUsed": ["reddit", "rss"],
+    "items": [
+      {
+        "action": "add",
+        "pair": "LINK/USDT",
+        "score": 81,
+        "mentions": 14,
+        "reason": "Score 81 com 14 menções e suporte em reddit, rss"
+      }
+    ],
+    "nextAllowedPairs": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "LINK/USDT"],
+    "managedPairs": ["SOL/USDT", "LINK/USDT"]
+  }
+}
+
+-------------------------------------------------------------------------------
+4.4 API: POST /api/configurations/pair-discovery/apply
+-------------------------------------------------------------------------------
+
+Descrição: Aplica a curadoria automática no allowedPairs e atualiza managedPairs
+
+REGRAS:
+- Se reviewRequired = true e force != true, retorna apenas requiresConfirmation = true
+- Quando aplicado, salva nextAllowedPairs em allowedPairs
+- managedPairs persiste apenas pares adicionados automaticamente
+- Nunca remove pares manuais
+- Nunca remove BNB quando a reserva para taxas estiver habilitada
+
+-------------------------------------------------------------------------------
 5. MODELO DE DADOS - Configuration
 -------------------------------------------------------------------------------
 
@@ -223,6 +382,10 @@ slippagePercent          | Float   | Sim   | Slippage percentual
 strategies               | String  | Sim   | JSON array
 createdAt                | DateTime| Sim   | Data criação
 updatedAt                | DateTime| Sim   | Data atualização
+
+OBSERVAÇÃO DE EVOLUÇÃO:
+- pairDiscovery pode evoluir para campo persistido dedicado
+- fees e allowedPairs já existem persistidos; pairDiscovery representa a política futura de curadoria automática
 
 EXEMPLO DE REGISTRO:
 

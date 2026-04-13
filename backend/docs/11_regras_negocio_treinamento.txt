@@ -10,19 +10,25 @@ API: POST /api/training/sessions
 
 REGRAS:
 
-1. Validar se bot existe e está ativo
+1. Validar se a instância do bot existe e está ativa
 
-2. Verificar se já existe sessão ativa para este bot:
+2. Validar compatibilidade entre botId e strategyId:
+   - strategyId pode ser o ID do BotTemplate
+   - strategyId também pode aceitar aliases legados por strategyType
+   - se não houver compatibilidade, retornar:
+     "A estratégia selecionada não corresponde ao bot informado"
+
+3. Verificar se já existe sessão ativa para este bot:
    - Se existir sessão com status 'running' ou 'pending' ou 'paused'
    - Retornar erro: "Já existe um treinamento em andamento para este bot"
 
-3. Criar sessão com status 'pending'
+4. Criar sessão com status 'pending'
 
-4. Adicionar à fila de processamento (Bull/Redis)
+5. Adicionar à fila de processamento (Bull/Redis)
 
-5. Registrar log INFO: "Sessão de treinamento criada para bot {botName}"
+6. Registrar log INFO: "Sessão de treinamento criada para bot {botName}"
 
-6. Registrar trace TRACE: com traceId único
+7. Registrar trace TRACE: com traceId único
 
 -------------------------------------------------------------------------------
 RN-TRN-002: Processamento de Treinamento

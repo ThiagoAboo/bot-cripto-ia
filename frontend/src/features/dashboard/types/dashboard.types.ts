@@ -41,6 +41,13 @@ export interface BotStatus {
   id: string
   name: string
   strategy: string
+  strategyId?: string
+  templateId?: string
+  templateSlug?: string
+  templateName?: string
+  indicatorType?: string
+  specialization?: string
+  executionMode?: string
   description?: string
   currentPair?: string
   status: 'online' | 'offline' | 'training' | 'error'
@@ -48,6 +55,54 @@ export interface BotStatus {
   lastAnalysis?: string
   recommendedAction?: 'buy' | 'sell' | 'hold'
   confidence?: number
+}
+
+export interface BotAnalysisSpecialist {
+  specialist: string
+  action: 'buy' | 'sell' | 'hold'
+  confidence: number
+  reason: string
+  indicators: Record<string, number | null>
+}
+
+export interface BotAnalysisOpportunity {
+  pair: string
+  action: 'buy' | 'sell' | 'hold'
+  confidence: number
+  price: number
+  reason: string
+  specialists: BotAnalysisSpecialist[]
+}
+
+export interface BotSocialSignal {
+  symbol: string
+  pair: string
+  score: number
+  mentions: number
+  sentiment: 'bullish' | 'neutral' | 'bearish'
+  sources: string[]
+}
+
+export interface BotAnalysis {
+  botId: string
+  botName: string
+  strategyId: string
+  templateId?: string
+  templateName?: string
+  primarySpecialist: string
+  timeframe: string
+  generatedAt: string
+  analyzedPairs: string[]
+  summary: {
+    analyzedPairs: number
+    actionablePairs: number
+    buySignals: number
+    sellSignals: number
+    holdSignals: number
+  }
+  bestOpportunity?: BotAnalysisOpportunity
+  opportunities: BotAnalysisOpportunity[]
+  socialSignals: BotSocialSignal[]
 }
 
 export interface PerformanceData {

@@ -5,8 +5,57 @@ import { prisma } from '../config/database'
 import { AuthRequest } from '../middleware/auth.middleware'
 import { logger } from '../utils/logger'
 import { getAvailablePairs, testBinanceConnection } from '../services/binance.service'
+import {
+  DEFAULT_FEE_SETTINGS,
+  normalizeFeeSettings,
+  normalizePairDiscoveryConfig,
+  parsePairDiscoveryConfig,
+  serializePairDiscoveryConfig,
+} from '../services/configuration.service'
 import { ExternalApiError } from '../services/external-http.service'
+import { generatePairDiscoveryPreview, getLatestSocialSignals } from '../services/pair-discovery.service'
 import { endTrace, startTrace, trace } from '../utils/tracer'
+
+const feesSchema = z.object({
+  useBnbForFees: z.boolean(),
+  discountUsdtPercent: z.number().min(0).max(1),
+  discountBnbPercent: z.number().min(0).max(1),
+  minBnbBalance: z.number().min(0),
+  reserveBnbForFeesEnabled: z.boolean(),
+})
+
+const pairDiscoverySourcesSchema = z.object({
+  reddit: z.boolean(),
+  rss: z.boolean(),
+  x: z.boolean(),
+  telegram: z.boolean(),
+})
+
+const pairDiscoverySchema = z.object({
+  autoDiscoveryEnabled: z.boolean(),
+  autoAddToAllowedPairs: z.boolean(),
+  autoRemoveFromAllowedPairs: z.boolean(),
+  reviewRequired: z.boolean(),
+  sources: pairDiscoverySourcesSchema,
+  minSocialScore: z.number().min(0).max(100),
+  minMentions: z.number().min(0),
+  maxPairs: z.number().positive(),
+  excludedAssets: z.array(z.string()),
+  managedPairs: z.array(z.string()).optional(),
+})
+
+const pairDiscoveryOverrideSchema = z.object({
+  autoDiscoveryEnabled: z.boolean().optional(),
+  autoAddToAllowedPairs: z.boolean().optional(),
+  autoRemoveFromAllowedPairs: z.boolean().optional(),
+  reviewRequired: z.boolean().optional(),
+  sources: pairDiscoverySourcesSchema.partial().optional(),
+  minSocialScore: z.number().min(0).max(100).optional(),
+  minMentions: z.number().min(0).optional(),
+  maxPairs: z.number().positive().optional(),
+  excludedAssets: z.array(z.string()).optional(),
+  managedPairs: z.array(z.string()).optional(),
+})
 
 const configurationsSchema = z.object({
   exchangeApiKeys: z.object({
@@ -23,11 +72,8 @@ const configurationsSchema = z.object({
       maxTradeAmountUnit: z.enum(['USDT', 'percent']),
     }),
     allowedPairs: z.array(z.string()),
-    fees: z.object({
-      discountUsdtPercent: z.number().min(0).max(1),
-      discountBnbPercent: z.number().min(0).max(1),
-      minBnbBalance: z.number().min(0),
-    }),
+    fees: feesSchema,
+    pairDiscovery: pairDiscoverySchema,
     advanced: z.object({
       mode: z.enum(['spot', 'futures']),
       orderType: z.enum(['market', 'limit']),
@@ -43,7 +89,52 @@ const configurationsSchema = z.object({
   }),
 })
 
+const pairDiscoveryPreviewSchema = z.object({
+  allowedPairs: z.array(z.string()).optional(),
+  fees: feesSchema.partial().optional(),
+  pairDiscovery: pairDiscoveryOverrideSchema.optional(),
+})
+
+const pairDiscoveryApplySchema = pairDiscoveryPreviewSchema.extend({
+  force: z.boolean().optional(),
+})
+
 type ConfigurationPayload = z.infer<typeof configurationsSchema>
+type PairDiscoveryState = ReturnType<typeof parsePairDiscoveryConfig>
+type PairDiscoveryOverride = Partial<Omit<PairDiscoveryState, 'sources'>> & {
+  sources?: Partial<PairDiscoveryState['sources']>
+}
+type ConfigurationResponse = {
+  exchangeApiKeys: {
+    exchange: string
+    apiKey: string
+    secretKey: string
+  }
+  botParameters: {
+    riskManagement: {
+      stopLossPercent: number
+      takeProfitPercent: number
+      leverage: number
+      maxTradeAmount: number
+      maxTradeAmountUnit: string
+    }
+    allowedPairs: string[]
+    fees: {
+      useBnbForFees: boolean
+      discountUsdtPercent: number
+      discountBnbPercent: number
+      minBnbBalance: number
+      reserveBnbForFeesEnabled: boolean
+    }
+    pairDiscovery: ReturnType<typeof parsePairDiscoveryConfig>
+    advanced: {
+      mode: string
+      orderType: string
+      slippagePercent: number
+    }
+    strategies: Array<Record<string, unknown>>
+  }
+}
 
 function redactKey(value: string): string {
   if (!value) {
@@ -57,7 +148,7 @@ function redactKey(value: string): string {
   return `${value.slice(0, 4)}***${value.slice(-4)}`
 }
 
-function sanitizeConfigurationForLogging(payload: ConfigurationPayload) {
+function sanitizeConfigurationForLogging(payload: ConfigurationPayload | ConfigurationResponse) {
   return {
     exchangeApiKeys: {
       exchange: payload.exchangeApiKeys.exchange,
@@ -68,8 +159,63 @@ function sanitizeConfigurationForLogging(payload: ConfigurationPayload) {
       riskManagement: payload.botParameters.riskManagement,
       allowedPairs: payload.botParameters.allowedPairs,
       fees: payload.botParameters.fees,
+      pairDiscovery: payload.botParameters.pairDiscovery,
       advanced: payload.botParameters.advanced,
       strategies: payload.botParameters.strategies,
+    },
+  }
+}
+
+function buildConfigurationResponse(config: {
+  exchange: string
+  apiKey: string
+  secretKey: string
+  stopLossPercent: number
+  takeProfitPercent: number
+  leverage: number
+  maxTradeAmount: number
+  maxTradeAmountUnit: string
+  allowedPairs: string
+  useBnbForFees: boolean
+  discountUsdtPercent: number
+  discountBnbPercent: number
+  minBnbBalance: number
+  reserveBnbForFeesEnabled: boolean
+  pairDiscovery: string
+  mode: string
+  orderType: string
+  slippagePercent: number
+  strategies: string
+}) {
+  return {
+    exchangeApiKeys: {
+      exchange: config.exchange,
+      apiKey: config.apiKey,
+      secretKey: config.secretKey,
+    },
+    botParameters: {
+      riskManagement: {
+        stopLossPercent: config.stopLossPercent,
+        takeProfitPercent: config.takeProfitPercent,
+        leverage: config.leverage,
+        maxTradeAmount: config.maxTradeAmount,
+        maxTradeAmountUnit: config.maxTradeAmountUnit,
+      },
+      allowedPairs: JSON.parse(config.allowedPairs),
+      fees: {
+        useBnbForFees: config.useBnbForFees,
+        discountUsdtPercent: config.discountUsdtPercent,
+        discountBnbPercent: config.discountBnbPercent,
+        minBnbBalance: config.minBnbBalance,
+        reserveBnbForFeesEnabled: config.reserveBnbForFeesEnabled,
+      },
+      pairDiscovery: parsePairDiscoveryConfig(config.pairDiscovery),
+      advanced: {
+        mode: config.mode,
+        orderType: config.orderType,
+        slippagePercent: config.slippagePercent,
+      },
+      strategies: JSON.parse(config.strategies),
     },
   }
 }
@@ -141,6 +287,79 @@ function buildDefaultStrategies(): string {
   ])
 }
 
+async function findOrCreateConfiguration(userId: string) {
+  let config = await prisma.configuration.findUnique({
+    where: { userId },
+  })
+
+  if (config) {
+    return config
+  }
+
+  const defaultStrategies = buildDefaultStrategies()
+  config = await prisma.configuration.create({
+    data: {
+      userId,
+      exchange: 'binance',
+      apiKey: '',
+      secretKey: '',
+      stopLossPercent: 5.0,
+      takeProfitPercent: 10.0,
+      leverage: 1,
+      maxTradeAmount: 1000,
+      maxTradeAmountUnit: 'USDT',
+      allowedPairs: JSON.stringify(['BTC/USDT', 'ETH/USDT', 'SOL/USDT']),
+      useBnbForFees: DEFAULT_FEE_SETTINGS.useBnbForFees,
+      discountUsdtPercent: DEFAULT_FEE_SETTINGS.discountUsdtPercent,
+      discountBnbPercent: DEFAULT_FEE_SETTINGS.discountBnbPercent,
+      minBnbBalance: DEFAULT_FEE_SETTINGS.minBnbBalance,
+      reserveBnbForFeesEnabled: DEFAULT_FEE_SETTINGS.reserveBnbForFeesEnabled,
+      pairDiscovery: serializePairDiscoveryConfig(),
+      mode: 'spot',
+      orderType: 'market',
+      slippagePercent: 0.5,
+      strategies: defaultStrategies,
+    },
+  })
+
+  logger.info('[configurations] Configurações padrão criadas', {
+    module: 'configurations',
+    event: 'default_configuration_created',
+    userId,
+    configuration: sanitizeConfigurationForLogging(buildConfigurationResponse(config)),
+  })
+
+  return config
+}
+
+function mergePairDiscoveryState(
+  currentSerializedValue: string,
+  incoming?: PairDiscoveryOverride,
+) {
+  const current = parsePairDiscoveryConfig(currentSerializedValue)
+  return normalizePairDiscoveryConfig({
+    ...current,
+    ...incoming,
+    sources: {
+      ...current.sources,
+      ...(incoming?.sources ?? {}),
+    },
+    excludedAssets: incoming?.excludedAssets ?? current.excludedAssets,
+    managedPairs: incoming?.managedPairs ?? current.managedPairs,
+  })
+}
+
+function parseAllowedPairs(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === 'string')
+      : []
+  } catch {
+    return []
+  }
+}
+
 export async function getConfigurations(req: AuthRequest, res: Response): Promise<Response> {
   startTrace(req.userId!, 'getConfigurations', 'configurations')
 
@@ -148,101 +367,10 @@ export async function getConfigurations(req: AuthRequest, res: Response): Promis
     trace('DEBUG', 'configurations', 'getConfigurations', 'Buscando configurações do usuário', 0)
 
     const userId = req.userId!
-    let config = await prisma.configuration.findUnique({
-      where: { userId },
-    })
+    const config = await findOrCreateConfiguration(userId)
+    trace('DEBUG', 'configurations', 'getConfigurations', 'Configurações carregadas', 0)
 
-    if (!config) {
-      trace('DEBUG', 'configurations', 'getConfigurations', 'Configurações não encontradas, criando padrão', 0)
-
-      const defaultStrategies = buildDefaultStrategies()
-      config = await prisma.configuration.create({
-        data: {
-          userId,
-          exchange: 'binance',
-          apiKey: '',
-          secretKey: '',
-          stopLossPercent: 5.0,
-          takeProfitPercent: 10.0,
-          leverage: 1,
-          maxTradeAmount: 1000,
-          maxTradeAmountUnit: 'USDT',
-          allowedPairs: JSON.stringify(['BTC/USDT', 'ETH/USDT', 'SOL/USDT']),
-          discountUsdtPercent: 0.075,
-          discountBnbPercent: 0.075,
-          minBnbBalance: 0.01,
-          mode: 'spot',
-          orderType: 'market',
-          slippagePercent: 0.5,
-          strategies: defaultStrategies,
-        },
-      })
-
-      logger.info('[configurations] Configurações padrão criadas', {
-        module: 'configurations',
-        event: 'default_configuration_created',
-        userId,
-        configuration: {
-          exchangeApiKeys: {
-            exchange: config.exchange,
-            apiKey: '',
-            secretKey: '',
-          },
-          botParameters: {
-            riskManagement: {
-              stopLossPercent: config.stopLossPercent,
-              takeProfitPercent: config.takeProfitPercent,
-              leverage: config.leverage,
-              maxTradeAmount: config.maxTradeAmount,
-              maxTradeAmountUnit: config.maxTradeAmountUnit,
-            },
-            allowedPairs: JSON.parse(config.allowedPairs),
-            fees: {
-              discountUsdtPercent: config.discountUsdtPercent,
-              discountBnbPercent: config.discountBnbPercent,
-              minBnbBalance: config.minBnbBalance,
-            },
-            advanced: {
-              mode: config.mode,
-              orderType: config.orderType,
-              slippagePercent: config.slippagePercent,
-            },
-            strategies: JSON.parse(config.strategies),
-          },
-        },
-      })
-
-      trace('DEBUG', 'configurations', 'getConfigurations', 'Configurações padrão criadas', 0)
-    }
-
-    const response = {
-      exchangeApiKeys: {
-        exchange: config.exchange,
-        apiKey: config.apiKey,
-        secretKey: config.secretKey,
-      },
-      botParameters: {
-        riskManagement: {
-          stopLossPercent: config.stopLossPercent,
-          takeProfitPercent: config.takeProfitPercent,
-          leverage: config.leverage,
-          maxTradeAmount: config.maxTradeAmount,
-          maxTradeAmountUnit: config.maxTradeAmountUnit,
-        },
-        allowedPairs: JSON.parse(config.allowedPairs),
-        fees: {
-          discountUsdtPercent: config.discountUsdtPercent,
-          discountBnbPercent: config.discountBnbPercent,
-          minBnbBalance: config.minBnbBalance,
-        },
-        advanced: {
-          mode: config.mode,
-          orderType: config.orderType,
-          slippagePercent: config.slippagePercent,
-        },
-        strategies: JSON.parse(config.strategies),
-      },
-    }
+    const response = buildConfigurationResponse(config)
 
     trace('DEBUG', 'configurations', 'getConfigurations', 'Configurações retornadas com sucesso', 0)
     endTrace('getConfigurations', { userId })
@@ -296,6 +424,11 @@ export async function putConfigurations(req: AuthRequest, res: Response): Promis
 
     const { exchangeApiKeys, botParameters } = validation.data
     const userId = req.userId!
+    const existingConfig = await prisma.configuration.findUnique({
+      where: { userId },
+      select: { pairDiscovery: true },
+    })
+    const pairDiscoveryConfig = mergePairDiscoveryState(existingConfig?.pairDiscovery ?? serializePairDiscoveryConfig(), botParameters.pairDiscovery)
 
     await prisma.configuration.upsert({
       where: { userId },
@@ -309,9 +442,12 @@ export async function putConfigurations(req: AuthRequest, res: Response): Promis
         maxTradeAmount: botParameters.riskManagement.maxTradeAmount,
         maxTradeAmountUnit: botParameters.riskManagement.maxTradeAmountUnit,
         allowedPairs: JSON.stringify(botParameters.allowedPairs),
+        useBnbForFees: botParameters.fees.useBnbForFees,
         discountUsdtPercent: botParameters.fees.discountUsdtPercent,
         discountBnbPercent: botParameters.fees.discountBnbPercent,
         minBnbBalance: botParameters.fees.minBnbBalance,
+        reserveBnbForFeesEnabled: botParameters.fees.reserveBnbForFeesEnabled,
+        pairDiscovery: serializePairDiscoveryConfig(pairDiscoveryConfig),
         mode: botParameters.advanced.mode,
         orderType: botParameters.advanced.orderType,
         slippagePercent: botParameters.advanced.slippagePercent,
@@ -329,9 +465,12 @@ export async function putConfigurations(req: AuthRequest, res: Response): Promis
         maxTradeAmount: botParameters.riskManagement.maxTradeAmount,
         maxTradeAmountUnit: botParameters.riskManagement.maxTradeAmountUnit,
         allowedPairs: JSON.stringify(botParameters.allowedPairs),
+        useBnbForFees: botParameters.fees.useBnbForFees,
         discountUsdtPercent: botParameters.fees.discountUsdtPercent,
         discountBnbPercent: botParameters.fees.discountBnbPercent,
         minBnbBalance: botParameters.fees.minBnbBalance,
+        reserveBnbForFeesEnabled: botParameters.fees.reserveBnbForFeesEnabled,
+        pairDiscovery: serializePairDiscoveryConfig(pairDiscoveryConfig),
         mode: botParameters.advanced.mode,
         orderType: botParameters.advanced.orderType,
         slippagePercent: botParameters.advanced.slippagePercent,
@@ -362,6 +501,178 @@ export async function putConfigurations(req: AuthRequest, res: Response): Promis
     endTrace('putConfigurations', { userId: req.userId, errorFlag: true })
 
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
+  }
+}
+
+export async function getSocialLatest(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'getSocialLatest', 'configurations')
+
+  try {
+    const config = await findOrCreateConfiguration(req.userId!)
+    const pairDiscovery = parsePairDiscoveryConfig(config.pairDiscovery)
+    const signals = await getLatestSocialSignals(pairDiscovery)
+
+    endTrace('getSocialLatest', { userId: req.userId })
+    return res.json({
+      success: true,
+      data: signals,
+    })
+  } catch (error) {
+    logger.error('[configurations] Erro ao buscar sinais sociais', {
+      module: 'configurations',
+      event: 'get_social_latest_error',
+      userId: req.userId,
+      error,
+    })
+
+    endTrace('getSocialLatest', { userId: req.userId, errorFlag: true })
+    return res.status(500).json({ success: false, error: 'Erro ao buscar sinais sociais' })
+  }
+}
+
+export async function previewPairDiscovery(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'previewPairDiscovery', 'configurations')
+
+  try {
+    const validation = pairDiscoveryPreviewSchema.safeParse(req.body ?? {})
+    if (!validation.success) {
+      endTrace('previewPairDiscovery', { userId: req.userId, errorFlag: true })
+      return res.status(400).json({
+        success: false,
+        error: validation.error.errors.map((entry) => entry.message).join(', '),
+      })
+    }
+
+    const config = await findOrCreateConfiguration(req.userId!)
+    const currentPairDiscovery = parsePairDiscoveryConfig(config.pairDiscovery)
+    const pairDiscovery = mergePairDiscoveryState(config.pairDiscovery, validation.data.pairDiscovery)
+    const fees = normalizeFeeSettings({
+      useBnbForFees: config.useBnbForFees,
+      discountUsdtPercent: config.discountUsdtPercent,
+      discountBnbPercent: config.discountBnbPercent,
+      minBnbBalance: config.minBnbBalance,
+      reserveBnbForFeesEnabled: config.reserveBnbForFeesEnabled,
+      ...(validation.data.fees ?? {}),
+    })
+    const allowedPairs = validation.data.allowedPairs ?? parseAllowedPairs(config.allowedPairs)
+    const preview = await generatePairDiscoveryPreview({
+      allowedPairs,
+      fees,
+      pairDiscovery,
+    })
+
+    logger.info('[configurations] Preview de pair discovery gerado', {
+      module: 'configurations',
+      event: 'pair_discovery_preview_generated',
+      userId: req.userId,
+      reviewRequired: currentPairDiscovery.reviewRequired,
+      additions: preview.summary.additions,
+      removals: preview.summary.removals,
+    })
+
+    endTrace('previewPairDiscovery', { userId: req.userId })
+    return res.json({
+      success: true,
+      data: preview,
+    })
+  } catch (error) {
+    logger.error('[configurations] Erro ao gerar preview de pair discovery', {
+      module: 'configurations',
+      event: 'pair_discovery_preview_error',
+      userId: req.userId,
+      error,
+    })
+
+    endTrace('previewPairDiscovery', { userId: req.userId, errorFlag: true })
+    return res.status(500).json({ success: false, error: 'Erro ao gerar preview de pair discovery' })
+  }
+}
+
+export async function applyPairDiscovery(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'applyPairDiscovery', 'configurations')
+
+  try {
+    const validation = pairDiscoveryApplySchema.safeParse(req.body ?? {})
+    if (!validation.success) {
+      endTrace('applyPairDiscovery', { userId: req.userId, errorFlag: true })
+      return res.status(400).json({
+        success: false,
+        error: validation.error.errors.map((entry) => entry.message).join(', '),
+      })
+    }
+
+    const config = await findOrCreateConfiguration(req.userId!)
+    const pairDiscovery = mergePairDiscoveryState(config.pairDiscovery, validation.data.pairDiscovery)
+    const fees = normalizeFeeSettings({
+      useBnbForFees: config.useBnbForFees,
+      discountUsdtPercent: config.discountUsdtPercent,
+      discountBnbPercent: config.discountBnbPercent,
+      minBnbBalance: config.minBnbBalance,
+      reserveBnbForFeesEnabled: config.reserveBnbForFeesEnabled,
+      ...(validation.data.fees ?? {}),
+    })
+    const allowedPairs = validation.data.allowedPairs ?? parseAllowedPairs(config.allowedPairs)
+    const preview = await generatePairDiscoveryPreview({
+      allowedPairs,
+      fees,
+      pairDiscovery,
+    })
+
+    if (preview.reviewRequired && !validation.data.force) {
+      endTrace('applyPairDiscovery', { userId: req.userId })
+      return res.json({
+        success: true,
+        data: {
+          applied: false,
+          requiresConfirmation: true,
+          preview,
+        },
+      })
+    }
+
+    const updatedPairDiscovery = normalizePairDiscoveryConfig({
+      ...pairDiscovery,
+      managedPairs: preview.managedPairs,
+    })
+
+    const updatedConfig = await prisma.configuration.update({
+      where: { userId: req.userId! },
+      data: {
+        allowedPairs: JSON.stringify(preview.nextAllowedPairs),
+        pairDiscovery: serializePairDiscoveryConfig(updatedPairDiscovery),
+        updatedAt: new Date(),
+      },
+    })
+
+    logger.info('[configurations] Sugestões de pair discovery aplicadas', {
+      module: 'configurations',
+      event: 'pair_discovery_applied',
+      userId: req.userId,
+      additions: preview.summary.additions,
+      removals: preview.summary.removals,
+      reviewRequired: preview.reviewRequired,
+    })
+
+    endTrace('applyPairDiscovery', { userId: req.userId })
+    return res.json({
+      success: true,
+      data: {
+        applied: true,
+        requiresConfirmation: false,
+        preview,
+        configuration: buildConfigurationResponse(updatedConfig),
+      },
+    })
+  } catch (error) {
+    logger.error('[configurations] Erro ao aplicar sugestões de pair discovery', {
+      module: 'configurations',
+      event: 'pair_discovery_apply_error',
+      userId: req.userId,
+      error,
+    })
+
+    endTrace('applyPairDiscovery', { userId: req.userId, errorFlag: true })
+    return res.status(500).json({ success: false, error: 'Erro ao aplicar sugestões de pair discovery' })
   }
 }
 

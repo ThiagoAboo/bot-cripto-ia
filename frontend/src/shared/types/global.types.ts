@@ -78,6 +78,9 @@ export interface ApiResponse<T> {
     price: number
     total: number
     fee: number
+    feeCurrency?: string
+    feeRateApplied?: number
+    feeDiscountSource?: 'bnb' | 'usdt' | 'standard'
     status: 'executed' | 'pending' | 'cancelled'
     profitBrl?: number
     profitPercent?: number
@@ -94,9 +97,27 @@ export interface ApiResponse<T> {
     }
     allowedPairs: string[]
     fees: {
+      useBnbForFees: boolean
       discountUsdtPercent: number
       discountBnbPercent: number
       minBnbBalance: number
+      reserveBnbForFeesEnabled: boolean
+    }
+    pairDiscovery: {
+      autoDiscoveryEnabled: boolean
+      autoAddToAllowedPairs: boolean
+      autoRemoveFromAllowedPairs: boolean
+      reviewRequired: boolean
+      sources: {
+        reddit: boolean
+        rss: boolean
+        x: boolean
+        telegram: boolean
+      }
+      minSocialScore: number
+      minMentions: number
+      maxPairs: number
+      excludedAssets: string[]
     }
     advanced: {
       mode: 'spot' | 'futures'

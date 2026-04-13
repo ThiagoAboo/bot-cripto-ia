@@ -3,12 +3,19 @@ import { z } from 'zod'
 
 import { prisma } from '../config/database'
 import { AuthRequest } from '../middleware/auth.middleware'
+import {
+  buildStrategyId,
+  getAcceptedStrategyIdentifiers,
+  getBotInstanceById,
+  listBotTemplates,
+} from '../services/bot-registry.service'
 import { runTrainingBacktest } from '../services/training-backtest.service'
 import { readTrainingModelArtifact, saveTrainingModelArtifact } from '../services/training-model.service'
 import { assertTrainingUploadExists, parseTrainingUploadRequest, saveTrainingUpload, TrainingUploadError } from '../services/training-upload.service'
 import { emitTrainingStatus } from '../services/socket.service'
 import {
   cancelTrainingSessionProcessing,
+  captureTrainingSessionCheckpoint,
   getTrainingSessionLogs,
   pauseTrainingSessionProcessing,
   startTrainingSessionProcessing,
@@ -82,44 +89,24 @@ function normalizeTrainingLogLevel(level: unknown): 'INFO' | 'WARN' | 'ERROR' {
   return 'INFO'
 }
 
-function buildStrategyId(strategyType: string): string {
-  return strategyType.startsWith('strategy_') ? strategyType : `strategy_${strategyType}`
-}
-
-function buildStrategiesFromBots(
-  bots: Array<{ name: string; strategyType: string; description: string | null }>,
-) {
-  const strategies = new Map<string, { id: string; name: string; strategyType: string; description: string }>()
-
-  for (const bot of bots) {
-    if (strategies.has(bot.strategyType)) {
-      continue
-    }
-
-    strategies.set(bot.strategyType, {
-      id: buildStrategyId(bot.strategyType),
-      name: bot.name,
-      strategyType: bot.strategyType,
-      description: bot.description ?? `Estratégia ${bot.name}`,
-    })
-  }
-
-  return Array.from(strategies.values())
-}
-
 async function buildTrainingSessionResponse(session: any) {
   const config = safeJsonParse<Record<string, unknown>>(session.config, {})
   const metrics = safeJsonParse<any[]>(session.metrics, [])
   const logs = await getTrainingSessionLogs(session.userId, session.id)
-  const fallbackStrategyId = typeof session.bot?.strategyType === 'string'
+  const fallbackStrategyId = typeof session.bot?.template?.id === 'string'
+    ? session.bot.template.id
+    : typeof session.bot?.strategyType === 'string'
     ? buildStrategyId(session.bot.strategyType)
     : ''
+  const strategyName = session.bot?.template?.name
+    ?? session.bot?.name
+    ?? (typeof config.strategyId === 'string' ? config.strategyId : '')
 
   return {
     id: session.id,
     botId: session.botId,
     strategyId: typeof config.strategyId === 'string' ? config.strategyId : fallbackStrategyId,
-    strategyName: session.bot?.name ?? (typeof config.strategyId === 'string' ? config.strategyId : ''),
+    strategyName,
     status: session.status,
     startTime: session.startTime,
     endTime: session.endTime ?? undefined,
@@ -136,18 +123,7 @@ export async function getStrategies(req: AuthRequest, res: Response): Promise<Re
   startTrace(req.userId!, 'getStrategies', 'training')
 
   try {
-    const bots = await prisma.bot.findMany({
-      select: {
-        name: true,
-        strategyType: true,
-        description: true,
-      },
-      orderBy: [
-        { createdAt: 'asc' },
-        { name: 'asc' },
-      ],
-    })
-    const strategies = buildStrategiesFromBots(bots)
+    const strategies = await listBotTemplates()
 
     endTrace('getStrategies', { userId: req.userId })
     return res.json({ success: true, data: strategies })
@@ -179,7 +155,20 @@ export async function getTrainingSessions(req: AuthRequest, res: Response): Prom
     const sessions = await prisma.trainingSession.findMany({
       where,
       orderBy: { startTime: 'desc' },
-      include: { bot: { select: { name: true, strategyType: true } } },
+      include: {
+        bot: {
+          select: {
+            name: true,
+            strategyType: true,
+            template: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
+          },
+        },
+      },
     })
 
     const result = await Promise.all(sessions.map((session: any) => buildTrainingSessionResponse(session)))
@@ -250,16 +239,13 @@ export async function createTrainingSession(req: AuthRequest, res: Response): Pr
       return res.status(409).json({ success: false, error: 'Já existe um treinamento em andamento para este bot' })
     }
 
-    const bot = await prisma.bot.findUnique({ where: { id: data.botId } })
+    const bot = await getBotInstanceById(userId, data.botId)
     if (!bot) {
       endTrace('createTrainingSession', { userId, botId: data.botId, errorFlag: true })
       return res.status(404).json({ success: false, error: 'Bot nao encontrado' })
     }
 
-    const acceptedStrategyIds = new Set([
-      buildStrategyId(bot.strategyType),
-      bot.strategyType,
-    ])
+    const acceptedStrategyIds = getAcceptedStrategyIdentifiers(bot)
     if (!acceptedStrategyIds.has(data.strategyId)) {
       endTrace('createTrainingSession', { userId, botId: data.botId, errorFlag: true })
       return res.status(400).json({
@@ -301,7 +287,14 @@ export async function createTrainingSession(req: AuthRequest, res: Response): Pr
       success: true,
       data: await buildTrainingSessionResponse({
         ...session,
-        bot: bot ? { name: bot.name, strategyType: bot.strategyType } : null,
+        bot: bot ? {
+          name: bot.name,
+          strategyType: bot.strategyType,
+          template: bot.template ? {
+            id: bot.template.id,
+            name: bot.template.name,
+          } : null,
+        } : null,
       }),
     })
   } catch (error) {
@@ -394,7 +387,20 @@ export async function getTrainingSessionById(req: AuthRequest, res: Response): P
 
     const session = await prisma.trainingSession.findFirst({
       where: { id, userId },
-      include: { bot: { select: { name: true, strategyType: true } } },
+      include: {
+        bot: {
+          select: {
+            name: true,
+            strategyType: true,
+            template: {
+              select: {
+                id: true,
+                name: true,
+              },
+            },
+          },
+        },
+      },
     })
 
     if (!session) {
@@ -444,6 +450,7 @@ export async function pauseTrainingSession(req: AuthRequest, res: Response): Pro
     })
 
     pauseTrainingSessionProcessing(id)
+    await captureTrainingSessionCheckpoint(id, 'paused')
 
     logger.info('[training] Sessão de treinamento pausada', {
       module: 'training',
@@ -546,6 +553,7 @@ export async function cancelTrainingSession(req: AuthRequest, res: Response): Pr
     })
 
     cancelTrainingSessionProcessing(id)
+    await captureTrainingSessionCheckpoint(id, 'cancelled')
 
     logger.info('[training] Sessão de treinamento cancelada', {
       module: 'training',

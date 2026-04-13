@@ -118,7 +118,9 @@ export default function TreinamentoPage() {
     }
 
     const selectedBot = availableBots.find((bot) => bot.id === selectedBotId) ?? availableBots[0]
-    const matchingStrategy = strategies.find((strategy) => strategy.strategyType === selectedBot.strategyType)
+    const matchingStrategy = selectedBot.strategyId
+      ? strategies.find((strategy) => strategy.id === selectedBot.strategyId)
+      : strategies.find((strategy) => strategy.strategyType === selectedBot.strategyType)
 
     if (matchingStrategy && matchingStrategy.id !== selectedStrategyId) {
       setSelectedStrategyId(matchingStrategy.id)
