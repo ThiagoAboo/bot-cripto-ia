@@ -68,6 +68,14 @@ export default function TreinamentoPage() {
       optimizer: 'adam',
       lossFunction: 'mse',
       validationSplit: 20,
+      sequenceLength: 48,
+      forecastHorizonCandles: 5,
+      buyThresholdPercent: 0.3,
+      sellThresholdPercent: -0.3,
+      walkForwardFolds: 3,
+      nEstimators: 100,
+      maxDepth: 10,
+      randomState: 42,
       earlyStopping: {
         enabled: true,
         patience: 10,
@@ -291,6 +299,7 @@ export default function TreinamentoPage() {
           />
 
           <HyperparametersForm
+            architecture={config.architecture as Architecture}
             hyperparameters={config.hyperparameters!}
             onChange={(value) => setConfig({ ...config, hyperparameters: value })}
           />
@@ -379,7 +388,11 @@ export default function TreinamentoPage() {
         {backtestResult && activeSession && backtestResult.sessionId === activeSession.id && (
           <BacktestSummaryCard result={backtestResult} />
         )}
-        <MetricsChart metrics={activeSession?.metrics || []} isLoading={Boolean(activeSessionId) && isLoadingActiveSession} />
+        <MetricsChart
+          metrics={activeSession?.metrics || []}
+          isLoading={Boolean(activeSessionId) && isLoadingActiveSession}
+          evaluation={activeSession?.evaluation}
+        />
         <TrainingLogTerminal
           logs={activeSession?.logs || []}
           isLoading={Boolean(activeSessionId) && isLoadingActiveSession}

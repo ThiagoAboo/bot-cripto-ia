@@ -15,6 +15,9 @@ import {
   getUserRoom,
   setSocketServer,
 } from './services/socket.service'
+import { startBotWorker, stopBotWorker } from './services/bot-runner.service'
+import { startBinanceUserStreamService, stopBinanceUserStreamService } from './services/binance-user-stream.service'
+import { startPairDiscoveryRunner, stopPairDiscoveryRunner } from './services/pair-discovery-runner.service'
 import { startTrainingWorker, stopTrainingWorker } from './services/training-worker.service'
 import { logger } from './utils/logger'
 
@@ -259,11 +262,20 @@ app.get('/api/dashboard/currencies-balance', authMiddleware, dashboardController
 app.get('/api/dashboard/recent-transactions', authMiddleware, dashboardController.getRecentTransactions)
 app.get('/api/dashboard/transactions/recent', authMiddleware, dashboardController.getRecentTransactions)
 app.get('/api/dashboard/bots-status', authMiddleware, dashboardController.getBotsStatus)
+app.get('/api/dashboard/bots/templates', authMiddleware, dashboardController.getBotTemplates)
+app.get('/api/dashboard/bots', authMiddleware, dashboardController.getBotsStatus)
+app.get('/api/dashboard/bots/worker-status', authMiddleware, dashboardController.getBotWorkerStatus)
+app.get('/api/dashboard/bots/:id', authMiddleware, dashboardController.getBotDetail)
+app.get('/api/dashboard/bots/:id/history', authMiddleware, dashboardController.getBotHistory)
 app.get('/api/dashboard/bots/:id/analysis', authMiddleware, dashboardController.getBotAnalysis)
+app.post('/api/dashboard/bots', authMiddleware, dashboardController.createBot)
+app.post('/api/dashboard/bots/:id/run', authMiddleware, dashboardController.runBotCycleNow)
 app.post('/api/dashboard/bots/:id/pause', authMiddleware, dashboardController.pauseBot)
 app.put('/api/dashboard/bots/:id/pause', authMiddleware, dashboardController.pauseBot)
 app.post('/api/dashboard/bots/:id/resume', authMiddleware, dashboardController.resumeBot)
 app.put('/api/dashboard/bots/:id/resume', authMiddleware, dashboardController.resumeBot)
+app.put('/api/dashboard/bots/:id', authMiddleware, dashboardController.updateBot)
+app.delete('/api/dashboard/bots/:id', authMiddleware, dashboardController.deleteBot)
 app.get('/api/dashboard/performance', authMiddleware, dashboardController.getPerformance)
 
 app.get('/api/configurations', authMiddleware, configurationsController.getConfigurations)
@@ -273,6 +285,7 @@ app.post('/api/configurations/test', authMiddleware, configurationsController.te
 app.get('/api/configurations/exchange-pairs', authMiddleware, configurationsController.getExchangePairs)
 app.post('/api/configurations/pair-discovery/preview', authMiddleware, configurationsController.previewPairDiscovery)
 app.post('/api/configurations/pair-discovery/apply', authMiddleware, configurationsController.applyPairDiscovery)
+app.post('/api/configurations/pair-discovery/run', authMiddleware, configurationsController.runPairDiscoveryNow)
 app.get('/api/exchange/pairs', authMiddleware, configurationsController.getExchangePairs)
 app.get('/api/social/latest', authMiddleware, configurationsController.getSocialLatest)
 
@@ -294,6 +307,8 @@ app.get('/api/training/sessions/:id/download', authMiddleware, trainingControlle
 app.get('/api/orders', authMiddleware, transactionsController.getOrders)
 app.get('/api/orders/:id', authMiddleware, transactionsController.getOrderById)
 app.post('/api/orders', authMiddleware, transactionsController.createOrder)
+app.post('/api/orders/reconcile', authMiddleware, transactionsController.reconcileOrders)
+app.post('/api/orders/:id/reconcile', authMiddleware, transactionsController.reconcileOrder)
 app.delete('/api/orders/:id/cancel', authMiddleware, transactionsController.cancelOrder)
 app.get('/api/balance', authMiddleware, transactionsController.getBalance)
 app.get('/api/exchange/rate', authMiddleware, transactionsController.getExchangeRate)
@@ -378,12 +393,24 @@ export async function startServer(port: number = PORT): Promise<typeof httpServe
       if (process.env.TRAINING_WORKER_AUTOSTART !== 'false' && process.env.NODE_ENV !== 'test') {
         startTrainingWorker()
       }
+      if (process.env.BOT_WORKER_AUTOSTART !== 'false' && process.env.NODE_ENV !== 'test') {
+        startBotWorker()
+      }
+      if (process.env.BINANCE_USER_STREAM_AUTOSTART !== 'false' && process.env.NODE_ENV !== 'test') {
+        startBinanceUserStreamService()
+      }
+      if (process.env.PAIR_DISCOVERY_AUTOSYNC_AUTOSTART !== 'false' && process.env.NODE_ENV !== 'test') {
+        startPairDiscoveryRunner()
+      }
       resolve(httpServer)
     })
   })
 }
 
 httpServer.on('close', () => {
+  stopBotWorker()
+  stopBinanceUserStreamService()
+  stopPairDiscoveryRunner()
   stopTrainingWorker()
 })
 

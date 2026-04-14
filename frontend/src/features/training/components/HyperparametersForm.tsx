@@ -4,8 +4,10 @@ import { Input } from '../../../shared/components/ui/Input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../shared/components/ui/Select'
 import { Switch } from '../../../shared/components/ui/Switch'
 import { Sliders, TrendingUp, Activity, Brain } from 'lucide-react'
+import type { Architecture } from '../types/training.types'
 
 interface HyperparametersFormProps {
+  architecture: Architecture
   hyperparameters: {
     hiddenLayers: number
     neuronsPerLayer: number[]
@@ -17,6 +19,14 @@ interface HyperparametersFormProps {
     optimizer: 'adam' | 'sgd' | 'rmsprop'
     lossFunction: 'mse' | 'mae' | 'huber'
     validationSplit: number
+    sequenceLength?: number
+    forecastHorizonCandles?: number
+    buyThresholdPercent?: number
+    sellThresholdPercent?: number
+    walkForwardFolds?: number
+    nEstimators?: number
+    maxDepth?: number
+    randomState?: number
     earlyStopping: {
       enabled: boolean
       patience: number
@@ -25,7 +35,7 @@ interface HyperparametersFormProps {
   onChange: (data: any) => void
 }
 
-export function HyperparametersForm({ hyperparameters, onChange }: HyperparametersFormProps) {
+export function HyperparametersForm({ architecture, hyperparameters, onChange }: HyperparametersFormProps) {
   const handleChange = (field: string, value: any) => {
     onChange({ ...hyperparameters, [field]: value })
   }
@@ -59,6 +69,10 @@ export function HyperparametersForm({ hyperparameters, onChange }: Hyperparamete
     }
   }
 
+  const usesSequentialArchitecture = ['lstm', 'cnn', 'transformer'].includes(architecture)
+  const usesTreeArchitecture = ['random_forest', 'xgboost'].includes(architecture)
+  const usesDenseArchitecture = ['lstm', 'cnn', 'transformer', 'linear_regression'].includes(architecture)
+
   return (
     <Card>
       <CardHeader>
@@ -75,63 +89,116 @@ export function HyperparametersForm({ hyperparameters, onChange }: Hyperparamete
             <Brain className="w-4 h-4" />
             Arquitetura da Rede
           </h4>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label>Camadas ocultas</Label>
-              <Input
-                type="number"
-                value={hyperparameters.hiddenLayers}
-                onChange={(e) => handleChange('hiddenLayers', parseInt(e.target.value))}
-                min={1}
-                max={10}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Dropout rate</Label>
-              <Input
-                type="number"
-                step="0.05"
-                min="0"
-                max="0.5"
-                value={hyperparameters.dropoutRate}
-                onChange={(e) => handleChange('dropoutRate', parseFloat(e.target.value))}
-              />
-            </div>
-          </div>
+          {usesDenseArchitecture && (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Camadas ocultas</Label>
+                  <Input
+                    type="number"
+                    value={hyperparameters.hiddenLayers}
+                    onChange={(e) => handleChange('hiddenLayers', parseInt(e.target.value))}
+                    min={1}
+                    max={10}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Dropout rate</Label>
+                  <Input
+                    type="number"
+                    step="0.05"
+                    min="0"
+                    max="0.5"
+                    value={hyperparameters.dropoutRate}
+                    onChange={(e) => handleChange('dropoutRate', parseFloat(e.target.value))}
+                  />
+                </div>
+              </div>
 
-          {/* Neurônios por camada */}
-          <div className="space-y-2">
-            <Label>Neurônios por camada</Label>
-            {hyperparameters.neuronsPerLayer.map((neurons, index) => (
-              <div key={index} className="flex gap-2 items-center">
-                <span className="text-sm text-gray-500 w-8">L{index + 1}</span>
+              <div className="space-y-2">
+                <Label>Neurônios por camada</Label>
+                {hyperparameters.neuronsPerLayer.map((neurons, index) => (
+                  <div key={index} className="flex gap-2 items-center">
+                    <span className="text-sm text-gray-500 w-8">L{index + 1}</span>
+                    <Input
+                      type="number"
+                      value={neurons}
+                      onChange={(e) => handleNeuronsChange(index, parseInt(e.target.value))}
+                      min={8}
+                      max={512}
+                      step={8}
+                    />
+                  </div>
+                ))}
+                <div className="flex gap-2 mt-2">
+                  <button
+                    type="button"
+                    onClick={addLayer}
+                    className="text-xs text-primary-400 hover:text-primary-300"
+                  >
+                    + Adicionar camada
+                  </button>
+                  <button
+                    type="button"
+                    onClick={removeLayer}
+                    className="text-xs text-error hover:text-error/80"
+                  >
+                    - Remover última camada
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+
+          {usesSequentialArchitecture && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Sequence length</Label>
                 <Input
                   type="number"
-                  value={neurons}
-                  onChange={(e) => handleNeuronsChange(index, parseInt(e.target.value))}
+                  value={hyperparameters.sequenceLength ?? 48}
+                  onChange={(e) => handleChange('sequenceLength', parseInt(e.target.value))}
                   min={8}
                   max={512}
-                  step={8}
                 />
               </div>
-            ))}
-            <div className="flex gap-2 mt-2">
-              <button
-                type="button"
-                onClick={addLayer}
-                className="text-xs text-primary-400 hover:text-primary-300"
-              >
-                + Adicionar camada
-              </button>
-              <button
-                type="button"
-                onClick={removeLayer}
-                className="text-xs text-error hover:text-error/80"
-              >
-                - Remover última camada
-              </button>
             </div>
-          </div>
+          )}
+
+          {usesTreeArchitecture && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label>N estimators</Label>
+                <Input
+                  type="number"
+                  value={hyperparameters.nEstimators ?? 100}
+                  onChange={(e) => handleChange('nEstimators', parseInt(e.target.value))}
+                  min={10}
+                  max={1000}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Max depth</Label>
+                <Input
+                  type="number"
+                  value={hyperparameters.maxDepth ?? 10}
+                  onChange={(e) => handleChange('maxDepth', parseInt(e.target.value))}
+                  min={2}
+                  max={32}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Random state</Label>
+                <Input
+                  type="number"
+                  value={hyperparameters.randomState ?? 42}
+                  onChange={(e) => handleChange('randomState', parseInt(e.target.value))}
+                  min={1}
+                  max={9999}
+                />
+              </div>
+            </div>
+          )}
 
           <div className="space-y-2">
             <Label>Função de ativação</Label>
@@ -232,6 +299,47 @@ export function HyperparametersForm({ hyperparameters, onChange }: Hyperparamete
                 max="50"
                 value={hyperparameters.validationSplit}
                 onChange={(e) => handleChange('validationSplit', parseInt(e.target.value))}
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Horizonte de label (candles)</Label>
+              <Input
+                type="number"
+                value={hyperparameters.forecastHorizonCandles ?? 5}
+                onChange={(e) => handleChange('forecastHorizonCandles', parseInt(e.target.value))}
+                min={1}
+                max={48}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Walk-forward folds</Label>
+              <Input
+                type="number"
+                value={hyperparameters.walkForwardFolds ?? 3}
+                onChange={(e) => handleChange('walkForwardFolds', parseInt(e.target.value))}
+                min={2}
+                max={6}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Threshold de compra (%)</Label>
+              <Input
+                type="number"
+                step="0.1"
+                value={hyperparameters.buyThresholdPercent ?? 0.3}
+                onChange={(e) => handleChange('buyThresholdPercent', parseFloat(e.target.value))}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Threshold de venda (%)</Label>
+              <Input
+                type="number"
+                step="0.1"
+                value={hyperparameters.sellThresholdPercent ?? -0.3}
+                onChange={(e) => handleChange('sellThresholdPercent', parseFloat(e.target.value))}
               />
             </div>
           </div>

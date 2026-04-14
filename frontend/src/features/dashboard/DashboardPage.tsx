@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useWebSocket } from '../../app/providers/WebSocketProvider'
-import { useTotalBalance, useCurrenciesBalance, useRecentTransactions, useBotsStatus, usePauseBot, useResumeBot, useBotAnalysis } from './hooks/useDashboardData'
+import { useTotalBalance, useCurrenciesBalance, useRecentTransactions, useBotsStatus, usePauseBot, useResumeBot, useBotAnalysis, useRunBotCycle } from './hooks/useDashboardData'
 import { DASHBOARD_QUERY_KEYS } from './hooks/useDashboardData'
 import { usePerformanceData } from './hooks/usePerformanceData'
 import { TotalBalanceCard } from './components/TotalBalanceCard'
@@ -23,6 +23,7 @@ export function DashboardPage() {
   const { data: performanceData, isLoading: isLoadingPerformance, selectedPeriod, onPeriodChange } = usePerformanceData('7d')
   const { mutate: pauseBot, isPending: isPausing } = usePauseBot()
   const { mutate: resumeBot, isPending: isResuming } = useResumeBot()
+  const { mutate: runBotCycle, isPending: isRunningBotCycle } = useRunBotCycle()
 
   const isMutating = isPausing || isResuming
 
@@ -132,6 +133,8 @@ export function DashboardPage() {
             onSelectBot={setSelectedBotId}
             data={botAnalysis}
             isLoading={isLoadingBotAnalysis || isLoadingBots}
+            onRunCycle={() => selectedBotId && runBotCycle(selectedBotId)}
+            isRunningCycle={isRunningBotCycle}
           />
         </div>
       </div>

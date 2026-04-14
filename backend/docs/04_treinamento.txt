@@ -175,6 +175,10 @@ RESPONSE (200 - Sucesso):
         "epoch": 1,
         "trainLoss": 0.0234,
         "valLoss": 0.0256,
+        "precision": 71.4,
+        "recall": 69.8,
+        "f1Score": 70.59,
+        "logLoss": 0.0321,
         "learningRate": 0.001,
         "duration": 1200
       }
@@ -188,7 +192,22 @@ RESPONSE (200 - Sucesso):
       }
     ],
     "bestEpoch": null,
-    "bestValLoss": null
+    "bestValLoss": null,
+    "evaluation": {
+      "architecture": "xgboost",
+      "architectureLabel": "XGBoost",
+      "validationStrategy": "walk_forward",
+      "validationSplitPercent": 20,
+      "walkForwardFolds": 3,
+      "labelConfiguration": {
+        "horizonCandles": 5,
+        "buyThresholdPercent": 0.3,
+        "sellThresholdPercent": -0.3
+      },
+      "bestAccuracy": 74.2,
+      "bestF1Score": 72.8,
+      "logLoss": 0.0315
+    }
   }
 }
 
@@ -274,6 +293,11 @@ CAMPOS ATUALIZADOS:
 
 Descrição: Executa backtesting com o modelo treinado
 
+Observação operacional:
+- quando `TRAINING_ML_ENGINE_PROVIDER=python`, o backtest usa engine real em Python
+  (`scikit-learn` / `xgboost` / `torch`) para treinar no período histórico e inferir no
+  período de teste, mantendo o contrato HTTP do backend
+
 HEADERS:
   Authorization: Bearer {token}
 
@@ -294,7 +318,16 @@ RESPONSE (200 - Sucesso):
     "totalProfit": 12500.75,
     "sharpeRatio": 1.85,
     "maxDrawdown": -12.5,
-    "profitFactor": 1.92
+    "profitFactor": 1.92,
+    "benchmark": {
+      "strategy": "buy_and_hold",
+      "label": "Buy and Hold"
+    },
+    "benchmarks": [],
+    "pairBreakdown": [],
+    "validation": {
+      "mode": "walk_forward"
+    }
   }
 }
 
@@ -306,6 +339,12 @@ TABELAS ENVOLVIDAS:
 -------------------------------------------------------------------------------
 
 Descrição: Salva permanentemente o modelo treinado
+
+Observação operacional:
+- quando o provider Python está ativo, este endpoint executa o treino real antes de
+  persistir o artefato final
+- o artefato salvo passa a incluir `enginePackage`, contendo o payload serializado do
+  modelo para inferência posterior nos bots
 
 HEADERS:
   Authorization: Bearer {token}
@@ -352,6 +391,11 @@ RESPONSE:
   Content-Type: application/octet-stream
   Content-Disposition: attachment; filename="model_session_123.h5"
   (arquivo binário)
+
+Observação:
+- o arquivo baixado continua sendo entregue como `application/octet-stream`, mas o
+  conteúdo é um artefato JSON versionado com métricas, reprodutibilidade e, quando
+  disponível, o `enginePackage` serializado do modelo real
 
 TABELAS ENVOLVIDAS:
 - TrainingSession (leitura do modelUrl)

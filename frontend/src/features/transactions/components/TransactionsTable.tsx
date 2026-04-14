@@ -10,7 +10,7 @@ import { Skeleton } from '../../../shared/components/ui/Skeleton'
 import { Button } from '../../../shared/components/ui/Button'
 import { ChevronLeft, ChevronRight, Download, TrendingUp, TrendingDown, Bot, User } from 'lucide-react'
 import { formatCurrency, formatDate, formatPercent, getProfitColor, cn } from '../../../shared/utils/formatters'
-import type { TransactionsResponse, OrderFilters } from '../types/transactions.types'
+import type { OrderFilters, OrderStatus, Transaction, TransactionsResponse } from '../types/transactions.types'
 
 interface TransactionsTableProps {
   data?: TransactionsResponse
@@ -20,6 +20,23 @@ interface TransactionsTableProps {
   displayCurrency: string
   onExport: () => void
   isExporting?: boolean
+}
+
+const STATUS_STYLES: Record<OrderStatus, { label: string; className: string }> = {
+  executed: { label: 'Executada', className: 'bg-success/10 text-success' },
+  pending: { label: 'Pendente', className: 'bg-warning/10 text-warning' },
+  partially_filled: { label: 'Parcial', className: 'bg-primary-600/10 text-primary-400' },
+  cancelled: { label: 'Cancelada', className: 'bg-error/10 text-error' },
+  rejected: { label: 'Rejeitada', className: 'bg-error/10 text-error' },
+}
+
+function getQuantityPrecision(pair: string): number {
+  return pair.includes('BTC') ? 8 : 4
+}
+
+function hasRequestedQuantity(transaction: Transaction): boolean {
+  return typeof transaction.requestedQuantity === 'number'
+    && transaction.requestedQuantity > transaction.quantity + 1e-8
 }
 
 export function TransactionsTable({
@@ -105,6 +122,8 @@ export function TransactionsTable({
                 const convertedTotal = tx.total
                 const convertedFee = tx.fee
                 const convertedProfit = tx.profitBrl || 0
+                const quantityPrecision = getQuantityPrecision(tx.pair)
+                const statusStyle = STATUS_STYLES[tx.status]
                 
                 return (
                   <TableRow key={tx.id} className="hover:bg-dark-300/50">
@@ -136,7 +155,14 @@ export function TransactionsTable({
                       </span>
                     </TableCell>
                     <TableCell className="text-right font-mono">
-                      {tx.quantity.toFixed(tx.pair.includes('BTC') ? 8 : 4)}
+                      <div className="flex flex-col items-end">
+                        <span>{tx.quantity.toFixed(quantityPrecision)}</span>
+                        {hasRequestedQuantity(tx) && (
+                          <span className="text-xs text-gray-500">
+                            de {tx.requestedQuantity?.toFixed(quantityPrecision)} solicitado
+                          </span>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className="text-right">
                       {formatCurrency(convertedPrice, displayCurrency)}
@@ -148,15 +174,16 @@ export function TransactionsTable({
                       {formatCurrency(convertedFee, displayCurrency)}
                     </TableCell>
                     <TableCell className="text-right">
-                      <span className={cn(
-                        'px-2 py-1 rounded-full text-xs font-medium',
-                        tx.status === 'executed' ? 'bg-success/10 text-success' :
-                        tx.status === 'pending' ? 'bg-warning/10 text-warning' :
-                        'bg-error/10 text-error'
-                      )}>
-                        {tx.status === 'executed' ? 'Executada' :
-                         tx.status === 'pending' ? 'Pendente' : 'Cancelada'}
-                      </span>
+                      <div className="flex flex-col items-end gap-1">
+                        <span className={cn('px-2 py-1 rounded-full text-xs font-medium', statusStyle.className)}>
+                          {statusStyle.label}
+                        </span>
+                        {tx.externalStatus && (
+                          <span className="text-[11px] uppercase tracking-wide text-gray-500">
+                            Binance: {tx.externalStatus}
+                          </span>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className={cn("text-right font-medium", getProfitColor(convertedProfit))}>
                       {tx.status === 'executed' && (

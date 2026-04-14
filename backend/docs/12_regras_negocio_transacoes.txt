@@ -108,6 +108,53 @@ REGRAS:
    - Mas o cálculo de quantidade máxima deve preservar a reserva mínima
 
 -------------------------------------------------------------------------------
+RN-TRN-007: Ciclo de Vida de Ordem Externa e Reconciliação
+-------------------------------------------------------------------------------
+
+APIs:
+- POST /api/orders/reconcile
+- POST /api/orders/{id}/reconcile
+- DELETE /api/orders/{id}/cancel
+
+REGRAS:
+1. Ordens reais da exchange devem persistir metadados externos:
+   - externalOrderId
+   - externalClientOrderId
+   - externalStatus
+   - syncedAt
+
+2. O sistema deve suportar os estados locais:
+   - pending
+   - partially_filled
+   - executed
+   - cancelled
+   - rejected
+
+3. Ao reconciliar uma ordem externa:
+   - consultar o status atual na exchange
+   - consultar fills/trades quando disponíveis
+   - recalcular quantity, total, fee, feeCurrency e feeRateApplied
+   - atualizar syncedAt
+
+4. Se a ordem estiver parcialmente executada:
+   - quantity representa o volume já executado
+   - requestedQuantity representa o volume originalmente enviado
+   - a ordem deve continuar bloqueando novos ciclos full_auto do mesmo bot
+
+5. Se a ordem passar para executed:
+   - sincronizar saldos locais
+   - registrar snapshot em BalanceHistory
+   - calcular FIFO/lucro quando for venda
+
+6. Se a ordem for cancelada ou rejeitada:
+   - encerrar o ciclo local da ordem
+   - emitir order:updated
+   - liberar o bot para novas decisões no próximo ciclo
+
+7. O cancelamento de ordem externa deve chamar a exchange antes de atualizar o estado local
+   - após o cancelamento, a ordem deve ser reconciliada novamente
+
+-------------------------------------------------------------------------------
 RN-TRN-006: Inclusão/Exclusão Automática de Pares
 -------------------------------------------------------------------------------
 

@@ -14,6 +14,7 @@ import {
 } from '../services/configuration.service'
 import { ExternalApiError } from '../services/external-http.service'
 import { generatePairDiscoveryPreview, getLatestSocialSignals } from '../services/pair-discovery.service'
+import { getPairDiscoveryRunnerStatus, runPairDiscoveryForUser } from '../services/pair-discovery-runner.service'
 import { endTrace, startTrace, trace } from '../utils/tracer'
 
 const feesSchema = z.object({
@@ -36,12 +37,17 @@ const pairDiscoverySchema = z.object({
   autoAddToAllowedPairs: z.boolean(),
   autoRemoveFromAllowedPairs: z.boolean(),
   reviewRequired: z.boolean(),
+  autoSyncIntervalMinutes: z.number().min(5),
   sources: pairDiscoverySourcesSchema,
   minSocialScore: z.number().min(0).max(100),
   minMentions: z.number().min(0),
   maxPairs: z.number().positive(),
   excludedAssets: z.array(z.string()),
   managedPairs: z.array(z.string()).optional(),
+  lastSyncAt: z.string().optional(),
+  lastAppliedAt: z.string().optional(),
+  lastSyncStatus: z.enum(['idle', 'previewed', 'applied', 'skipped', 'error']).optional(),
+  lastSyncSummary: z.string().optional(),
 })
 
 const pairDiscoveryOverrideSchema = z.object({
@@ -49,12 +55,17 @@ const pairDiscoveryOverrideSchema = z.object({
   autoAddToAllowedPairs: z.boolean().optional(),
   autoRemoveFromAllowedPairs: z.boolean().optional(),
   reviewRequired: z.boolean().optional(),
+  autoSyncIntervalMinutes: z.number().min(5).optional(),
   sources: pairDiscoverySourcesSchema.partial().optional(),
   minSocialScore: z.number().min(0).max(100).optional(),
   minMentions: z.number().min(0).optional(),
   maxPairs: z.number().positive().optional(),
   excludedAssets: z.array(z.string()).optional(),
   managedPairs: z.array(z.string()).optional(),
+  lastSyncAt: z.string().optional(),
+  lastAppliedAt: z.string().optional(),
+  lastSyncStatus: z.enum(['idle', 'previewed', 'applied', 'skipped', 'error']).optional(),
+  lastSyncSummary: z.string().optional(),
 })
 
 const configurationsSchema = z.object({
@@ -673,6 +684,47 @@ export async function applyPairDiscovery(req: AuthRequest, res: Response): Promi
 
     endTrace('applyPairDiscovery', { userId: req.userId, errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro ao aplicar sugestões de pair discovery' })
+  }
+}
+
+export async function runPairDiscoveryNow(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'runPairDiscoveryNow', 'configurations')
+
+  try {
+    const result = await runPairDiscoveryForUser(req.userId!)
+    const runnerStatus = getPairDiscoveryRunnerStatus()
+    const refreshedConfig = await findOrCreateConfiguration(req.userId!)
+
+    logger.info('[configurations] Execução manual de pair discovery concluída', {
+      module: 'configurations',
+      event: 'pair_discovery_manual_run',
+      userId: req.userId,
+      applied: result.applied,
+      previewRequired: result.previewRequired,
+      status: result.status,
+      additions: result.preview.summary.additions,
+      removals: result.preview.summary.removals,
+    })
+
+    endTrace('runPairDiscoveryNow', { userId: req.userId })
+    return res.json({
+      success: true,
+      data: {
+        ...result,
+        runner: runnerStatus,
+        configuration: buildConfigurationResponse(refreshedConfig),
+      },
+    })
+  } catch (error) {
+    logger.error('[configurations] Erro ao executar pair discovery manualmente', {
+      module: 'configurations',
+      event: 'pair_discovery_manual_run_error',
+      userId: req.userId,
+      error,
+    })
+
+    endTrace('runPairDiscoveryNow', { userId: req.userId, errorFlag: true })
+    return res.status(500).json({ success: false, error: 'Erro ao executar descoberta automática' })
   }
 }
 

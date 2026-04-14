@@ -1,7 +1,7 @@
 // Tipos específicos da tela de Transações
 
 export type OrderType = 'market' | 'limit'
-export type OrderStatus = 'executed' | 'pending' | 'cancelled'
+export type OrderStatus = 'executed' | 'pending' | 'partially_filled' | 'cancelled' | 'rejected'
 export type OrderOrigin = 'manual' | 'bot'
 
 export interface Transaction {
@@ -13,6 +13,7 @@ export interface Transaction {
   botName?: string
   type: 'buy' | 'sell'
   quantity: number
+  requestedQuantity?: number
   price: number
   total: number
   fee: number
@@ -20,6 +21,11 @@ export interface Transaction {
   feeRateApplied?: number
   feeDiscountSource?: 'bnb' | 'usdt' | 'standard'
   status: OrderStatus
+  orderType?: OrderType
+  externalOrderId?: string
+  externalClientOrderId?: string
+  externalStatus?: string
+  syncedAt?: string
   profitBrl?: number
   profitPercent?: number
 }

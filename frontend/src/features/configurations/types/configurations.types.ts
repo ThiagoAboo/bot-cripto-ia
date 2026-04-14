@@ -34,12 +34,17 @@ export interface FeesConfig {
     autoAddToAllowedPairs: boolean
     autoRemoveFromAllowedPairs: boolean
     reviewRequired: boolean
+    autoSyncIntervalMinutes: number
     sources: PairDiscoverySources
     minSocialScore: number
     minMentions: number
     maxPairs: number
     excludedAssets: string[]
     managedPairs?: string[]
+    lastSyncAt?: string
+    lastAppliedAt?: string
+    lastSyncStatus?: 'idle' | 'previewed' | 'applied' | 'skipped' | 'error'
+    lastSyncSummary?: string
   }
 
   export type SocialSource = 'reddit' | 'rss' | 'x' | 'telegram'
@@ -95,6 +100,20 @@ export interface FeesConfig {
     requiresConfirmation: boolean
     preview: PairDiscoveryPreview
     configuration?: Configurations
+  }
+
+  export interface PairDiscoveryRunResponse {
+    userId: string
+    applied: boolean
+    previewRequired: boolean
+    preview: PairDiscoveryPreview
+    status: 'idle' | 'previewed' | 'applied' | 'skipped' | 'error'
+    summary: string
+    configuration?: Configurations
+    runner: {
+      running: boolean
+      lastCycleAt?: string | null
+    }
   }
   
   export interface AdvancedOptions {

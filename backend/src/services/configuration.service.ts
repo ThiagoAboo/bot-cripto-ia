@@ -18,12 +18,17 @@ export interface PairDiscoveryConfig {
   autoAddToAllowedPairs: boolean
   autoRemoveFromAllowedPairs: boolean
   reviewRequired: boolean
+  autoSyncIntervalMinutes: number
   sources: PairDiscoverySources
   minSocialScore: number
   minMentions: number
   maxPairs: number
   excludedAssets: string[]
   managedPairs: string[]
+  lastSyncAt?: string
+  lastAppliedAt?: string
+  lastSyncStatus?: 'idle' | 'previewed' | 'applied' | 'skipped' | 'error'
+  lastSyncSummary?: string
 }
 
 export const DEFAULT_FEE_SETTINGS: FeeSettings = {
@@ -39,6 +44,7 @@ export const DEFAULT_PAIR_DISCOVERY_CONFIG: PairDiscoveryConfig = {
   autoAddToAllowedPairs: false,
   autoRemoveFromAllowedPairs: false,
   reviewRequired: true,
+  autoSyncIntervalMinutes: 60,
   sources: {
     reddit: true,
     rss: false,
@@ -113,6 +119,7 @@ export function normalizePairDiscoveryConfig(input?: Partial<PairDiscoveryConfig
     autoAddToAllowedPairs: normalizeBoolean(input?.autoAddToAllowedPairs, DEFAULT_PAIR_DISCOVERY_CONFIG.autoAddToAllowedPairs),
     autoRemoveFromAllowedPairs: normalizeBoolean(input?.autoRemoveFromAllowedPairs, DEFAULT_PAIR_DISCOVERY_CONFIG.autoRemoveFromAllowedPairs),
     reviewRequired: normalizeBoolean(input?.reviewRequired, DEFAULT_PAIR_DISCOVERY_CONFIG.reviewRequired),
+    autoSyncIntervalMinutes: normalizeNumber(input?.autoSyncIntervalMinutes, DEFAULT_PAIR_DISCOVERY_CONFIG.autoSyncIntervalMinutes, 5),
     sources: {
       reddit: normalizeBoolean(input?.sources?.reddit, DEFAULT_PAIR_DISCOVERY_CONFIG.sources.reddit),
       rss: normalizeBoolean(input?.sources?.rss, DEFAULT_PAIR_DISCOVERY_CONFIG.sources.rss),
@@ -124,6 +131,18 @@ export function normalizePairDiscoveryConfig(input?: Partial<PairDiscoveryConfig
     maxPairs: normalizeNumber(input?.maxPairs, DEFAULT_PAIR_DISCOVERY_CONFIG.maxPairs, 1),
     excludedAssets: normalizeStringArray(input?.excludedAssets ?? DEFAULT_PAIR_DISCOVERY_CONFIG.excludedAssets),
     managedPairs: normalizeStringArray(input?.managedPairs ?? DEFAULT_PAIR_DISCOVERY_CONFIG.managedPairs),
+    lastSyncAt: typeof input?.lastSyncAt === 'string' ? input.lastSyncAt : undefined,
+    lastAppliedAt: typeof input?.lastAppliedAt === 'string' ? input.lastAppliedAt : undefined,
+    lastSyncStatus: (
+      input?.lastSyncStatus === 'idle'
+      || input?.lastSyncStatus === 'previewed'
+      || input?.lastSyncStatus === 'applied'
+      || input?.lastSyncStatus === 'skipped'
+      || input?.lastSyncStatus === 'error'
+    )
+      ? input.lastSyncStatus
+      : undefined,
+    lastSyncSummary: typeof input?.lastSyncSummary === 'string' ? input.lastSyncSummary : undefined,
   }
 }
 

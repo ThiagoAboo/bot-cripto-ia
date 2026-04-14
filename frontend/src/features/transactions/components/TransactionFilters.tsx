@@ -16,7 +16,9 @@ interface TransactionFiltersProps {
 const statusOptions: { value: OrderStatus; label: string }[] = [
   { value: 'executed', label: 'Executada' },
   { value: 'pending', label: 'Pendente' },
+  { value: 'partially_filled', label: 'Parcial' },
   { value: 'cancelled', label: 'Cancelada' },
+  { value: 'rejected', label: 'Rejeitada' },
 ]
 
 const typeOptions = [

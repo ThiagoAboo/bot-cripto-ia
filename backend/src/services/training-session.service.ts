@@ -1,5 +1,11 @@
 import { prisma } from '../config/database'
 import { emitTrainingLog, emitTrainingMetric, emitTrainingStatus } from './socket.service'
+import {
+  buildTrainingMetric,
+  getBestMetric,
+  type TrainingMetricEntry,
+  type TrainingSessionConfig,
+} from './training-evaluation.service'
 import { readTrainingCheckpoint, saveTrainingCheckpoint } from './training-checkpoint.service'
 import { logger } from '../utils/logger'
 
@@ -10,31 +16,6 @@ interface TrainingLogEntry {
   level: TrainingLogLevel
   message: string
   epoch?: number
-}
-
-interface TrainingMetricEntry {
-  epoch: number
-  trainLoss: number
-  valLoss: number
-  trainAccuracy?: number
-  valAccuracy?: number
-  learningRate: number
-  duration: number
-}
-
-interface TrainingSessionConfig {
-  architecture?: string
-  timeframe?: string
-  includedPairs?: string[]
-  indicators?: string[]
-  hyperparameters?: {
-    epochs?: number
-    learningRate?: number
-    earlyStopping?: {
-      enabled?: boolean
-      patience?: number
-    }
-  }
 }
 
 const TRAINING_TICK_MS = 350
@@ -64,10 +45,6 @@ function normalizeTrainingLogLevel(level: unknown): TrainingLogLevel {
   }
 
   return 'INFO'
-}
-
-function toFixedNumber(value: number, digits: number): number {
-  return Number(value.toFixed(digits))
 }
 
 function getSessionPattern(sessionId: string): string {
@@ -136,36 +113,6 @@ async function persistTrainingCheckpoint(
     bestEpoch: input.bestEpoch,
     bestValLoss: input.bestValLoss,
   })
-}
-
-function buildMetric(sessionId: string, epoch: number, totalEpochs: number, learningRate: number): TrainingMetricEntry {
-  const seed = sessionId.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0)
-  const progress = epoch / totalEpochs
-  const wave = Math.sin((epoch + seed) * 0.55)
-  const drift = Math.cos((epoch + seed) * 0.21)
-
-  const trainLoss = toFixedNumber(Math.max(0.0025, 0.12 * Math.exp(-progress * 3.4) + Math.abs(wave) * 0.003), 6)
-  const valLoss = toFixedNumber(Math.max(0.0035, trainLoss + 0.002 + Math.abs(drift) * 0.0025), 6)
-  const trainAccuracy = toFixedNumber(Math.min(99.4, 53 + (progress * 42) + (wave * 1.5)), 2)
-  const valAccuracy = toFixedNumber(Math.max(0, trainAccuracy - 1.8 - Math.abs(drift) * 1.2), 2)
-
-  return {
-    epoch,
-    trainLoss,
-    valLoss,
-    trainAccuracy,
-    valAccuracy,
-    learningRate: toFixedNumber(learningRate, 6),
-    duration: epoch * TRAINING_TICK_MS,
-  }
-}
-
-function getBestMetric(metrics: TrainingMetricEntry[]): TrainingMetricEntry | null {
-  if (metrics.length === 0) {
-    return null
-  }
-
-  return metrics.reduce((best, current) => (current.valLoss < best.valLoss ? current : best), metrics[0])
 }
 
 function shouldStopEarly(metrics: TrainingMetricEntry[], patience: number): boolean {
@@ -243,7 +190,6 @@ async function advanceTrainingSession(sessionId: string): Promise<void> {
   const config = safeJsonParse<TrainingSessionConfig>(session.config, {})
   const metrics = safeJsonParse<TrainingMetricEntry[]>(session.metrics, [])
   const totalEpochs = Math.max(1, Math.min(config.hyperparameters?.epochs ?? 20, 120))
-  const learningRate = config.hyperparameters?.learningRate ?? 0.001
 
   if (session.status === 'pending') {
     await prisma.trainingSession.update({
@@ -265,7 +211,7 @@ async function advanceTrainingSession(sessionId: string): Promise<void> {
   }
 
   const nextEpoch = metrics.length + 1
-  const nextMetric = buildMetric(sessionId, nextEpoch, totalEpochs, learningRate)
+  const nextMetric = buildTrainingMetric(sessionId, nextEpoch, totalEpochs, config, nextEpoch * TRAINING_TICK_MS)
   const nextMetrics = [...metrics, nextMetric]
   const bestMetric = getBestMetric(nextMetrics)
   const patience = Math.max(3, config.hyperparameters?.earlyStopping?.patience ?? 10)

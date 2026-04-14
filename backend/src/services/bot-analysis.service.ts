@@ -3,7 +3,9 @@ import { getBotInstanceById, buildStrategyId } from './bot-registry.service'
 import { DEFAULT_PAIR_DISCOVERY_CONFIG, parsePairDiscoveryConfig } from './configuration.service'
 import { getCandles, getTickerPrice } from './binance.service'
 import { getLatestSocialSignals, type SocialSignal } from './pair-discovery.service'
+import { isPythonMlEngineEnabled, predictWithRealModelArtifact } from './python-ml-engine.service'
 import { emitDashboardUpdate } from './socket.service'
+import { resolveTrainingModelArtifactPath } from './training-model.service'
 import { logger } from '../utils/logger'
 import { trace } from '../utils/tracer'
 
@@ -108,6 +110,18 @@ function normalizePairs(pairs: unknown, fallback: string[] = []): string[] {
   ))
 }
 
+function resolveAllowedPairs(
+  parameters: Record<string, unknown>,
+  configurationAllowedPairs: string[],
+): string[] {
+  const instanceAllowedPairs = normalizePairs(parameters.allowedPairs)
+  if (instanceAllowedPairs.length > 0) {
+    return instanceAllowedPairs
+  }
+
+  return configurationAllowedPairs
+}
+
 function resolveTimeframe(parameters: Record<string, unknown>): '1m' | '5m' | '15m' | '1h' | '4h' | '1d' {
   const timeframe = typeof parameters.timeframe === 'string' ? parameters.timeframe : '1h'
   if (['1m', '5m', '15m', '1h', '4h', '1d'].includes(timeframe)) {
@@ -140,6 +154,51 @@ function buildCandidatePairs(params: {
   })
 
   return Array.from(orderedPairs).slice(0, params.limit)
+}
+
+function buildRuntimeSummary(opportunities: RuntimeOpportunity[]): RuntimeAnalysisResult['summary'] {
+  return {
+    analyzedPairs: opportunities.length,
+    actionablePairs: opportunities.filter((entry) => entry.action !== 'hold').length,
+    buySignals: opportunities.filter((entry) => entry.action === 'buy').length,
+    sellSignals: opportunities.filter((entry) => entry.action === 'sell').length,
+    holdSignals: opportunities.filter((entry) => entry.action === 'hold').length,
+  }
+}
+
+function buildPythonRuntimeAnalysis(
+  prediction: Awaited<ReturnType<typeof predictWithRealModelArtifact>>,
+  marketSnapshots: Array<{
+    pair: string
+    currentPrice: number
+  }>,
+): RuntimeAnalysisResult {
+  const priceByPair = new Map<string, number>(
+    marketSnapshots.map((snapshot) => [snapshot.pair, snapshot.currentPrice]),
+  )
+  const opportunities: RuntimeOpportunity[] = prediction.opportunities.map((entry) => ({
+    pair: entry.pair,
+    action: entry.action,
+    confidence: entry.confidence,
+    price: priceByPair.get(entry.pair) ?? 0,
+    reason: entry.reason,
+    specialists: [
+      {
+        specialist: prediction.primarySpecialist,
+        action: entry.action,
+        confidence: entry.confidence,
+        reason: entry.reason,
+        indicators: {},
+      },
+    ],
+  }))
+
+  return {
+    primarySpecialist: prediction.primarySpecialist,
+    bestOpportunity: opportunities.find((entry) => entry.action !== 'hold' && entry.confidence >= 55),
+    opportunities,
+    summary: buildRuntimeSummary(opportunities),
+  }
 }
 
 export async function analyzeBotInstance(
@@ -183,10 +242,11 @@ export async function analyzeBotInstance(
 
     return [] as SocialSignal[]
   })
-  const allowedPairs = normalizePairs(
+  const configuredAllowedPairs = normalizePairs(
     safeJsonParse(configuration?.allowedPairs, DEFAULT_ALLOWED_PAIRS),
     DEFAULT_ALLOWED_PAIRS,
   )
+  const allowedPairs = resolveAllowedPairs(parameters, configuredAllowedPairs)
   const candidatePairs = buildCandidatePairs({
     allowedPairs,
     currentPair: bot.currentPair,
@@ -228,21 +288,59 @@ export async function analyzeBotInstance(
 
   const strategyType = bot.template?.strategyType ?? bot.strategyType
   const strategyId = bot.template?.id ?? buildStrategyId(strategyType)
-  const runtimeAnalysis = runtime.analyzeBot({
-    bot: {
-      id: bot.id,
-      name: bot.name,
-      strategyType,
-      strategyId,
-      indicatorType: bot.template?.indicatorType ?? undefined,
-      specialization: bot.template?.specialization ?? undefined,
-      parameters,
-      minMentions: pairDiscoveryConfig.minMentions,
-      minSocialScore: pairDiscoveryConfig.minSocialScore,
-    },
-    marketSnapshots,
-    includeSocialOverlay: socialSignals.length > 0,
-  })
+  let runtimeAnalysis: RuntimeAnalysisResult
+
+  if (bot.modelUrl && isPythonMlEngineEnabled()) {
+    try {
+      const prediction = await predictWithRealModelArtifact(
+        resolveTrainingModelArtifactPath(bot.modelUrl),
+        marketSnapshots,
+      )
+      runtimeAnalysis = buildPythonRuntimeAnalysis(prediction, marketSnapshots)
+    } catch (error) {
+      logger.warn('[bot] Falha ao usar inferência Python no bot; fallback heurístico será aplicado', {
+        module: 'bot',
+        event: 'bot_analysis_python_inference_fallback',
+        userId,
+        botId,
+        modelUrl: bot.modelUrl,
+        error,
+        skipPersistence: true,
+      })
+
+      runtimeAnalysis = runtime.analyzeBot({
+        bot: {
+          id: bot.id,
+          name: bot.name,
+          strategyType,
+          strategyId,
+          indicatorType: bot.template?.indicatorType ?? undefined,
+          specialization: bot.template?.specialization ?? undefined,
+          parameters,
+          minMentions: pairDiscoveryConfig.minMentions,
+          minSocialScore: pairDiscoveryConfig.minSocialScore,
+        },
+        marketSnapshots,
+        includeSocialOverlay: socialSignals.length > 0,
+      })
+    }
+  } else {
+    runtimeAnalysis = runtime.analyzeBot({
+      bot: {
+        id: bot.id,
+        name: bot.name,
+        strategyType,
+        strategyId,
+        indicatorType: bot.template?.indicatorType ?? undefined,
+        specialization: bot.template?.specialization ?? undefined,
+        parameters,
+        minMentions: pairDiscoveryConfig.minMentions,
+        minSocialScore: pairDiscoveryConfig.minSocialScore,
+      },
+      marketSnapshots,
+      includeSocialOverlay: socialSignals.length > 0,
+    })
+  }
   const generatedAt = new Date().toISOString()
 
   await prisma.bot.update({

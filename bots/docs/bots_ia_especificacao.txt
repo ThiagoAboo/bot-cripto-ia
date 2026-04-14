@@ -51,6 +51,7 @@ A camada de IA é o cérebro do sistema – responsável por:
 | Recomendação com Confiança| Cada ação tem nível de confiança (0-100%) |
 | Configurável              | Parâmetros lidos do backend |
 | Rastreável                | Cada passo da análise é registrado via trace |
+| Modelo Real Persistido    | Quando houver artefato salvo, o bot deve preferir inferência do modelo treinado real |
 
 1.3 RELAÇÃO COM O BACKEND
 
@@ -210,6 +211,11 @@ O bot executa um loop contínuo a cada intervalo configurável:
 4. Aplicar gestão de risco (stop loss, take profit, exposição)
 5. Se confiança > threshold, executar ordem via backend
 6. Registrar traces de cada passo
+
+No estado atual do projeto:
+- existe um worker interno no backend que percorre bots `online`
+- o worker usa cooldown por par/ação e threshold mínimo de confiança
+- o frontend também pode disparar um ciclo pontual por bot via dashboard
 
 2.5 MÁQUINAS DE ESTADO
 
@@ -608,6 +614,12 @@ interface RiskConfig {
   minCorrelationThreshold: number
 }
 
+Observações operacionais:
+- `maxPositionSize` atua como teto duro do orçamento por entrada antes do envio da ordem
+- o sizing final pode ser reduzido adicionalmente por volatilidade usando `atr(period) / currentPrice`
+- compras novas devem ser bloqueadas quando a correlação com posições abertas exceder
+  `minCorrelationThreshold`
+
 7.2 VALIDAÇÃO DE TRADE
 
 function validateTrade(trade, portfolio, riskConfig):
@@ -771,6 +783,19 @@ Regras de execução:
   - feeCurrency
   - feeRateApplied
   - feeDiscountSource
+- Antes do envio real para a Binance, a ordem deve ser normalizada/validada com:
+  - `stepSize`
+  - `tickSize`
+  - `minQty`
+  - `minNotional`
+  - `maxQty`/`maxNotional` quando aplicavel
+
+Estado atual do projeto:
+- `paper` executa na carteira local do backend
+- `semi_auto` apenas sugere a operação
+- `full_auto` envia ordem spot real para a Binance e depois reconcilia saldos locais
+- após a ordem real, o backend continua registrando transação, FIFO, fee, webhook,
+  websocket e snapshot de carteira
 
 9.4 CHAVEAMENTO SIMULADO/REAL
 
@@ -839,6 +864,15 @@ LSTM (TensorFlow):
 - epochs: 50
 - batch_size: 32
 
+Implementação operacional atual:
+- `linear_regression`: classificador linear real via `scikit-learn`
+- `random_forest`: `RandomForestClassifier`
+- `xgboost`: `XGBClassifier`
+- `lstm`, `cnn`, `transformer`: redes reais em `torch`
+- o backend empacota o modelo treinado em `enginePackage` dentro do artefato salvo
+- a análise do bot deve usar esse artefato salvo quando `modelUrl` existir; sem modelo salvo,
+  o runtime pode cair para o especialista heurístico correspondente
+
 10.4 MÉTRICAS DE AVALIAÇÃO
 
 Após o treinamento, o modelo é avaliado com:
@@ -846,6 +880,15 @@ Após o treinamento, o modelo é avaliado com:
 - Matriz de confusão: [TP, FP; FN, TN]
 - Log Loss: -Σ y * log(p)
 - F1-Score: 2 * (precision * recall) / (precision + recall)
+- Precision e Recall por época
+- Benchmark comparativo contra:
+  - buy_and_hold
+  - dca
+- Walk-forward validation com folds configuráveis
+- Labeling configurável:
+  - forecastHorizonCandles
+  - buyThresholdPercent
+  - sellThresholdPercent
 
 
 ================================================================================
@@ -957,10 +1000,16 @@ interface BotConfiguration {
     autoAddToAllowedPairs: boolean
     autoRemoveFromAllowedPairs: boolean
     reviewRequired: boolean
+    autoSyncIntervalMinutes: number
     minSocialScore: number
     minMentions: number
     maxPairs: number
     excludedAssets: string[]
+    managedPairs?: string[]
+    lastSyncAt?: string
+    lastAppliedAt?: string
+    lastSyncStatus?: 'idle' | 'previewed' | 'applied' | 'skipped' | 'error'
+    lastSyncSummary?: string
     sources: {
       reddit: boolean
       rss: boolean
@@ -1015,10 +1064,12 @@ interface BotConfiguration {
     "autoAddToAllowedPairs": false,
     "autoRemoveFromAllowedPairs": false,
     "reviewRequired": true,
+    "autoSyncIntervalMinutes": 60,
     "minSocialScore": 70,
     "minMentions": 25,
     "maxPairs": 20,
     "excludedAssets": ["BNB", "USDC"],
+    "managedPairs": [],
     "sources": {
       "reddit": true,
       "rss": true,
@@ -1120,7 +1171,8 @@ Response:
 Observações:
 - `pair` já vem resolvido para o par preferencial da exchange, priorizando USDT quando disponível
 - `sources` informa quais canais contribuíram para o score agregado
-- os bots de descoberta podem usar esse endpoint junto com `POST /api/configurations/pair-discovery/preview` e `POST /api/configurations/pair-discovery/apply`
+- os bots de descoberta podem usar esse endpoint junto com `POST /api/configurations/pair-discovery/preview`, `POST /api/configurations/pair-discovery/apply` e `POST /api/configurations/pair-discovery/run`
+- `POST /api/configurations/pair-discovery/run` executa a curadoria imediatamente e devolve `status`, `summary`, `runner` e a configuração atualizada
 
 13.6 CARREGAR SALDO (SIMULADO/REAL)
 
@@ -1202,6 +1254,28 @@ Regras:
 - Deve atualizar `currentPair`, `recommendedAction`, `confidence` e `lastAnalysis`
   do bot para o dashboard refletir a leitura mais recente
 
+13.8 CONSULTAR STATUS DO WORKER DOS BOTS
+
+GET /api/dashboard/bots/worker-status
+
+Objetivo:
+- Permitir observabilidade do runner/orquestrador operacional
+- Expor se o loop interno esta ativo no backend
+
+Response:
+{
+  "success": true,
+  "data": {
+    "running": true
+  }
+}
+
+Variaveis de ambiente associadas:
+- BOT_WORKER_AUTOSTART
+- BOT_WORKER_POLL_MS
+- BOT_TRADE_COOLDOWN_MS
+- BOT_MIN_CONFIDENCE
+
 
 ================================================================================
 14. APIS DE AÇÃO (BACKEND)
@@ -1260,6 +1334,69 @@ Request:
   "module": "scalper_bot",
   "message": "Ordem executada: COMPRA 0.05 BTC/USDT"
 }
+
+14.4 EXECUTAR CICLO OPERACIONAL DE UM BOT
+
+POST /api/dashboard/bots/{id}/run
+
+Objetivo:
+- Permitir execucao manual e observavel de um ciclo do bot
+- Reutilizar o mesmo runtime do worker automatico
+- Facilitar validacao de estrategia antes de habilitar automacao total
+
+Response:
+{
+  "success": true,
+  "data": {
+    "botId": "bot_macd_01",
+    "mode": "paper",
+    "executed": true,
+    "suggested": false,
+    "skipped": false,
+    "reason": "Executado pelo bot em modo paper",
+    "analysis": {
+      "pair": "BTC/USDT",
+      "action": "buy",
+      "confidence": 78
+    },
+    "execution": {
+      "transactionId": "tx_123",
+      "pair": "BTC/USDT",
+      "type": "buy",
+      "quantity": 0.001,
+      "price": 62345.67,
+      "origin": "bot"
+    }
+  }
+}
+
+Regras obrigatorias:
+- `semi_auto` nao envia ordem; retorna sugestao
+- `paper` executa na carteira local do backend
+- `full_auto` envia ordem spot real para a Binance e depois reconcilia o estado
+  local para preservar saldo, taxa, FIFO, BNB e historico
+- se a exchange responder `NEW` ou `PARTIALLY_FILLED`, o runner deve persistir a
+  ordem como `submitted`, bloquear novas entradas para o mesmo bot e aguardar
+  a reconciliação antes de abrir outra posição
+- um ciclo de reconciliação quase em tempo real deve percorrer ordens externas em
+  aberto para refletir fills, cancelamentos e rejeições mesmo sem nova decisão do bot
+- quando houver credenciais válidas e bot elegível em `full_auto`, o backend deve
+  preferir `userDataStream` nativo da Binance (`listenKey`) para reagir a
+  `executionReport` e `outboundAccountPosition`, mantendo polling como fallback
+- o ciclo pode ser ignorado quando o bot estiver pausado, offline, em treino,
+  abaixo da confianca minima ou em cooldown recente
+- o ciclo tambem pode ser bloqueado por guardrails de risco por instancia:
+  - stop loss
+  - take profit
+  - circuit breaker por perdas consecutivas
+  - circuit breaker por perda diaria
+  - maxPositionSize
+  - maxConcurrentTrades
+  - maxExposurePerCoin
+  - maxTotalExposure
+- antes do envio, o runtime pode reduzir a posição por volatilidade com `ATR sizing`
+- para novas compras, o runtime também deve recusar sinais excessivamente correlacionados
+  com posições abertas do mesmo portfólio
 
 
 ================================================================================

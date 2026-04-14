@@ -46,6 +46,14 @@ export interface TrainingConfig {
     optimizer: 'adam' | 'sgd' | 'rmsprop'
     lossFunction: 'mse' | 'mae' | 'huber'
     validationSplit: number
+    sequenceLength?: number
+    forecastHorizonCandles?: number
+    buyThresholdPercent?: number
+    sellThresholdPercent?: number
+    walkForwardFolds?: number
+    nEstimators?: number
+    maxDepth?: number
+    randomState?: number
     earlyStopping: {
       enabled: boolean
       patience: number
@@ -59,6 +67,10 @@ export interface TrainingMetrics {
   valLoss: number
   trainAccuracy?: number
   valAccuracy?: number
+  precision?: number
+  recall?: number
+  f1Score?: number
+  logLoss?: number
   learningRate: number
   duration: number
 }
@@ -84,6 +96,33 @@ export interface TrainingSession {
   bestEpoch?: number
   bestValLoss?: number
   modelUrl?: string
+  evaluation?: {
+    architecture: Architecture | 'unknown'
+    architectureLabel: string
+    validationStrategy: 'holdout' | 'walk_forward'
+    validationSplitPercent: number
+    walkForwardFolds: number
+    labelConfiguration: {
+      horizonCandles: number
+      buyThresholdPercent: number
+      sellThresholdPercent: number
+    }
+    bestEpoch: number | null
+    bestValLoss: number | null
+    bestAccuracy: number | null
+    bestF1Score: number | null
+    logLoss: number | null
+    benchmark: {
+      baseline: 'buy_and_hold'
+      baselineAccuracy: number
+      modelEdgePercent: number
+    }
+    confusionMatrix: {
+      hold: { hold: number; buy: number; sell: number }
+      buy: { hold: number; buy: number; sell: number }
+      sell: { hold: number; buy: number; sell: number }
+    }
+  }
 }
 
 export interface BacktestResult {
@@ -95,6 +134,51 @@ export interface BacktestResult {
   sharpeRatio: number
   maxDrawdown: number
   profitFactor: number
+  benchmark: {
+    strategy: 'buy_and_hold'
+    baselineCapital: number
+    totalProfit: number
+    totalReturnPercent: number
+    outperformanceBrl: number
+    outperformancePercent: number
+  }
+  benchmarks: Array<{
+    strategy: 'buy_and_hold' | 'dca'
+    label: string
+    baselineCapital: number
+    totalProfit: number
+    totalReturnPercent: number
+    outperformanceBrl: number
+    outperformancePercent: number
+  }>
+  pairBreakdown: Array<{
+    pair: string
+    totalTrades: number
+    winRate: number
+    totalProfit: number
+    averageReturnPercent: number
+  }>
+  validation: {
+    mode: 'walk_forward'
+    lookaheadSafe: boolean
+    signalLagCandles: number
+    folds: number
+    trainSplitPercent: number
+    testWindowDays: number
+    labeling: {
+      horizonCandles: number
+      buyThresholdPercent: number
+      sellThresholdPercent: number
+    }
+    windows: Array<{
+      index: number
+      startDate: string
+      endDate: string
+      totalTrades: number
+      winRate: number
+      totalProfit: number
+    }>
+  }
 }
 
 export interface AvailableStrategy {

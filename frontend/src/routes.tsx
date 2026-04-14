@@ -5,6 +5,7 @@ import { Skeleton } from './shared/components/ui/Skeleton'
 // Lazy loading das páginas
 const LoginPage = lazy(() => import('./features/auth/LoginPage'))
 const DashboardPage = lazy(() => import('./features/dashboard/DashboardPage'))
+const BotsPage = lazy(() => import('./features/bots/BotsPage'))
 const ConfiguracoesPage = lazy(() => import('./features/configurations/ConfiguracoesPage'))
 const TreinamentoPage = lazy(() => import('./features/training/TreinamentoPage'))
 const TransacoesPage = lazy(() => import('./features/transactions/TransacoesPage'))
@@ -45,6 +46,11 @@ export function AppRoutes() {
         <Route path="/dashboard" element={
           <ProtectedRoute>
             <DashboardPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/bots" element={
+          <ProtectedRoute>
+            <BotsPage />
           </ProtectedRoute>
         } />
         <Route path="/configuracoes" element={

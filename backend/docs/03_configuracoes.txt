@@ -237,6 +237,7 @@ Estrutura prevista dentro de botParameters.pairDiscovery:
   "autoAddToAllowedPairs": true,
   "autoRemoveFromAllowedPairs": false,
   "reviewRequired": true,
+  "autoSyncIntervalMinutes": 60,
   "sources": {
     "reddit": true,
     "rss": true,
@@ -247,7 +248,11 @@ Estrutura prevista dentro de botParameters.pairDiscovery:
   "minMentions": 30,
   "maxPairs": 25,
   "excludedAssets": ["BNB", "USDC"],
-  "managedPairs": ["SOL/USDT", "LINK/USDT"]
+  "managedPairs": ["SOL/USDT", "LINK/USDT"],
+  "lastSyncAt": "2026-04-13T12:00:00.000Z",
+  "lastAppliedAt": "2026-04-13T12:00:00.000Z",
+  "lastSyncStatus": "applied",
+  "lastSyncSummary": "1 adições e 0 remoções sugeridas"
 }
 
 Objetivo:
@@ -255,6 +260,8 @@ Objetivo:
 - Permitir remoção automatizada de moedas que percam tração, quando habilitado
 - Manter governança via reviewRequired, limites e lista de exclusão
 - managedPairs identifica quais pares foram adicionados pela curadoria automática e podem ser removidos depois sem afetar pares manuais
+- autoSyncIntervalMinutes define a frequência mínima da curadoria automática em minutos
+- lastSyncAt/lastAppliedAt/lastSyncStatus/lastSyncSummary registram o último ciclo automático executado
 
 -------------------------------------------------------------------------------
 4.2 API: GET /api/social/latest
@@ -310,6 +317,7 @@ REQUEST BODY:
     "autoAddToAllowedPairs": true,
     "autoRemoveFromAllowedPairs": true,
     "reviewRequired": true,
+    "autoSyncIntervalMinutes": 30,
     "sources": { "reddit": true, "rss": true, "x": false, "telegram": false },
     "minSocialScore": 70,
     "minMentions": 30,
@@ -340,6 +348,47 @@ RESPONSE (200 - Sucesso):
     "managedPairs": ["SOL/USDT", "LINK/USDT"]
   }
 }
+
+-------------------------------------------------------------------------------
+4.4 API: POST /api/configurations/pair-discovery/run
+-------------------------------------------------------------------------------
+
+Descrição: Executa imediatamente um ciclo da curadoria automática usando a configuração persistida do usuário
+
+HEADERS:
+  Authorization: Bearer {token}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "userId": "user-1",
+    "applied": true,
+    "previewRequired": false,
+    "status": "applied",
+    "summary": "1 adições e 0 remoções sugeridas",
+    "preview": {
+      "nextAllowedPairs": ["BTC/USDT", "DOGE/USDT"],
+      "managedPairs": ["DOGE/USDT"]
+    },
+    "runner": {
+      "running": true,
+      "lastCycleAt": "2026-04-13T12:00:00.000Z"
+    },
+    "configuration": {
+      "botParameters": {
+        "pairDiscovery": {
+          "lastSyncStatus": "applied"
+        }
+      }
+    }
+  }
+}
+
+REGRAS:
+- Quando reviewRequired = true, o ciclo atualiza preview/metadata mas não altera allowedPairs automaticamente
+- Quando reviewRequired = false, o ciclo pode aplicar allowedPairs e managedPairs diretamente
+- O runner automático executa o mesmo fluxo de forma periódica quando autoDiscoveryEnabled = true
 
 -------------------------------------------------------------------------------
 4.4 API: POST /api/configurations/pair-discovery/apply

@@ -56,6 +56,33 @@ export function useBotAnalysis(botId?: string) {
   })
 }
 
+export function useRunBotCycle() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (botId: string) => dashboardService.runBotCycle(botId),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEYS.botsStatus })
+      void queryClient.invalidateQueries({ queryKey: ['dashboard', 'bot-analysis'] })
+
+      if (result.execution.status === 'executed') {
+        toast.success(result.execution.reason || 'Ciclo do bot executado com ordem gerada')
+        return
+      }
+
+      if (result.execution.status === 'suggested') {
+        toast.success(result.execution.reason || 'Ciclo executado em modo semi-auto')
+        return
+      }
+
+      toast.success(result.execution.reason || 'Ciclo do bot executado')
+    },
+    onError: () => {
+      toast.error('Erro ao executar ciclo do bot')
+    },
+  })
+}
+
 export function usePauseBot() {
   const queryClient = useQueryClient()
 

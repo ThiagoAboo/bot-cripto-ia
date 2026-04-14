@@ -47,12 +47,25 @@ REGRAS:
 2. Preparar dataset:
    - Normalizar dados
    - Dividir em treino (80%) e validação (20%)
+   - Configurar labels por horizonte/threshold:
+     - forecastHorizonCandles
+     - buyThresholdPercent
+     - sellThresholdPercent
+   - Registrar quantidade de folds walk-forward
 
 3. Criar modelo conforme arquitetura selecionada:
    - LSTM, CNN, Random Forest, XGBoost, etc.
+   - Aplicar hiperparâmetros específicos da arquitetura:
+     - `sequenceLength` para arquiteturas sequenciais
+     - `nEstimators`, `maxDepth`, `randomState` para árvores/boosting
 
 4. Loop de treinamento (épocas):
    - Para cada época, calcular loss (treino e validação)
+   - Calcular também:
+     - precision
+     - recall
+     - f1Score
+     - logLoss
    - Emitir WebSocket training:metrics a cada época
    - Registrar log a cada 10 épocas
    - Salvar checkpoint a cada 10 épocas
@@ -88,6 +101,11 @@ REGRAS:
    - sharpeRatio: (retorno médio - taxa livre de risco) / desvio padrão
    - maxDrawdown: maior queda percentual
    - profitFactor: lucro bruto / prejuízo bruto
+   - benchmarks comparativos:
+     - buy_and_hold
+     - dca
+   - pairBreakdown por ativo operado
+   - validação walk-forward com folds, labeling e checagem lookaheadSafe
 
 4. Registrar resultado no banco (tabela BacktestResult)
 
@@ -102,6 +120,12 @@ REGRAS:
 1. Verificar se sessão está 'completed'
 
 2. Salvar arquivo do modelo (.h5) em disco/S3
+   - Persistir artefato com:
+     - resumo da arquitetura
+     - estratégia de validação
+     - fingerprints de config/métricas/features/dataset
+     - parâmetros de labeling
+     - resumo de avaliação
 
 3. Atualizar sessão com modelUrl
 

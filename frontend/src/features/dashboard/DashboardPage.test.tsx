@@ -74,6 +74,7 @@ vi.mock('./hooks/useDashboardData', () => ({
   useRecentTransactions: () => ({ data: [], isLoading: false }),
   useBotsStatus: () => ({ data: [{ id: 'bot-1', name: 'Bot 1', strategy: 'momentum', status: 'online', isPaused: false }], isLoading: false }),
   useBotAnalysis: () => ({ data: undefined, isLoading: false }),
+  useRunBotCycle: () => ({ mutate: vi.fn(), isPending: false }),
   usePauseBot: () => ({ mutate: vi.fn(), isPending: false }),
   useResumeBot: () => ({ mutate: vi.fn(), isPending: false }),
 }))

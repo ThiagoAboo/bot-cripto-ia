@@ -11,6 +11,7 @@ import {
 } from '../services/bot-registry.service'
 import { runTrainingBacktest } from '../services/training-backtest.service'
 import { readTrainingModelArtifact, saveTrainingModelArtifact } from '../services/training-model.service'
+import { isPythonMlEngineEnabled, trainRealModelPackage } from '../services/python-ml-engine.service'
 import { assertTrainingUploadExists, parseTrainingUploadRequest, saveTrainingUpload, TrainingUploadError } from '../services/training-upload.service'
 import { emitTrainingStatus } from '../services/socket.service'
 import {
@@ -20,6 +21,7 @@ import {
   pauseTrainingSessionProcessing,
   startTrainingSessionProcessing,
 } from '../services/training-session.service'
+import { buildTrainingEvaluationSummary } from '../services/training-evaluation.service'
 import { logger } from '../utils/logger'
 import { endTrace, startTrace, trace } from '../utils/tracer'
 
@@ -52,6 +54,14 @@ const createTrainingSessionSchema = z.object({
       enabled: z.boolean(),
       patience: z.number(),
     }),
+    sequenceLength: z.number().optional(),
+    forecastHorizonCandles: z.number().optional(),
+    buyThresholdPercent: z.number().optional(),
+    sellThresholdPercent: z.number().optional(),
+    walkForwardFolds: z.number().optional(),
+    nEstimators: z.number().optional(),
+    maxDepth: z.number().optional(),
+    randomState: z.number().optional(),
   }),
 })
   .superRefine((data, context) => {
@@ -101,6 +111,10 @@ async function buildTrainingSessionResponse(session: any) {
   const strategyName = session.bot?.template?.name
     ?? session.bot?.name
     ?? (typeof config.strategyId === 'string' ? config.strategyId : '')
+  const evaluation = buildTrainingEvaluationSummary(config as any, metrics, {
+    bestEpoch: session.bestEpoch ?? null,
+    bestValLoss: session.bestValLoss ?? null,
+  })
 
   return {
     id: session.id,
@@ -116,6 +130,7 @@ async function buildTrainingSessionResponse(session: any) {
     bestEpoch: session.bestEpoch ?? undefined,
     bestValLoss: session.bestValLoss ?? undefined,
     modelUrl: session.modelUrl ?? undefined,
+    evaluation,
   }
 }
 
@@ -644,7 +659,21 @@ export async function saveTrainingModel(req: AuthRequest, res: Response): Promis
     }
 
     const config = JSON.parse(session.config)
-    const metrics = safeJsonParse<any[]>(session.metrics, [])
+    let metrics = safeJsonParse<any[]>(session.metrics, [])
+    let bestEpoch = session.bestEpoch ?? null
+    let bestValLoss = session.bestValLoss ?? null
+    let evaluationOverride: ReturnType<typeof buildTrainingEvaluationSummary> | undefined
+    let enginePackage: Awaited<ReturnType<typeof trainRealModelPackage>>['enginePackage'] | undefined
+
+    if (isPythonMlEngineEnabled()) {
+      const trainingResult = await trainRealModelPackage(config)
+      metrics = trainingResult.metrics
+      bestEpoch = trainingResult.evaluation.bestEpoch ?? null
+      bestValLoss = trainingResult.evaluation.bestValLoss ?? null
+      evaluationOverride = trainingResult.evaluation as unknown as ReturnType<typeof buildTrainingEvaluationSummary>
+      enginePackage = trainingResult.enginePackage
+    }
+
     const artifact = await saveTrainingModelArtifact({
       sessionId: id,
       userId,
@@ -652,14 +681,22 @@ export async function saveTrainingModel(req: AuthRequest, res: Response): Promis
       modelVersion: config.modelVersion,
       config,
       metrics,
-      bestEpoch: session.bestEpoch ?? null,
-      bestValLoss: session.bestValLoss ?? null,
+      bestEpoch,
+      bestValLoss,
+      evaluationOverride,
+      enginePackage,
     })
     const modelUrl = artifact.modelUrl
 
     await prisma.trainingSession.update({
       where: { id },
-      data: { modelUrl, updatedAt: new Date() },
+      data: {
+        metrics: JSON.stringify(metrics),
+        bestEpoch,
+        bestValLoss,
+        modelUrl,
+        updatedAt: new Date(),
+      },
     })
 
     await prisma.bot.update({

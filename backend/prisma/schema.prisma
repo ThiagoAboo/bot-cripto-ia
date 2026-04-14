@@ -131,6 +131,8 @@ model Transaction {
   bot        Bot?     @relation(fields: [botId], references: [id])
   type       String
   quantity   Float
+  requestedQuantity Float @default(0)
+  orderType  String  @default("market")
   price      Float
   total      Float
   fee        Float
@@ -138,6 +140,10 @@ model Transaction {
   feeRateApplied Float @default(0.001)
   feeDiscountSource String?
   status     String
+  externalOrderId String?
+  externalClientOrderId String?
+  externalStatus String?
+  syncedAt   DateTime?
   profitBrl  Float?
   profitPercent Float?
   
@@ -145,6 +151,8 @@ model Transaction {
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   
   createdAt  DateTime @default(now())
+
+  @@index([userId, externalOrderId])
 }
 
 // ==============================

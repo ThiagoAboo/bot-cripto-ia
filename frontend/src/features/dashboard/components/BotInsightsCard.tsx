@@ -1,6 +1,7 @@
-import { Brain, Radar, TrendingDown, TrendingUp, Minus, Sparkles } from 'lucide-react'
+import { Brain, Radar, TrendingDown, TrendingUp, Minus, Sparkles, Loader2, PlayCircle } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '../../../shared/components/ui/Card'
 import { Badge } from '../../../shared/components/ui/Badge'
+import { Button } from '../../../shared/components/ui/Button'
 import { Skeleton } from '../../../shared/components/ui/Skeleton'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../shared/components/ui/Select'
 import type { BotAnalysis, BotStatus } from '../types/dashboard.types'
@@ -11,6 +12,8 @@ interface BotInsightsCardProps {
   onSelectBot: (botId: string) => void
   data?: BotAnalysis
   isLoading: boolean
+  onRunCycle: () => void
+  isRunningCycle: boolean
 }
 
 const actionBadgeVariant = {
@@ -32,7 +35,7 @@ function formatSpecialistName(value: string): string {
     .join(' ')
 }
 
-export function BotInsightsCard({ bots, selectedBotId, onSelectBot, data, isLoading }: BotInsightsCardProps) {
+export function BotInsightsCard({ bots, selectedBotId, onSelectBot, data, isLoading, onRunCycle, isRunningCycle }: BotInsightsCardProps) {
   if (isLoading) {
     return (
       <Card>
@@ -74,6 +77,17 @@ export function BotInsightsCard({ bots, selectedBotId, onSelectBot, data, isLoad
           <Brain className="h-5 w-5 text-primary-500" />
           <CardTitle>Radar do Bot</CardTitle>
         </div>
+
+        <Button variant="secondary" size="sm" onClick={onRunCycle} disabled={isRunningCycle}>
+          {isRunningCycle ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <>
+              <PlayCircle className="h-4 w-4" />
+              Rodar agora
+            </>
+          )}
+        </Button>
 
         <Select value={selectedBot.id} onValueChange={onSelectBot}>
           <SelectTrigger>

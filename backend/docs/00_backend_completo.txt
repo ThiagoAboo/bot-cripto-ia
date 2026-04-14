@@ -397,6 +397,8 @@ model Trace {
 |--------|----------|-----------|
 | GET | /api/orders | Listar transações |
 | POST | /api/orders | Criar ordem manual |
+| POST | /api/orders/reconcile | Reconciliar ordens externas em aberto |
+| POST | /api/orders/{id}/reconcile | Reconciliar uma ordem externa específica |
 | DELETE | /api/orders/{id}/cancel | Cancelar ordem |
 | GET | /api/balance | Saldo disponível |
 | GET | /api/exchange/rate | Cotação |

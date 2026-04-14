@@ -75,13 +75,19 @@ export interface ApiResponse<T> {
     botId?: string
     type: 'buy' | 'sell'
     quantity: number
+    requestedQuantity?: number
     price: number
     total: number
     fee: number
     feeCurrency?: string
     feeRateApplied?: number
     feeDiscountSource?: 'bnb' | 'usdt' | 'standard'
-    status: 'executed' | 'pending' | 'cancelled'
+    status: 'executed' | 'pending' | 'partially_filled' | 'cancelled' | 'rejected'
+    orderType?: 'market' | 'limit'
+    externalOrderId?: string
+    externalClientOrderId?: string
+    externalStatus?: string
+    syncedAt?: string
     profitBrl?: number
     profitPercent?: number
   }

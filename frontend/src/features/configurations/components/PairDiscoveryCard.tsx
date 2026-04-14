@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { RadioTower, RefreshCcw, Sparkles } from 'lucide-react'
 
-import { useLatestSocialSignals, usePairDiscoveryApply, usePairDiscoveryPreview } from '../hooks/useConfigurations'
+import { useLatestSocialSignals, usePairDiscoveryApply, usePairDiscoveryPreview, useRunPairDiscoveryNow } from '../hooks/useConfigurations'
 import type {
   FeesConfig,
   PairDiscoveryConfig,
@@ -24,6 +24,7 @@ interface PairDiscoveryCardProps {
   fees: FeesConfig
   onChange: (data: PairDiscoveryConfig) => void
   onApplyResult: (payload: { allowedPairs: string[]; pairDiscovery: PairDiscoveryConfig }) => void
+  onRunResult?: (payload: { allowedPairs: string[]; pairDiscovery: PairDiscoveryConfig }) => void
 }
 
 const SOURCE_OPTIONS: Array<{ key: keyof PairDiscoverySources; label: string }> = [
@@ -55,10 +56,12 @@ export function PairDiscoveryCard({
   fees,
   onChange,
   onApplyResult,
+  onRunResult,
 }: PairDiscoveryCardProps) {
   const { data: socialSignals, isLoading: isLoadingSignals, refetch: refetchSignals } = useLatestSocialSignals()
   const previewMutation = usePairDiscoveryPreview()
   const applyMutation = usePairDiscoveryApply()
+  const runNowMutation = useRunPairDiscoveryNow()
   const [preview, setPreview] = useState<PairDiscoveryPreview | null>(null)
   const needsConfirmation = Boolean(applyMutation.data?.requiresConfirmation && !applyMutation.data?.applied)
 
@@ -116,6 +119,21 @@ export function PairDiscoveryCard({
 
         if (result.applied && result.configuration) {
           onApplyResult({
+            allowedPairs: result.configuration.botParameters.allowedPairs,
+            pairDiscovery: result.configuration.botParameters.pairDiscovery,
+          })
+        }
+      },
+    })
+  }
+
+  const handleRunNow = () => {
+    runNowMutation.mutate(undefined, {
+      onSuccess: (result) => {
+        setPreview(result.preview)
+
+        if (result.configuration) {
+          onRunResult?.({
             allowedPairs: result.configuration.botParameters.allowedPairs,
             pairDiscovery: result.configuration.botParameters.pairDiscovery,
           })
@@ -194,6 +212,17 @@ export function PairDiscoveryCard({
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="space-y-2">
+            <Label htmlFor="pairDiscoveryInterval">Intervalo da automação (min)</Label>
+            <Input
+              id="pairDiscoveryInterval"
+              type="number"
+              min="5"
+              value={data.autoSyncIntervalMinutes}
+              onChange={(event) => handleNumberChange('autoSyncIntervalMinutes', parseFloat(event.target.value))}
+            />
+          </div>
+
           <div className="space-y-2">
             <Label htmlFor="pairDiscoveryScore">Score social mínimo</Label>
             <Input
@@ -296,6 +325,14 @@ export function PairDiscoveryCard({
                   {needsConfirmation ? 'Confirmar aplicação' : 'Aplicar sugestões'}
                 </Button>
               )}
+              <Button
+                variant="secondary"
+                size="sm"
+                isLoading={runNowMutation.isPending}
+                onClick={handleRunNow}
+              >
+                Rodar automação agora
+              </Button>
             </div>
           </div>
 
@@ -315,6 +352,28 @@ export function PairDiscoveryCard({
             <div className="rounded-lg border border-dark-400 p-3">
               <p className="text-xs uppercase tracking-wide text-gray-500">Review</p>
               <p className="mt-1 text-lg font-semibold text-white">{data.reviewRequired ? 'Ligado' : 'Desligado'}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <div className="rounded-lg border border-dark-400 p-3">
+              <p className="text-xs uppercase tracking-wide text-gray-500">Última sync</p>
+              <p className="mt-1 text-sm font-semibold text-white">
+                {data.lastSyncAt ? new Date(data.lastSyncAt).toLocaleString('pt-BR') : 'Nunca'}
+              </p>
+            </div>
+            <div className="rounded-lg border border-dark-400 p-3">
+              <p className="text-xs uppercase tracking-wide text-gray-500">Última aplicação</p>
+              <p className="mt-1 text-sm font-semibold text-white">
+                {data.lastAppliedAt ? new Date(data.lastAppliedAt).toLocaleString('pt-BR') : 'Nunca'}
+              </p>
+            </div>
+            <div className="rounded-lg border border-dark-400 p-3">
+              <p className="text-xs uppercase tracking-wide text-gray-500">Status automático</p>
+              <p className="mt-1 text-sm font-semibold text-white">{data.lastSyncStatus ?? 'idle'}</p>
+              {data.lastSyncSummary && (
+                <p className="mt-1 text-xs text-gray-500">{data.lastSyncSummary}</p>
+              )}
             </div>
           </div>
 

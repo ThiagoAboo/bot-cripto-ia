@@ -15,7 +15,7 @@ export class ExternalApiError extends Error {
 }
 
 export interface JsonRequestOptions {
-  method?: 'GET' | 'POST' | 'DELETE'
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE'
   headers?: Record<string, string>
   body?: string
   timeoutMs?: number

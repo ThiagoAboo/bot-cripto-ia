@@ -9,6 +9,7 @@ const {
   previewMutateMock,
   previewMutationState,
   refetchSignalsMock,
+  runNowMutateMock,
 } = vi.hoisted(() => ({
   applyMutationState: {
     data: undefined as PairDiscoveryApplyResponse | undefined,
@@ -33,6 +34,7 @@ const {
     isPending: false,
   },
   refetchSignalsMock: vi.fn(async () => ({ data: [] })),
+  runNowMutateMock: vi.fn(),
 }))
 
 const previewResult: PairDiscoveryPreview = {
@@ -102,6 +104,7 @@ const applyMutateMock = vi.fn((payload: { force?: boolean }, options?: { onSucce
               autoAddToAllowedPairs: true,
               autoRemoveFromAllowedPairs: false,
               reviewRequired: true,
+              autoSyncIntervalMinutes: 30,
               sources: {
                 reddit: true,
                 rss: false,
@@ -148,6 +151,10 @@ vi.mock('../hooks/useConfigurations', () => ({
     isPending: applyMutationState.isPending,
     data: applyMutationState.data,
   }),
+  useRunPairDiscoveryNow: () => ({
+    mutate: runNowMutateMock,
+    isPending: false,
+  }),
 }))
 
 import { PairDiscoveryCard } from './PairDiscoveryCard'
@@ -166,6 +173,7 @@ describe('PairDiscoveryCard', () => {
     })
 
     applyMutateMock.mockClear()
+    runNowMutateMock.mockClear()
   })
 
   it('renders live social signals and applies pair discovery suggestions with confirmation', async () => {
@@ -178,6 +186,7 @@ describe('PairDiscoveryCard', () => {
           autoAddToAllowedPairs: true,
           autoRemoveFromAllowedPairs: false,
           reviewRequired: true,
+          autoSyncIntervalMinutes: 30,
           sources: {
             reddit: true,
             rss: false,

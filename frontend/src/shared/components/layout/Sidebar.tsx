@@ -19,6 +19,7 @@ interface SidebarProps {
 
 const menuItems = [
   { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+  { path: '/bots', icon: Bot, label: 'Bots IA' },
   { path: '/transacoes', icon: ArrowLeftRight, label: 'Transações' },
   { path: '/treinamento', icon: Brain, label: 'Treinamento IA' },
   { path: '/configuracoes', icon: Settings, label: 'Configurações' },

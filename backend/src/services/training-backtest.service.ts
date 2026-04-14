@@ -1,15 +1,11 @@
 import { collectTrainingData, type TrainingDataPoint } from './training-data.service'
-
-interface TrainingSessionConfig {
-  dataSource?: 'exchange' | 'synthetic' | 'upload'
-  trainingPeriod?: {
-    startDate?: string
-    endDate?: string
-  }
-  includedPairs?: string[]
-  timeframe?: string
-  uploadedFileUrl?: string
-}
+import {
+  getLabelConfiguration,
+  getWalkForwardFoldCount,
+  type SupportedTrainingArchitecture,
+  type TrainingSessionConfig,
+} from './training-evaluation.service'
+import { isPythonMlEngineEnabled, runRealBacktest } from './python-ml-engine.service'
 
 interface CompletedTrainingSession {
   id: string
@@ -25,6 +21,48 @@ interface BacktestTrade {
   returnRatio: number
 }
 
+interface BacktestWindowSummary {
+  index: number
+  startDate: string
+  endDate: string
+  totalTrades: number
+  winRate: number
+  totalProfit: number
+}
+
+interface BacktestBenchmark {
+  strategy: 'buy_and_hold' | 'dca'
+  label: string
+  baselineCapital: number
+  totalProfit: number
+  totalReturnPercent: number
+  outperformanceBrl: number
+  outperformancePercent: number
+}
+
+interface BacktestPairSummary {
+  pair: string
+  totalTrades: number
+  winRate: number
+  totalProfit: number
+  averageReturnPercent: number
+}
+
+interface BacktestValidation {
+  mode: 'walk_forward'
+  lookaheadSafe: boolean
+  signalLagCandles: number
+  folds: number
+  trainSplitPercent: number
+  testWindowDays: number
+  labeling: {
+    horizonCandles: number
+    buyThresholdPercent: number
+    sellThresholdPercent: number
+  }
+  windows: BacktestWindowSummary[]
+}
+
 export interface TrainingBacktestResult {
   sessionId: string
   testPeriod: {
@@ -37,13 +75,26 @@ export interface TrainingBacktestResult {
   sharpeRatio: number
   maxDrawdown: number
   profitFactor: number
+  benchmark: BacktestBenchmark
+  benchmarks: BacktestBenchmark[]
+  pairBreakdown: BacktestPairSummary[]
+  validation: BacktestValidation
+}
+
+interface BacktestSignalProfile {
+  minimumBullishScore: number
+  minimumBearishScore: number
+  takeProfitRatio: number
+  stopLossRatio: number
+  maxPositionCandles: number
+  rsiOversoldThreshold: number
 }
 
 const FIXED_TRADE_CAPITAL = 1000
 const FEE_RATE = 0.001
-const TAKE_PROFIT_RATIO = 0.04
-const STOP_LOSS_RATIO = -0.025
-const MAX_POSITION_CANDLES = 12
+const BASE_TAKE_PROFIT_RATIO = 0.04
+const BASE_STOP_LOSS_RATIO = -0.025
+const BASE_MAX_POSITION_CANDLES = 12
 const DAY_IN_MS = 24 * 60 * 60 * 1000
 const INITIAL_EQUITY = 10000
 
@@ -71,6 +122,10 @@ function normalizeDate(value: string | undefined, fallback: Date): Date {
 
   parsed.setHours(0, 0, 0, 0)
   return parsed
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
 }
 
 function buildTestPeriod(config: TrainingSessionConfig): { startDate: string; endDate: string } {
@@ -152,12 +207,76 @@ function getBearishScore(current: TrainingDataPoint, previous: TrainingDataPoint
   return score
 }
 
-function simulatePairTrades(pair: string, points: TrainingDataPoint[]): BacktestTrade[] {
+function getBacktestSignalProfile(config: TrainingSessionConfig): BacktestSignalProfile {
+  const labeling = getLabelConfiguration(config)
+  const horizonAdjustment = Math.max(0, labeling.horizonCandles - 5)
+
+  switch (config.architecture as SupportedTrainingArchitecture | undefined) {
+    case 'random_forest':
+      return {
+        minimumBullishScore: 3,
+        minimumBearishScore: 2,
+        takeProfitRatio: 0.035,
+        stopLossRatio: -0.02,
+        maxPositionCandles: BASE_MAX_POSITION_CANDLES + horizonAdjustment,
+        rsiOversoldThreshold: 42,
+      }
+    case 'xgboost':
+      return {
+        minimumBullishScore: 3,
+        minimumBearishScore: 2,
+        takeProfitRatio: 0.045,
+        stopLossRatio: -0.024,
+        maxPositionCandles: BASE_MAX_POSITION_CANDLES + 2 + horizonAdjustment,
+        rsiOversoldThreshold: 41,
+      }
+    case 'lstm':
+      return {
+        minimumBullishScore: 4,
+        minimumBearishScore: 2,
+        takeProfitRatio: 0.05,
+        stopLossRatio: -0.026,
+        maxPositionCandles: BASE_MAX_POSITION_CANDLES + 4 + horizonAdjustment,
+        rsiOversoldThreshold: 39,
+      }
+    case 'transformer':
+      return {
+        minimumBullishScore: 4,
+        minimumBearishScore: 2,
+        takeProfitRatio: 0.052,
+        stopLossRatio: -0.028,
+        maxPositionCandles: BASE_MAX_POSITION_CANDLES + 6 + horizonAdjustment,
+        rsiOversoldThreshold: 38,
+      }
+    case 'cnn':
+      return {
+        minimumBullishScore: 3,
+        minimumBearishScore: 2,
+        takeProfitRatio: 0.038,
+        stopLossRatio: -0.023,
+        maxPositionCandles: BASE_MAX_POSITION_CANDLES + 1 + horizonAdjustment,
+        rsiOversoldThreshold: 40,
+      }
+    case 'linear_regression':
+    default:
+      return {
+        minimumBullishScore: 3,
+        minimumBearishScore: 2,
+        takeProfitRatio: BASE_TAKE_PROFIT_RATIO,
+        stopLossRatio: BASE_STOP_LOSS_RATIO,
+        maxPositionCandles: BASE_MAX_POSITION_CANDLES + horizonAdjustment,
+        rsiOversoldThreshold: 40,
+      }
+  }
+}
+
+function simulatePairTrades(pair: string, points: TrainingDataPoint[], config: TrainingSessionConfig): BacktestTrade[] {
   if (points.length < 2) {
     return []
   }
 
   const trades: BacktestTrade[] = []
+  const signalProfile = getBacktestSignalProfile(config)
   let position:
     | {
         entryPrice: number
@@ -175,10 +294,10 @@ function simulatePairTrades(pair: string, points: TrainingDataPoint[]): Backtest
     const bearishScore = getBearishScore(current, previous)
 
     if (!position) {
-      const shouldBuy = bullishScore >= 3 || (
+      const shouldBuy = bullishScore >= signalProfile.minimumBullishScore || (
         current.RSI !== null &&
         current.RSI !== undefined &&
-        current.RSI < 40 &&
+        current.RSI < signalProfile.rsiOversoldThreshold &&
         current.close > previous.close
       )
 
@@ -200,10 +319,10 @@ function simulatePairTrades(pair: string, points: TrainingDataPoint[]): Backtest
     const netProfit = grossExitValue - grossEntryValue - fees
     const netReturnRatio = netProfit / FIXED_TRADE_CAPITAL
     const candlesHeld = index - position.entryIndex
-    const shouldSell = netReturnRatio >= TAKE_PROFIT_RATIO
-      || netReturnRatio <= STOP_LOSS_RATIO
-      || bearishScore >= 2
-      || candlesHeld >= MAX_POSITION_CANDLES
+    const shouldSell = netReturnRatio >= signalProfile.takeProfitRatio
+      || netReturnRatio <= signalProfile.stopLossRatio
+      || bearishScore >= signalProfile.minimumBearishScore
+      || candlesHeld >= signalProfile.maxPositionCandles
 
     if (!shouldSell) {
       continue
@@ -270,8 +389,230 @@ function calculateMaxDrawdown(trades: BacktestTrade[]): number {
   return maxDrawdown
 }
 
+function summarizeTrades(trades: BacktestTrade[]): { totalTrades: number; winRate: number; totalProfit: number } {
+  if (trades.length === 0) {
+    return {
+      totalTrades: 0,
+      winRate: 0,
+      totalProfit: 0,
+    }
+  }
+
+  const wins = trades.filter((trade) => trade.profit > 0)
+  const totalProfit = trades.reduce((sum, trade) => sum + trade.profit, 0)
+
+  return {
+    totalTrades: trades.length,
+    winRate: (wins.length / trades.length) * 100,
+    totalProfit,
+  }
+}
+
+function buildWalkForwardWindows(
+  testPeriod: { startDate: string; endDate: string },
+  foldCount: number,
+): Array<{ start: Date; end: Date }> {
+  const periodStart = new Date(`${testPeriod.startDate}T00:00:00.000Z`)
+  const periodEnd = new Date(`${testPeriod.endDate}T23:59:59.999Z`)
+  const totalDuration = periodEnd.getTime() - periodStart.getTime()
+
+  if (totalDuration <= 0) {
+    return [{ start: periodStart, end: periodEnd }]
+  }
+
+  const windowDuration = Math.max(1, Math.floor(totalDuration / foldCount))
+
+  return Array.from({ length: foldCount }, (_, index) => {
+    const start = new Date(periodStart.getTime() + (windowDuration * index))
+    const end = index === foldCount - 1
+      ? periodEnd
+      : new Date(periodStart.getTime() + (windowDuration * (index + 1)) - 1)
+
+    return { start, end }
+  })
+}
+
+function calculateWalkForwardValidation(
+  datasets: Record<string, TrainingDataPoint[]>,
+  testPeriod: { startDate: string; endDate: string },
+  config: TrainingSessionConfig,
+): BacktestValidation {
+  const labelConfiguration = getLabelConfiguration(config)
+  const foldCount = getWalkForwardFoldCount(config)
+  const windows = buildWalkForwardWindows(testPeriod, foldCount).map((window, index) => {
+    const trades = Object.entries(datasets).flatMap(([pair, points]) => {
+      const slicedPoints = points.filter((point) => {
+        const timestamp = new Date(point.timestamp).getTime()
+        return timestamp >= window.start.getTime() && timestamp <= window.end.getTime()
+      })
+
+      return simulatePairTrades(pair, slicedPoints, config)
+    })
+
+    const summary = summarizeTrades(trades)
+
+    return {
+      index: index + 1,
+      startDate: window.start.toISOString(),
+      endDate: window.end.toISOString(),
+      totalTrades: summary.totalTrades,
+      winRate: toFixedNumber(summary.winRate, 2),
+      totalProfit: toFixedNumber(summary.totalProfit, 2),
+    }
+  })
+
+  const periodStart = new Date(`${testPeriod.startDate}T00:00:00.000Z`).getTime()
+  const periodEnd = new Date(`${testPeriod.endDate}T23:59:59.999Z`).getTime()
+  const testWindowDays = Math.max(1, Math.round((periodEnd - periodStart) / DAY_IN_MS))
+
+  return {
+    mode: 'walk_forward',
+    lookaheadSafe: true,
+    signalLagCandles: 1,
+    folds: foldCount,
+    trainSplitPercent: clamp(Math.round(config.hyperparameters?.validationSplit ?? 20), 5, 50),
+    testWindowDays,
+    labeling: labelConfiguration,
+    windows,
+  }
+}
+
+function calculateBuyAndHoldBenchmark(
+  datasets: Record<string, TrainingDataPoint[]>,
+  strategyProfit: number,
+): BacktestBenchmark {
+  const eligibleDatasets = Object.values(datasets).filter((points) => points.length >= 2)
+  const baselineCapital = FIXED_TRADE_CAPITAL * Math.max(1, eligibleDatasets.length)
+
+  if (eligibleDatasets.length === 0) {
+    return {
+      strategy: 'buy_and_hold',
+      label: 'Buy and Hold',
+      baselineCapital,
+      totalProfit: 0,
+      totalReturnPercent: 0,
+      outperformanceBrl: toFixedNumber(strategyProfit, 2),
+      outperformancePercent: 0,
+    }
+  }
+
+  const totalProfit = eligibleDatasets.reduce((sum, points) => {
+    const entryPrice = points[0].close
+    const exitPrice = points[points.length - 1].close
+    const quantity = FIXED_TRADE_CAPITAL / entryPrice
+    const grossEntryValue = quantity * entryPrice
+    const grossExitValue = quantity * exitPrice
+    const fees = (grossEntryValue * FEE_RATE) + (grossExitValue * FEE_RATE)
+
+    return sum + (grossExitValue - grossEntryValue - fees)
+  }, 0)
+
+  const totalReturnPercent = (totalProfit / baselineCapital) * 100
+  const strategyReturnPercent = (strategyProfit / baselineCapital) * 100
+
+  return {
+    strategy: 'buy_and_hold',
+    label: 'Buy and Hold',
+    baselineCapital,
+    totalProfit: toFixedNumber(totalProfit, 2),
+    totalReturnPercent: toFixedNumber(totalReturnPercent, 2),
+    outperformanceBrl: toFixedNumber(strategyProfit - totalProfit, 2),
+    outperformancePercent: toFixedNumber(strategyReturnPercent - totalReturnPercent, 2),
+  }
+}
+
+function calculateDcaBenchmark(
+  datasets: Record<string, TrainingDataPoint[]>,
+  strategyProfit: number,
+): BacktestBenchmark {
+  const eligibleDatasets = Object.values(datasets).filter((points) => points.length >= 4)
+  const baselineCapital = FIXED_TRADE_CAPITAL * Math.max(1, eligibleDatasets.length)
+
+  if (eligibleDatasets.length === 0) {
+    return {
+      strategy: 'dca',
+      label: 'DCA',
+      baselineCapital,
+      totalProfit: 0,
+      totalReturnPercent: 0,
+      outperformanceBrl: toFixedNumber(strategyProfit, 2),
+      outperformancePercent: 0,
+    }
+  }
+
+  const tranches = 4
+  const trancheCapital = FIXED_TRADE_CAPITAL / tranches
+  const totalProfit = eligibleDatasets.reduce((sum, points) => {
+    const lastPoint = points[points.length - 1]
+    const trancheIndices = Array.from({ length: tranches }, (_, index) => {
+      if (index === tranches - 1) {
+        return points.length - 1
+      }
+
+      return Math.min(points.length - 1, Math.floor((points.length - 1) * (index / tranches)))
+    })
+
+    const profit = trancheIndices.reduce((accumulator, pointIndex) => {
+      const point = points[pointIndex]
+      const quantity = trancheCapital / point.close
+      const grossEntryValue = quantity * point.close
+      const grossExitValue = quantity * lastPoint.close
+      const fees = (grossEntryValue * FEE_RATE) + (grossExitValue * FEE_RATE)
+      return accumulator + (grossExitValue - grossEntryValue - fees)
+    }, 0)
+
+    return sum + profit
+  }, 0)
+
+  const totalReturnPercent = (totalProfit / baselineCapital) * 100
+  const strategyReturnPercent = (strategyProfit / baselineCapital) * 100
+
+  return {
+    strategy: 'dca',
+    label: 'DCA em 4 entradas',
+    baselineCapital,
+    totalProfit: toFixedNumber(totalProfit, 2),
+    totalReturnPercent: toFixedNumber(totalReturnPercent, 2),
+    outperformanceBrl: toFixedNumber(strategyProfit - totalProfit, 2),
+    outperformancePercent: toFixedNumber(strategyReturnPercent - totalReturnPercent, 2),
+  }
+}
+
+function buildPairBreakdown(trades: BacktestTrade[]): BacktestPairSummary[] {
+  const grouped = new Map<string, BacktestTrade[]>()
+
+  for (const trade of trades) {
+    const bucket = grouped.get(trade.pair) ?? []
+    bucket.push(trade)
+    grouped.set(trade.pair, bucket)
+  }
+
+  return Array.from(grouped.entries())
+    .map(([pair, pairTrades]) => {
+      const summary = summarizeTrades(pairTrades)
+      const averageReturnPercent = pairTrades.length > 0
+        ? (pairTrades.reduce((sum, trade) => sum + trade.returnRatio, 0) / pairTrades.length) * 100
+        : 0
+
+      return {
+        pair,
+        totalTrades: summary.totalTrades,
+        winRate: toFixedNumber(summary.winRate, 2),
+        totalProfit: toFixedNumber(summary.totalProfit, 2),
+        averageReturnPercent: toFixedNumber(averageReturnPercent, 2),
+      }
+    })
+    .sort((left, right) => right.totalProfit - left.totalProfit)
+}
+
 export async function runTrainingBacktest(session: CompletedTrainingSession): Promise<TrainingBacktestResult> {
   const config = safeJsonParse<TrainingSessionConfig>(session.config, {})
+
+  if (isPythonMlEngineEnabled()) {
+    const realBacktest = await runRealBacktest(session.id, config)
+    return realBacktest as TrainingBacktestResult
+  }
+
   const testPeriod = buildTestPeriod(config)
 
   const datasets = await collectTrainingData({
@@ -283,10 +624,15 @@ export async function runTrainingBacktest(session: CompletedTrainingSession): Pr
   })
 
   const trades = Object.entries(datasets)
-    .flatMap(([pair, points]) => simulatePairTrades(pair, points))
+    .flatMap(([pair, points]) => simulatePairTrades(pair, points, config))
     .sort((left, right) => new Date(left.closedAt).getTime() - new Date(right.closedAt).getTime())
 
+  const validation = calculateWalkForwardValidation(datasets, testPeriod, config)
+
   if (trades.length === 0) {
+    const primaryBenchmark = calculateBuyAndHoldBenchmark(datasets, 0)
+    const dcaBenchmark = calculateDcaBenchmark(datasets, 0)
+
     return {
       sessionId: session.id,
       testPeriod,
@@ -296,6 +642,10 @@ export async function runTrainingBacktest(session: CompletedTrainingSession): Pr
       sharpeRatio: 0,
       maxDrawdown: 0,
       profitFactor: 0,
+      benchmark: primaryBenchmark,
+      benchmarks: [primaryBenchmark, dcaBenchmark],
+      pairBreakdown: [],
+      validation,
     }
   }
 
@@ -307,6 +657,8 @@ export async function runTrainingBacktest(session: CompletedTrainingSession): Pr
   const totalProfit = trades.reduce((sum, trade) => sum + trade.profit, 0)
   const winRate = (wins.length / trades.length) * 100
   const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : grossProfit > 0 ? grossProfit : 0
+  const primaryBenchmark = calculateBuyAndHoldBenchmark(datasets, totalProfit)
+  const dcaBenchmark = calculateDcaBenchmark(datasets, totalProfit)
 
   return {
     sessionId: session.id,
@@ -317,5 +669,9 @@ export async function runTrainingBacktest(session: CompletedTrainingSession): Pr
     sharpeRatio: toFixedNumber(calculateSharpeRatio(trades), 2),
     maxDrawdown: toFixedNumber(calculateMaxDrawdown(trades), 2),
     profitFactor: toFixedNumber(profitFactor, 2),
+    benchmark: primaryBenchmark,
+    benchmarks: [primaryBenchmark, dcaBenchmark],
+    pairBreakdown: buildPairBreakdown(trades),
+    validation,
   }
 }

@@ -5,7 +5,16 @@ import { prisma } from '../config/database'
 import { AuthRequest } from '../middleware/auth.middleware'
 import { getExchangeRate as getExternalExchangeRate } from '../services/awesomeapi.service'
 import { ExternalApiError } from '../services/external-http.service'
-import { getAccountBalances, getCandles as getBinanceCandles, getTickerPrice } from '../services/binance.service'
+import {
+  cancelSpotOrder,
+  getAccountBalances,
+  getCandles as getBinanceCandles,
+  getSpotOrder,
+  getSpotOrderTrades,
+  getTickerPrice,
+  mapBinanceOrderStatusToLocalStatus,
+  type BinanceTradeFill,
+} from '../services/binance.service'
 import { normalizeFeeSettings, type FeeSettings } from '../services/configuration.service'
 import { getCurrencyRateToBrl } from '../services/market-valuation.service'
 import { recordBalanceHistorySnapshot } from '../services/portfolio.service'
@@ -46,6 +55,9 @@ const orderFiltersSchema = z.object({
 const ORDER_FEE_RATE = 0.001
 const BALANCE_EPSILON = 1e-8
 const FIFO_EPSILON = 1e-8
+const OPEN_ORDER_STATUSES = ['pending', 'partially_filled'] as const
+
+type LocalOrderLifecycleStatus = 'pending' | 'partially_filled' | 'executed' | 'cancelled' | 'rejected'
 
 interface FifoLot {
   remainingQuantity: number
@@ -66,6 +78,91 @@ interface OrderFeePolicy {
   feeRateApplied: number
   feeDiscountSource: 'bnb' | 'usdt' | 'standard'
   feeInQuote: number
+}
+
+export interface ExecuteOrderInput {
+  userId: string
+  pair: string
+  type: 'buy' | 'sell'
+  quantity: number
+  requestedQuantity?: number
+  orderType: 'market' | 'limit'
+  price?: number
+  origin?: 'manual' | 'bot'
+  botId?: string | null
+  totalOverride?: number
+  feeOverride?: number
+  feeCurrencyOverride?: string
+  feeRateAppliedOverride?: number
+  feeDiscountSourceOverride?: 'bnb' | 'usdt' | 'standard'
+  feeInQuoteOverride?: number
+  statusOverride?: LocalOrderLifecycleStatus
+  externalOrderId?: string | null
+  externalClientOrderId?: string | null
+  externalStatus?: string | null
+  syncedAt?: Date
+}
+
+export interface ExecutedOrderPayload {
+  id: string
+  date: Date
+  pair: string
+  origin: string
+  botId?: string | null
+  type: string
+  quantity: number
+  requestedQuantity?: number
+  price: number
+  total: number
+  fee: number
+  feeCurrency: string
+  feeRateApplied: number
+  feeDiscountSource?: string
+  status: string
+  orderType?: string
+  externalOrderId?: string
+  externalClientOrderId?: string
+  externalStatus?: string
+  syncedAt?: Date
+  profitBrl: number | null
+  profitPercent: number | null
+}
+
+interface ExchangeOrderSnapshotInput {
+  userId: string
+  transactionId?: string
+  pair: string
+  type: 'buy' | 'sell'
+  origin?: 'manual' | 'bot'
+  botId?: string | null
+  orderType: 'market' | 'limit'
+  requestedQuantity: number
+  executedQuantity: number
+  price: number
+  total: number
+  fee: number
+  feeInQuote?: number
+  feeCurrency: string
+  feeRateApplied: number
+  feeDiscountSource?: 'bnb' | 'usdt' | 'standard'
+  externalOrderId?: string | null
+  externalClientOrderId?: string | null
+  externalStatus?: string | null
+  status: LocalOrderLifecycleStatus
+  syncedAt?: Date
+}
+
+function isOrderBusinessError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  return (
+    error.message.startsWith('Saldo insuficiente')
+    || error.message.includes('reserva mínima de BNB')
+    || error.message.includes('compras suficientes no histórico')
+    || error.message.includes('Histórico inconsistente')
+  )
 }
 
 function getPairCurrencies(pair: string): { baseCurrency: string; quoteCurrency: string } {
@@ -176,7 +273,7 @@ async function calculateSellProfitUsingFifo(
   }
 }
 
-async function getUserExchangeCredentials(userId: string): Promise<{ apiKey: string; secretKey: string } | null> {
+export async function getUserExchangeCredentials(userId: string): Promise<{ apiKey: string; secretKey: string } | null> {
   const configuration = await prisma.configuration.findUnique({
     where: { userId },
     select: { apiKey: true, secretKey: true, exchange: true },
@@ -236,7 +333,7 @@ function buildCoreOrderDeltas(
   return deltas
 }
 
-async function getAssetPriceInQuote(asset: string, quoteCurrency: string): Promise<number> {
+export async function getAssetPriceInQuote(asset: string, quoteCurrency: string): Promise<number> {
   const normalizedAsset = asset.trim().toUpperCase()
   const normalizedQuote = quoteCurrency.trim().toUpperCase()
 
@@ -360,7 +457,7 @@ async function persistBalanceDeltas(
   await Promise.all(updates)
 }
 
-async function syncExternalBalances(userId: string, balances: Array<{ currency: string; available: number; reserved: number; total: number }>): Promise<void> {
+export async function syncExternalBalances(userId: string, balances: Array<{ currency: string; available: number; reserved: number; total: number }>): Promise<void> {
   await Promise.all(
     balances.map((balance) => prisma.balance.upsert({
       where: {
@@ -384,6 +481,561 @@ async function syncExternalBalances(userId: string, balances: Array<{ currency: 
       },
     })),
   )
+}
+
+function buildTransactionPayload(transaction: any): ExecutedOrderPayload {
+  return {
+    id: transaction.id,
+    date: transaction.date,
+    pair: transaction.pair,
+    origin: transaction.origin,
+    botId: transaction.botId ?? undefined,
+    type: transaction.type,
+    quantity: transaction.quantity,
+    requestedQuantity: transaction.requestedQuantity ?? transaction.quantity,
+    price: transaction.price,
+    total: transaction.total,
+    fee: transaction.fee,
+    feeCurrency: transaction.feeCurrency,
+    feeRateApplied: transaction.feeRateApplied,
+    feeDiscountSource: transaction.feeDiscountSource ?? undefined,
+    status: transaction.status,
+    orderType: transaction.orderType,
+    externalOrderId: transaction.externalOrderId ?? undefined,
+    externalClientOrderId: transaction.externalClientOrderId ?? undefined,
+    externalStatus: transaction.externalStatus ?? undefined,
+    syncedAt: transaction.syncedAt ?? undefined,
+    profitBrl: transaction.profitBrl,
+    profitPercent: transaction.profitPercent,
+  }
+}
+
+function normalizeLocalOrderStatus(status: string): LocalOrderLifecycleStatus {
+  if (status === 'executed' || status === 'pending' || status === 'partially_filled' || status === 'cancelled' || status === 'rejected') {
+    return status
+  }
+
+  return 'pending'
+}
+
+async function calculateTradeFeeSummary(
+  trades: BinanceTradeFill[],
+  quoteCurrency: string,
+  fallbackTotal: number,
+): Promise<{
+  fee: number
+  feeInQuote: number
+  feeCurrency: string
+  feeRateApplied: number
+  feeDiscountSource?: 'bnb' | 'usdt' | 'standard'
+}> {
+  if (trades.length === 0) {
+    return {
+      fee: 0,
+      feeInQuote: 0,
+      feeCurrency: quoteCurrency,
+      feeRateApplied: 0,
+      feeDiscountSource: undefined,
+    }
+  }
+
+  const commissionByAsset = new Map<string, number>()
+  for (const trade of trades) {
+    const asset = trade.commissionAsset?.trim().toUpperCase()
+    const commission = Number(trade.commission)
+
+    if (!asset || !Number.isFinite(commission) || commission <= 0) {
+      continue
+    }
+
+    commissionByAsset.set(asset, (commissionByAsset.get(asset) ?? 0) + commission)
+  }
+
+  if (commissionByAsset.size === 0) {
+    return {
+      fee: 0,
+      feeInQuote: 0,
+      feeCurrency: quoteCurrency,
+      feeRateApplied: 0,
+      feeDiscountSource: undefined,
+    }
+  }
+
+  if (commissionByAsset.size === 1) {
+    const [feeCurrency, fee] = Array.from(commissionByAsset.entries())[0]
+    const feeInQuote = feeCurrency === quoteCurrency
+      ? fee
+      : fee * await getAssetPriceInQuote(feeCurrency, quoteCurrency)
+
+    return {
+      fee,
+      feeInQuote,
+      feeCurrency,
+      feeRateApplied: fallbackTotal > BALANCE_EPSILON ? (feeInQuote / fallbackTotal) : 0,
+      feeDiscountSource: feeCurrency === 'BNB' ? 'bnb' : (feeCurrency === 'USDT' ? 'usdt' : 'standard'),
+    }
+  }
+
+  let feeInQuote = 0
+  for (const [asset, commission] of commissionByAsset.entries()) {
+    feeInQuote += asset === quoteCurrency
+      ? commission
+      : commission * await getAssetPriceInQuote(asset, quoteCurrency)
+  }
+
+  return {
+    fee: feeInQuote,
+    feeInQuote,
+    feeCurrency: quoteCurrency,
+    feeRateApplied: fallbackTotal > BALANCE_EPSILON ? (feeInQuote / fallbackTotal) : 0,
+    feeDiscountSource: commissionByAsset.has('BNB') ? 'bnb' : (quoteCurrency === 'USDT' ? 'usdt' : 'standard'),
+  }
+}
+
+async function syncExchangeBalancesAndSnapshots(userId: string): Promise<void> {
+  const credentials = await getUserExchangeCredentials(userId)
+  if (!credentials) {
+    return
+  }
+
+  const balances = await getAccountBalances(credentials.apiKey, credentials.secretKey, { forceRefresh: true })
+  await syncExternalBalances(userId, balances)
+  await recordBalanceHistorySnapshot(userId, balances.map((balance) => ({
+    currency: balance.currency,
+    available: balance.available,
+  }))).catch((snapshotError) => {
+    logger.warn('[transactions] Falha ao registrar snapshot após sincronização de ordem real', {
+      module: 'transactions',
+      event: 'exchange_order_snapshot_sync_failed',
+      userId,
+      error: snapshotError,
+      skipPersistence: true,
+    })
+  })
+}
+
+export async function upsertExchangeOrderSnapshot(input: ExchangeOrderSnapshotInput): Promise<ExecutedOrderPayload> {
+  const {
+    userId,
+    transactionId,
+    pair,
+    type,
+    origin = 'bot',
+    botId = null,
+    orderType,
+    requestedQuantity,
+    executedQuantity,
+    price,
+    total,
+    fee,
+    feeInQuote,
+    feeCurrency,
+    feeRateApplied,
+    feeDiscountSource,
+    externalOrderId,
+    externalClientOrderId,
+    externalStatus,
+    status,
+    syncedAt = new Date(),
+  } = input
+
+  let profitBrl: number | null = null
+  let profitPercent: number | null = null
+
+  if (status === 'executed' && type === 'sell' && executedQuantity > BALANCE_EPSILON) {
+    const sellProfit = await calculateSellProfitUsingFifo(
+      userId,
+      pair,
+      executedQuantity,
+      price,
+      feeInQuote ?? (feeCurrency.toUpperCase() === getPairCurrencies(pair).quoteCurrency ? fee : 0),
+    )
+    profitBrl = sellProfit.profitBrl
+    profitPercent = sellProfit.profitPercent
+  }
+
+  const payload = {
+    pair,
+    origin,
+    botId,
+    type,
+    quantity: executedQuantity,
+    requestedQuantity,
+    orderType,
+    price,
+    total,
+    fee,
+    feeCurrency,
+    feeRateApplied,
+    feeDiscountSource: feeDiscountSource ?? null,
+    status,
+    externalOrderId: externalOrderId ?? null,
+    externalClientOrderId: externalClientOrderId ?? null,
+    externalStatus: externalStatus ?? null,
+    syncedAt,
+    profitBrl,
+    profitPercent,
+  }
+
+  const transaction = transactionId
+    ? await prisma.transaction.update({
+        where: { id: transactionId },
+        data: payload,
+      })
+    : await prisma.transaction.create({
+        data: {
+          userId,
+          ...payload,
+        },
+      })
+
+  const transactionPayload = buildTransactionPayload(transaction)
+
+  if (transactionId) {
+    emitOrderUpdated(userId, {
+      ...transactionPayload,
+      updatedAt: new Date().toISOString(),
+    })
+  } else {
+    emitOrderCreated(userId, transactionPayload)
+  }
+
+  emitDashboardUpdate(userId, {
+    scope: 'portfolio',
+    reason: status === 'executed' ? 'exchange_order_executed' : 'exchange_order_updated',
+    updatedAt: new Date().toISOString(),
+    botId: botId ?? undefined,
+  })
+
+  return transactionPayload
+}
+
+export async function reconcileExchangeOrderForUser(params: {
+  userId: string
+  transactionId: string
+}): Promise<ExecutedOrderPayload | null> {
+  const transaction = await prisma.transaction.findFirst({
+    where: {
+      id: params.transactionId,
+      userId: params.userId,
+    },
+  })
+
+  if (!transaction || !transaction.externalOrderId) {
+    return null
+  }
+
+  const credentials = await getUserExchangeCredentials(params.userId)
+  if (!credentials) {
+    return buildTransactionPayload(transaction)
+  }
+
+  const remoteOrder = await getSpotOrder(credentials.apiKey, credentials.secretKey, {
+    pair: transaction.pair,
+    orderId: transaction.externalOrderId,
+  })
+  const trades = await getSpotOrderTrades(credentials.apiKey, credentials.secretKey, {
+    pair: transaction.pair,
+    orderId: transaction.externalOrderId,
+  }).catch(() => [] as BinanceTradeFill[])
+
+  const executedQuantity = Number(remoteOrder.executedQty || transaction.quantity || 0)
+  const cumulativeQuoteQty = Number(remoteOrder.cummulativeQuoteQty || transaction.total || 0)
+  const effectivePrice = executedQuantity > BALANCE_EPSILON && cumulativeQuoteQty > BALANCE_EPSILON
+    ? (cumulativeQuoteQty / executedQuantity)
+    : transaction.price
+  const { quoteCurrency } = getPairCurrencies(transaction.pair)
+  const feeSummary = await calculateTradeFeeSummary(trades, quoteCurrency, cumulativeQuoteQty)
+  const localStatus = mapBinanceOrderStatusToLocalStatus(remoteOrder.status, executedQuantity)
+
+  const updated = await upsertExchangeOrderSnapshot({
+    userId: params.userId,
+    transactionId: transaction.id,
+    pair: transaction.pair,
+    type: transaction.type as 'buy' | 'sell',
+    origin: transaction.origin as 'manual' | 'bot',
+    botId: transaction.botId,
+    orderType: (transaction.orderType as 'market' | 'limit') || 'market',
+    requestedQuantity: transaction.requestedQuantity || transaction.quantity,
+    executedQuantity,
+    price: effectivePrice,
+    total: cumulativeQuoteQty,
+    fee: feeSummary.fee,
+    feeInQuote: feeSummary.feeInQuote,
+    feeCurrency: feeSummary.feeCurrency,
+    feeRateApplied: feeSummary.feeRateApplied,
+    feeDiscountSource: feeSummary.feeDiscountSource,
+    externalOrderId: String(remoteOrder.orderId),
+    externalClientOrderId: remoteOrder.clientOrderId,
+    externalStatus: remoteOrder.status,
+    status: localStatus,
+    syncedAt: new Date(remoteOrder.updateTime || Date.now()),
+  })
+
+  await syncExchangeBalancesAndSnapshots(params.userId)
+
+  return updated
+}
+
+export async function reconcileOpenExchangeOrdersForUser(params: {
+  userId: string
+  botId?: string
+}): Promise<ExecutedOrderPayload[]> {
+  const transactions = await prisma.transaction.findMany({
+    where: {
+      userId: params.userId,
+      botId: params.botId,
+      externalOrderId: { not: null },
+      status: { in: [...OPEN_ORDER_STATUSES] },
+    },
+    orderBy: { date: 'asc' },
+  })
+
+  const results: ExecutedOrderPayload[] = []
+
+  for (const transaction of transactions) {
+    const updated = await reconcileExchangeOrderForUser({
+      userId: params.userId,
+      transactionId: transaction.id,
+    }).catch((error) => {
+      logger.warn('[transactions] Falha ao reconciliar ordem externa pendente', {
+        module: 'transactions',
+        event: 'reconcile_exchange_order_failed',
+        userId: params.userId,
+        transactionId: transaction.id,
+        error,
+        skipPersistence: true,
+      })
+      return null
+    })
+
+    if (updated) {
+      results.push(updated)
+    }
+  }
+
+  return results
+}
+
+export async function executeOrderForUser(input: ExecuteOrderInput): Promise<ExecutedOrderPayload> {
+  const userId = input.userId
+  const pair = input.pair
+  const type = input.type
+  const quantity = input.quantity
+  const requestedQuantity = input.requestedQuantity ?? input.quantity
+  const orderType = input.orderType
+  const price = input.price
+  const origin = input.origin ?? 'manual'
+  const botId = input.botId ?? null
+  const totalOverride = input.totalOverride
+  const feeOverride = input.feeOverride
+  const feeCurrencyOverride = input.feeCurrencyOverride?.trim().toUpperCase()
+  const feeRateAppliedOverride = input.feeRateAppliedOverride
+  const feeDiscountSourceOverride = input.feeDiscountSourceOverride
+  const feeInQuoteOverride = input.feeInQuoteOverride
+  const statusOverride = input.statusOverride
+  const externalOrderId = input.externalOrderId ?? null
+  const externalClientOrderId = input.externalClientOrderId ?? null
+  const externalStatus = input.externalStatus ?? null
+  const syncedAt = input.syncedAt
+
+  const { baseCurrency, quoteCurrency } = getPairCurrencies(pair)
+  const trackedCurrencies = Array.from(new Set([baseCurrency, quoteCurrency, 'BNB']))
+  const balances = await prisma.balance.findMany({
+    where: {
+      userId,
+      currency: { in: trackedCurrencies },
+    },
+  })
+  const balancesByCurrency = new Map(
+    balances.map((balance) => [balance.currency.toUpperCase(), balance as BalanceState]),
+  )
+
+  const marketPrice = !price ? await getTickerPrice(pair).catch(() => null) : null
+  const estimatedPrice = price || marketPrice || 50000
+  const totalValue = typeof totalOverride === 'number' && Number.isFinite(totalOverride)
+    ? totalOverride
+    : quantity * estimatedPrice
+  const feeSettings = await getUserFeeSettings(userId)
+  const coreDeltas = buildCoreOrderDeltas(type, baseCurrency, quoteCurrency, quantity, totalValue)
+  const currentBnbAvailable = balancesByCurrency.get('BNB')?.available ?? 0
+  const projectedBnbAvailableBeforeFee = currentBnbAvailable + (coreDeltas.BNB ?? 0)
+  const feePolicy = typeof feeOverride === 'number' && Number.isFinite(feeOverride)
+    ? await (async (): Promise<OrderFeePolicy> => {
+        const normalizedFeeCurrency = feeCurrencyOverride || quoteCurrency
+        const normalizedFeeInQuote = typeof feeInQuoteOverride === 'number' && Number.isFinite(feeInQuoteOverride)
+          ? feeInQuoteOverride
+          : (normalizedFeeCurrency === quoteCurrency
+            ? feeOverride
+            : feeOverride * await getAssetPriceInQuote(normalizedFeeCurrency, quoteCurrency))
+
+        return {
+          fee: feeOverride,
+          feeCurrency: normalizedFeeCurrency,
+          feeRateApplied: typeof feeRateAppliedOverride === 'number' && Number.isFinite(feeRateAppliedOverride)
+            ? feeRateAppliedOverride
+            : (totalValue > BALANCE_EPSILON ? (normalizedFeeInQuote / totalValue) : ORDER_FEE_RATE),
+          feeDiscountSource: feeDiscountSourceOverride
+            ?? (normalizedFeeCurrency === 'BNB' ? 'bnb' : 'standard'),
+          feeInQuote: normalizedFeeInQuote,
+        }
+      })()
+    : await calculateOrderFeePolicy({
+        totalValue,
+        quoteCurrency,
+        currentBnbAvailable,
+        projectedBnbAvailableBeforeFee,
+        feeSettings,
+      })
+  const deltas = { ...coreDeltas }
+  addBalanceDelta(deltas, feePolicy.feeCurrency, -feePolicy.fee)
+
+  Object.entries(deltas).forEach(([currency, delta]) => {
+    const currentAvailable = balancesByCurrency.get(currency)?.available ?? 0
+    const finalAvailable = currentAvailable + delta
+
+    if (finalAvailable < -BALANCE_EPSILON) {
+      throw new Error(`Saldo insuficiente de ${currency}`)
+    }
+
+    if (currency === 'BNB' && feeSettings.reserveBnbForFeesEnabled) {
+      const protectedFloor = getProtectedBnbFloor(currentAvailable, feeSettings)
+      if (finalAvailable + BALANCE_EPSILON < protectedFloor) {
+        throw new Error('A reserva mínima de BNB para taxas seria violada')
+      }
+    }
+  })
+
+  let profitBrl: number | null = null
+  let profitPercent: number | null = null
+
+  if (type === 'sell') {
+    const sellProfit = await calculateSellProfitUsingFifo(userId, pair, quantity, estimatedPrice, feePolicy.feeInQuote)
+    profitBrl = sellProfit.profitBrl
+    profitPercent = sellProfit.profitPercent
+  }
+
+  const transaction = await prisma.transaction.create({
+    data: {
+      userId,
+      pair,
+      origin,
+      botId,
+      type,
+      quantity,
+      requestedQuantity,
+      orderType,
+      price: estimatedPrice,
+      total: totalValue,
+      fee: feePolicy.fee,
+      feeCurrency: feePolicy.feeCurrency,
+      feeRateApplied: feePolicy.feeRateApplied,
+      feeDiscountSource: feePolicy.feeDiscountSource,
+      status: statusOverride ?? 'executed',
+      externalOrderId,
+      externalClientOrderId,
+      externalStatus,
+      syncedAt,
+      profitBrl,
+      profitPercent,
+    },
+  })
+
+  const transactionPayload: ExecutedOrderPayload = {
+    id: transaction.id,
+    date: transaction.date,
+    pair: transaction.pair,
+    origin: transaction.origin,
+    botId: transaction.botId ?? undefined,
+    type: transaction.type,
+    quantity: transaction.quantity,
+    requestedQuantity: transaction.requestedQuantity ?? transaction.quantity,
+    price: transaction.price,
+    total: transaction.total,
+    fee: transaction.fee,
+    feeCurrency: transaction.feeCurrency,
+    feeRateApplied: transaction.feeRateApplied,
+    feeDiscountSource: transaction.feeDiscountSource ?? undefined,
+    status: transaction.status,
+    orderType: transaction.orderType,
+    externalOrderId: transaction.externalOrderId ?? undefined,
+    externalClientOrderId: transaction.externalClientOrderId ?? undefined,
+    externalStatus: transaction.externalStatus ?? undefined,
+    syncedAt: transaction.syncedAt ?? undefined,
+    profitBrl: transaction.profitBrl,
+    profitPercent: transaction.profitPercent,
+  }
+
+  await persistBalanceDeltas(userId, balancesByCurrency, deltas)
+
+  await recordBalanceHistorySnapshot(userId).catch((snapshotError) => {
+    logger.warn('[transactions] Falha ao registrar snapshot após ordem', {
+      module: 'transactions',
+      event: 'balance_snapshot_order_failed',
+      userId,
+      transactionId: transaction.id,
+      error: snapshotError,
+      skipPersistence: true,
+    })
+  })
+
+  emitOrderCreated(userId, transactionPayload)
+  emitDashboardUpdate(userId, {
+    scope: 'portfolio',
+    reason: 'order_executed',
+    updatedAt: new Date().toISOString(),
+    botId: botId ?? undefined,
+  })
+
+  await sendWebhook('order.executed', {
+    pair,
+    origin,
+    botId,
+    type,
+    quantity,
+    price: estimatedPrice,
+    total: totalValue,
+    fee: feePolicy.fee,
+    feeCurrency: feePolicy.feeCurrency,
+    feeRateApplied: feePolicy.feeRateApplied,
+    feeDiscountSource: feePolicy.feeDiscountSource,
+    status: 'executed',
+    profitBrl,
+    profitPercent,
+  }).catch((webhookError) => {
+    logger.warn('[transactions] Falha ao enviar webhook de ordem executada', {
+      module: 'transactions',
+      event: 'create_order_webhook_failed',
+      userId,
+      transactionId: transaction.id,
+      error: webhookError,
+      skipPersistence: true,
+    })
+  })
+
+  logger.info(`[transactions] Ordem ${origin === 'bot' ? 'automatizada' : 'manual'} criada com sucesso`, {
+    module: 'transactions',
+    event: origin === 'bot' ? 'bot_order_created' : 'manual_order_created',
+    userId,
+    transactionId: transaction.id,
+    botId,
+    order: {
+      pair,
+      type,
+      quantity,
+      orderType,
+      price: estimatedPrice,
+      total: totalValue,
+      fee: feePolicy.fee,
+      feeCurrency: feePolicy.feeCurrency,
+      feeRateApplied: feePolicy.feeRateApplied,
+      feeDiscountSource: feePolicy.feeDiscountSource,
+      profitBrl,
+      profitPercent,
+    },
+  })
+
+  return transactionPayload
 }
 
 export async function getOrders(req: AuthRequest, res: Response): Promise<Response> {
@@ -444,6 +1096,8 @@ export async function getOrders(req: AuthRequest, res: Response): Promise<Respon
       botName: transaction.bot?.name,
       type: transaction.type,
       quantity: transaction.quantity,
+      requestedQuantity: transaction.requestedQuantity ?? transaction.quantity,
+      orderType: transaction.orderType,
       price: transaction.price,
       total: transaction.total,
       fee: transaction.fee,
@@ -451,6 +1105,10 @@ export async function getOrders(req: AuthRequest, res: Response): Promise<Respon
       feeRateApplied: transaction.feeRateApplied,
       feeDiscountSource: transaction.feeDiscountSource ?? undefined,
       status: transaction.status,
+      externalOrderId: transaction.externalOrderId ?? undefined,
+      externalClientOrderId: transaction.externalClientOrderId ?? undefined,
+      externalStatus: transaction.externalStatus ?? undefined,
+      syncedAt: transaction.syncedAt ?? undefined,
       profitBrl: transaction.profitBrl,
       profitPercent: transaction.profitPercent,
     }))
@@ -513,6 +1171,8 @@ export async function getOrderById(req: AuthRequest, res: Response): Promise<Res
       botName: transaction.bot?.name,
       type: transaction.type,
       quantity: transaction.quantity,
+      requestedQuantity: transaction.requestedQuantity ?? transaction.quantity,
+      orderType: transaction.orderType,
       price: transaction.price,
       total: transaction.total,
       fee: transaction.fee,
@@ -520,6 +1180,10 @@ export async function getOrderById(req: AuthRequest, res: Response): Promise<Res
       feeRateApplied: transaction.feeRateApplied,
       feeDiscountSource: transaction.feeDiscountSource ?? undefined,
       status: transaction.status,
+      externalOrderId: transaction.externalOrderId ?? undefined,
+      externalClientOrderId: transaction.externalClientOrderId ?? undefined,
+      externalStatus: transaction.externalStatus ?? undefined,
+      syncedAt: transaction.syncedAt ?? undefined,
       profitBrl: transaction.profitBrl,
       profitPercent: transaction.profitPercent,
     }
@@ -590,66 +1254,44 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
     }
 
     const userId = req.userId!
-    const { baseCurrency, quoteCurrency } = getPairCurrencies(pair)
-    const trackedCurrencies = Array.from(new Set([baseCurrency, quoteCurrency, 'BNB']))
-    const balances = await prisma.balance.findMany({
-      where: {
-        userId,
-        currency: { in: trackedCurrencies },
-      },
-    })
-    const balancesByCurrency = new Map(
-      balances.map((balance) => [balance.currency.toUpperCase(), balance as BalanceState]),
-    )
-
-    const marketPrice = !price ? await getTickerPrice(pair).catch(() => null) : null
-    const estimatedPrice = price || marketPrice || 50000
-    const totalValue = quantity * estimatedPrice
-    const feeSettings = await getUserFeeSettings(userId)
-    const coreDeltas = buildCoreOrderDeltas(type, baseCurrency, quoteCurrency, quantity, totalValue)
-    const currentBnbAvailable = balancesByCurrency.get('BNB')?.available ?? 0
-    const projectedBnbAvailableBeforeFee = currentBnbAvailable + (coreDeltas.BNB ?? 0)
-    const feePolicy = await calculateOrderFeePolicy({
-      totalValue,
-      quoteCurrency,
-      currentBnbAvailable,
-      projectedBnbAvailableBeforeFee,
-      feeSettings,
-    })
-    const deltas = { ...coreDeltas }
-    addBalanceDelta(deltas, feePolicy.feeCurrency, -feePolicy.fee)
 
     try {
-      Object.entries(deltas).forEach(([currency, delta]) => {
-        const currentAvailable = balancesByCurrency.get(currency)?.available ?? 0
-        const finalAvailable = currentAvailable + delta
+      const transactionPayload = await executeOrderForUser({
+        userId,
+        pair,
+        type,
+        quantity,
+        orderType,
+        price,
+        origin: 'manual',
+      })
 
-        if (finalAvailable < -BALANCE_EPSILON) {
-          throw new Error(`Saldo insuficiente de ${currency}`)
-        }
-
-        if (currency === 'BNB' && feeSettings.reserveBnbForFeesEnabled) {
-          const protectedFloor = getProtectedBnbFloor(currentAvailable, feeSettings)
-          if (finalAvailable + BALANCE_EPSILON < protectedFloor) {
-            throw new Error('A reserva mínima de BNB para taxas seria violada')
-          }
-        }
+      trace('DEBUG', 'transactions', 'createOrder', 'Ordem criada com sucesso', 0, {
+        transactionId: transactionPayload.id,
+        userId,
+      })
+      endTrace('createOrder', { userId })
+      return res.json({
+        success: true,
+        data: transactionPayload,
       })
     } catch (balanceError) {
+      if (!isOrderBusinessError(balanceError)) {
+        throw balanceError
+      }
+
       logger.warn('[transactions] Saldo insuficiente para ordem', {
         module: 'transactions',
         event: 'create_order_insufficient_balance',
         userId,
         pair,
         type,
-        deltas,
         error: balanceError,
       })
 
       trace('DEBUG', 'transactions', 'createOrder', 'Saldo insuficiente', 0, {
         pair,
         type,
-        deltas,
         error: balanceError instanceof Error ? balanceError.message : balanceError,
       })
       endTrace('createOrder', { userId, errorFlag: true })
@@ -658,144 +1300,6 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
         error: balanceError instanceof Error ? balanceError.message : 'Saldo insuficiente',
       })
     }
-
-    let profitBrl: number | null = null
-    let profitPercent: number | null = null
-
-    if (type === 'sell') {
-      try {
-        const sellProfit = await calculateSellProfitUsingFifo(userId, pair, quantity, estimatedPrice, feePolicy.feeInQuote)
-        profitBrl = sellProfit.profitBrl
-        profitPercent = sellProfit.profitPercent
-      } catch (fifoError) {
-        logger.warn('[transactions] Falha ao calcular lucro FIFO da venda', {
-          module: 'transactions',
-          event: 'create_order_fifo_failed',
-          userId,
-          pair,
-          quantity,
-          error: fifoError,
-        })
-
-        endTrace('createOrder', { userId, errorFlag: true })
-        return res.status(400).json({
-          success: false,
-          error: fifoError instanceof Error ? fifoError.message : 'Não foi possível calcular o lucro da venda',
-        })
-      }
-    }
-
-    const transaction = await prisma.transaction.create({
-      data: {
-        userId,
-        pair,
-        origin: 'manual',
-        type,
-        quantity,
-        price: estimatedPrice,
-        total: totalValue,
-        fee: feePolicy.fee,
-        feeCurrency: feePolicy.feeCurrency,
-        feeRateApplied: feePolicy.feeRateApplied,
-        feeDiscountSource: feePolicy.feeDiscountSource,
-        status: 'executed',
-        profitBrl,
-        profitPercent,
-      },
-    })
-
-    const transactionPayload = {
-      id: transaction.id,
-      date: transaction.date,
-      pair: transaction.pair,
-      origin: transaction.origin,
-      type: transaction.type,
-      quantity: transaction.quantity,
-      price: transaction.price,
-      total: transaction.total,
-      fee: transaction.fee,
-      feeCurrency: transaction.feeCurrency,
-      feeRateApplied: transaction.feeRateApplied,
-      feeDiscountSource: transaction.feeDiscountSource ?? undefined,
-      status: transaction.status,
-      profitBrl: transaction.profitBrl,
-      profitPercent: transaction.profitPercent,
-    }
-
-    await persistBalanceDeltas(userId, balancesByCurrency, deltas)
-
-    await recordBalanceHistorySnapshot(userId).catch((snapshotError) => {
-      logger.warn('[transactions] Falha ao registrar snapshot após ordem', {
-        module: 'transactions',
-        event: 'balance_snapshot_order_failed',
-        userId,
-        transactionId: transaction.id,
-        error: snapshotError,
-        skipPersistence: true,
-      })
-    })
-
-    emitOrderCreated(userId, transactionPayload)
-    emitDashboardUpdate(userId, {
-      scope: 'portfolio',
-      reason: 'order_executed',
-      updatedAt: new Date().toISOString(),
-    })
-
-    await sendWebhook('order.executed', {
-      pair,
-      type,
-      quantity,
-      price: estimatedPrice,
-      total: totalValue,
-      fee: feePolicy.fee,
-      feeCurrency: feePolicy.feeCurrency,
-      feeRateApplied: feePolicy.feeRateApplied,
-      feeDiscountSource: feePolicy.feeDiscountSource,
-      status: 'executed',
-      profitBrl,
-      profitPercent,
-    }).catch((webhookError) => {
-      logger.warn('[transactions] Falha ao enviar webhook de ordem executada', {
-        module: 'transactions',
-        event: 'create_order_webhook_failed',
-        userId,
-        transactionId: transaction.id,
-        error: webhookError,
-        skipPersistence: true,
-      })
-    })
-
-    logger.info('[transactions] Ordem manual criada com sucesso', {
-      module: 'transactions',
-      event: 'manual_order_created',
-      userId,
-      transactionId: transaction.id,
-      order: {
-        pair,
-        type,
-        quantity,
-        orderType,
-        price: estimatedPrice,
-        total: totalValue,
-        fee: feePolicy.fee,
-        feeCurrency: feePolicy.feeCurrency,
-        feeRateApplied: feePolicy.feeRateApplied,
-        feeDiscountSource: feePolicy.feeDiscountSource,
-        profitBrl,
-        profitPercent,
-      },
-    })
-
-    trace('DEBUG', 'transactions', 'createOrder', 'Ordem criada com sucesso', 0, {
-      transactionId: transaction.id,
-      userId,
-    })
-    endTrace('createOrder', { userId })
-    return res.json({
-      success: true,
-      data: transactionPayload,
-    })
   } catch (error) {
     logger.error('[transactions] Erro ao criar ordem', {
       module: 'transactions',
@@ -805,6 +1309,60 @@ export async function createOrder(req: AuthRequest, res: Response): Promise<Resp
     })
 
     endTrace('createOrder', { userId: req.userId, errorFlag: true })
+    return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
+  }
+}
+
+export async function reconcileOrder(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'reconcileOrder', 'transactions')
+
+  try {
+    const userId = req.userId!
+    const { id } = req.params
+    const updated = await reconcileExchangeOrderForUser({
+      userId,
+      transactionId: id,
+    })
+
+    if (!updated) {
+      endTrace('reconcileOrder', { userId, orderId: id, errorFlag: true })
+      return res.status(404).json({ success: false, error: 'Ordem não encontrada' })
+    }
+
+    endTrace('reconcileOrder', { userId, orderId: id })
+    return res.json({ success: true, data: updated })
+  } catch (error) {
+    logger.error('[transactions] Erro ao reconciliar ordem', {
+      module: 'transactions',
+      event: 'reconcile_order_error',
+      userId: req.userId,
+      orderId: req.params.id,
+      error,
+    })
+
+    endTrace('reconcileOrder', { userId: req.userId, orderId: req.params.id, errorFlag: true })
+    return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
+  }
+}
+
+export async function reconcileOrders(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'reconcileOrders', 'transactions')
+
+  try {
+    const userId = req.userId!
+    const items = await reconcileOpenExchangeOrdersForUser({ userId })
+
+    endTrace('reconcileOrders', { userId })
+    return res.json({ success: true, data: items })
+  } catch (error) {
+    logger.error('[transactions] Erro ao reconciliar ordens em aberto', {
+      module: 'transactions',
+      event: 'reconcile_open_orders_error',
+      userId: req.userId,
+      error,
+    })
+
+    endTrace('reconcileOrders', { userId: req.userId, errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }
@@ -822,7 +1380,8 @@ export async function cancelOrder(req: AuthRequest, res: Response): Promise<Resp
       return res.status(404).json({ success: false, error: 'Ordem não encontrada' })
     }
 
-    if (order.status !== 'pending') {
+    const normalizedOrderStatus = normalizeLocalOrderStatus(order.status)
+    if (normalizedOrderStatus !== 'pending' && normalizedOrderStatus !== 'partially_filled') {
       logger.warn('[transactions] Tentativa de cancelar ordem não pendente', {
         module: 'transactions',
         event: 'cancel_order_invalid_status',
@@ -835,9 +1394,41 @@ export async function cancelOrder(req: AuthRequest, res: Response): Promise<Resp
       return res.status(400).json({ success: false, error: 'Apenas ordens pendentes podem ser canceladas' })
     }
 
+    if (order.externalOrderId) {
+      const credentials = await getUserExchangeCredentials(userId)
+      if (!credentials) {
+        endTrace('cancelOrder', { userId, errorFlag: true })
+        return res.status(400).json({ success: false, error: 'Credenciais da exchange são obrigatórias para cancelar a ordem real' })
+      }
+
+      await cancelSpotOrder(credentials.apiKey, credentials.secretKey, {
+        pair: order.pair,
+        orderId: order.externalOrderId,
+      })
+
+      const updated = await reconcileExchangeOrderForUser({
+        userId,
+        transactionId: id,
+      })
+
+      logger.info('[transactions] Ordem real cancelada com sucesso', {
+        module: 'transactions',
+        event: 'exchange_order_cancelled',
+        userId,
+        orderId: id,
+        externalOrderId: order.externalOrderId,
+      })
+
+      endTrace('cancelOrder', { userId })
+      return res.json({ success: true, data: updated })
+    }
+
     await prisma.transaction.update({
       where: { id },
-      data: { status: 'cancelled' },
+      data: {
+        status: 'cancelled',
+        syncedAt: new Date(),
+      },
     })
 
     emitOrderUpdated(userId, {

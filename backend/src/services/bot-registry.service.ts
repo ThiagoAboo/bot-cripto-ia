@@ -212,7 +212,35 @@ export async function listBotInstances(userId: string): Promise<BotInstanceSumma
     ],
   })
 
-  return bots.map((bot) => normalizeBotInstance(bot as BotRecordWithTemplate))
+  const userOwnedTemplateIds = new Set(
+    bots
+      .filter((bot) => bot.userId === userId)
+      .map((bot) => bot.templateId)
+      .filter((value): value is string => typeof value === 'string' && value.length > 0),
+  )
+  const userOwnedLegacyKeys = new Set(
+    bots
+      .filter((bot) => bot.userId === userId && !bot.templateId)
+      .map((bot) => `${bot.strategyType}:${bot.name}`),
+  )
+
+  return bots
+    .filter((bot) => {
+      if (bot.userId === userId) {
+        return true
+      }
+
+      if (bot.templateId && userOwnedTemplateIds.has(bot.templateId)) {
+        return false
+      }
+
+      if (!bot.templateId && userOwnedLegacyKeys.has(`${bot.strategyType}:${bot.name}`)) {
+        return false
+      }
+
+      return true
+    })
+    .map((bot) => normalizeBotInstance(bot as BotRecordWithTemplate))
 }
 
 export async function getBotInstanceById(userId: string, botId: string) {

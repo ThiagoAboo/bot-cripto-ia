@@ -22,9 +22,15 @@ const marketValuationService = require('../src/services/market-valuation.service
 const portfolioService = require('../src/services/portfolio.service')
 const socketService = require('../src/services/socket.service')
 const binanceService = require('../src/services/binance.service')
+const botAnalysisService = require('../src/services/bot-analysis.service')
+const binanceUserStreamService = require('../src/services/binance-user-stream.service')
+const externalHttpService = require('../src/services/external-http.service')
 const pairDiscoveryService = require('../src/services/pair-discovery.service')
+const pairDiscoveryRunnerService = require('../src/services/pair-discovery-runner.service')
+const botRunnerService = require('../src/services/bot-runner.service')
 const trainingDataService = require('../src/services/training-data.service')
 const trainingSessionService = require('../src/services/training-session.service')
+const transactionsController = require('../src/controllers/transactions.controller')
 const webhookService = require('../src/services/webhook.service')
 
 const restores = []
@@ -41,6 +47,7 @@ const OTHER_TEST_USER = {
 
 let baseUrl = ''
 const connectedSockets = []
+const originalWebSocket = global.WebSocket
 
 function stub(target, key, implementation) {
   const original = target[key]
@@ -240,6 +247,8 @@ describe('API contract tests', () => {
     }
 
     await wait(50)
+    binanceUserStreamService.stopBinanceUserStreamService()
+    global.WebSocket = originalWebSocket
     trainingSessionService.stopTrainingSessionProcessing()
     await Promise.all([
       fs.rm(process.env.TRAINING_MODEL_STORAGE_DIR, { recursive: true, force: true }),
@@ -397,6 +406,84 @@ describe('API contract tests', () => {
     assert.deepEqual(body.data[0].sources, ['reddit', 'rss'])
   })
 
+  it('POST /api/configurations/pair-discovery/run executes automatic curation and returns refreshed configuration', async () => {
+    stubAuthenticatedUser()
+    stub(pairDiscoveryRunnerService, 'runPairDiscoveryForUser', async () => ({
+      userId: TEST_USER.id,
+      applied: true,
+      previewRequired: false,
+      status: 'applied',
+      summary: '1 adições e 0 remoções sugeridas',
+      preview: {
+        generatedAt: '2026-04-13T12:00:00.000Z',
+        autoDiscoveryEnabled: true,
+        reviewRequired: false,
+        sourcesUsed: ['reddit'],
+        signals: [],
+        items: [{
+          action: 'add',
+          symbol: 'DOGE',
+          pair: 'DOGE/USDT',
+          score: 81,
+          mentions: 42,
+          sentiment: 'bullish',
+          sources: ['reddit'],
+          reason: 'Score 81 com 42 menções',
+        }],
+        nextAllowedPairs: ['BTC/USDT', 'DOGE/USDT'],
+        managedPairs: ['DOGE/USDT'],
+        summary: {
+          currentAllowed: 1,
+          nextAllowed: 2,
+          additions: 1,
+          removals: 0,
+        },
+      },
+    }))
+    stub(pairDiscoveryRunnerService, 'getPairDiscoveryRunnerStatus', () => ({
+      running: true,
+      lastCycleAt: '2026-04-13T12:00:00.000Z',
+    }))
+    stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
+      allowedPairs: JSON.stringify(['BTC/USDT', 'DOGE/USDT']),
+      pairDiscovery: JSON.stringify({
+        autoDiscoveryEnabled: true,
+        autoAddToAllowedPairs: true,
+        autoRemoveFromAllowedPairs: true,
+        reviewRequired: false,
+        autoSyncIntervalMinutes: 30,
+        sources: {
+          reddit: true,
+          rss: false,
+          x: false,
+          telegram: false,
+        },
+        minSocialScore: 70,
+        minMentions: 20,
+        maxPairs: 20,
+        excludedAssets: ['BNB'],
+        managedPairs: ['DOGE/USDT'],
+        lastSyncAt: '2026-04-13T12:00:00.000Z',
+        lastAppliedAt: '2026-04-13T12:00:00.000Z',
+        lastSyncStatus: 'applied',
+        lastSyncSummary: '1 adições e 0 remoções sugeridas',
+      }),
+    }))
+
+    const { response, body } = await requestJson('/api/configurations/pair-discovery/run', {
+      method: 'POST',
+      headers: authHeaders(),
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(body.success, true)
+    assert.equal(body.data.applied, true)
+    assert.equal(body.data.runner.running, true)
+    assert.equal(body.data.preview.nextAllowedPairs[1], 'DOGE/USDT')
+    assert.equal(body.data.configuration.botParameters.pairDiscovery.autoSyncIntervalMinutes, 30)
+    assert.equal(body.data.configuration.botParameters.pairDiscovery.lastSyncStatus, 'applied')
+  })
+
   it('GET /api/dashboard/bots-status returns bot instances enriched with template metadata', async () => {
     stubAuthenticatedUser()
     stub(prisma.bot, 'findMany', async () => [
@@ -441,6 +528,7 @@ describe('API contract tests', () => {
     assert.deepEqual(body.data, [
       {
         id: 'bot-macd-1',
+        userId: TEST_USER.id,
         name: 'MACD Momentum Bot',
         strategy: 'momentum',
         strategyId: 'template_macd',
@@ -450,6 +538,7 @@ describe('API contract tests', () => {
         indicatorType: 'MACD',
         specialization: 'macd_momentum',
         executionMode: 'paper',
+        isSystemManaged: true,
         description: 'Bot de momentum com especialização em MACD',
         currentPair: 'BTC/USDT',
         status: 'online',
@@ -459,6 +548,406 @@ describe('API contract tests', () => {
         lastAnalysis: '2026-04-11T13:00:00.000Z',
       },
       ])
+    })
+
+    it('GET /api/dashboard/bots/templates returns the active bot template catalog', async () => {
+      stubAuthenticatedUser()
+      stub(prisma.botTemplate, 'findMany', async () => [
+        {
+          id: 'template_macd',
+          slug: 'macd-momentum-specialist',
+          name: 'MACD Momentum Specialist',
+          strategyType: 'momentum',
+          indicatorType: 'MACD',
+          specialization: 'macd_momentum',
+          description: 'Especialista em MACD',
+          defaultParameters: JSON.stringify({
+            minConfidence: 68,
+            maxPositionSize: 500,
+          }),
+          isActive: true,
+          createdAt: new Date('2026-04-11T10:00:00.000Z'),
+          updatedAt: new Date('2026-04-11T10:00:00.000Z'),
+        },
+      ])
+
+      const { response, body } = await requestJson('/api/dashboard/bots/templates', {
+        headers: authHeaders(),
+      })
+
+      assert.equal(response.status, 200)
+      assert.equal(body.success, true)
+      assert.equal(body.data.length, 1)
+      assert.equal(body.data[0].id, 'template_macd')
+      assert.equal(body.data[0].defaultParameters.maxPositionSize, 500)
+    })
+
+    it('GET /api/dashboard/bots/:id returns merged bot detail with instance-level allowed pairs', async () => {
+      stubAuthenticatedUser()
+      stub(prisma.bot, 'findFirst', async () => ({
+        id: 'bot-custom-1',
+        userId: TEST_USER.id,
+        templateId: 'template_macd',
+        name: 'MACD Custom Bot',
+        strategyType: 'momentum',
+        description: 'Bot ajustado pelo usuário',
+        executionMode: 'semi_auto',
+        isSystemManaged: false,
+        status: 'online',
+        isPaused: false,
+        currentPair: 'ETH/USDT',
+        lastAnalysis: new Date('2026-04-13T10:00:00.000Z'),
+        recommendedAction: 'buy',
+        confidence: 82,
+        modelVersion: 'v1.2.0',
+        modelUrl: null,
+        parameters: JSON.stringify({
+          minConfidence: 74,
+          timeframe: '4h',
+          allowedPairs: ['ETH/USDT', 'SOL/USDT'],
+          maxPositionSize: 250,
+        }),
+        createdAt: new Date('2026-04-12T08:00:00.000Z'),
+        updatedAt: new Date('2026-04-13T09:00:00.000Z'),
+        template: {
+          id: 'template_macd',
+          slug: 'macd-momentum-specialist',
+          name: 'MACD Momentum Specialist',
+          strategyType: 'momentum',
+          indicatorType: 'MACD',
+          specialization: 'macd_momentum',
+          description: 'Especialista em MACD',
+          defaultParameters: JSON.stringify({
+            minConfidence: 68,
+            timeframe: '1h',
+            maxPositionSize: 500,
+          }),
+        },
+      }))
+      stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
+        allowedPairs: JSON.stringify(['BTC/USDT', 'ETH/USDT']),
+      }))
+
+      const { response, body } = await requestJson('/api/dashboard/bots/bot-custom-1', {
+        headers: authHeaders(),
+      })
+
+      assert.equal(response.status, 200)
+      assert.equal(body.success, true)
+      assert.equal(body.data.id, 'bot-custom-1')
+      assert.equal(body.data.template.id, 'template_macd')
+      assert.equal(body.data.allowedPairsSource, 'instance')
+      assert.deepEqual(body.data.effectiveAllowedPairs, ['ETH/USDT', 'SOL/USDT'])
+      assert.equal(body.data.effectiveParameters.timeframe, '4h')
+      assert.equal(body.data.effectiveParameters.maxPositionSize, 250)
+    })
+
+    it('POST /api/dashboard/bots creates a custom bot instance from a template', async () => {
+      stubAuthenticatedUser()
+      stub(prisma.botTemplate, 'findFirst', async () => ({
+        id: 'template_rsi',
+        slug: 'rsi-reversion-specialist',
+        name: 'RSI Reversion Specialist',
+        strategyType: 'mean_reversion',
+        indicatorType: 'RSI',
+        specialization: 'rsi_reversion',
+        description: 'Especialista em RSI',
+        defaultParameters: JSON.stringify({
+          timeframe: '1h',
+          maxPositionSize: 500,
+        }),
+        isActive: true,
+      }))
+      stub(prisma.bot, 'create', async ({ data }) => ({
+        id: 'bot-created-1',
+        userId: data.userId,
+        templateId: data.templateId,
+        name: data.name,
+        strategyType: data.strategyType,
+        description: data.description,
+        executionMode: data.executionMode,
+        isSystemManaged: data.isSystemManaged,
+        status: data.status,
+        isPaused: data.isPaused,
+        currentPair: null,
+        lastAnalysis: null,
+        recommendedAction: null,
+        confidence: null,
+        modelVersion: 'v1.0.0',
+        modelUrl: null,
+        parameters: data.parameters,
+        createdAt: new Date('2026-04-13T10:00:00.000Z'),
+        updatedAt: new Date('2026-04-13T10:00:00.000Z'),
+        template: {
+          id: 'template_rsi',
+          slug: 'rsi-reversion-specialist',
+          name: 'RSI Reversion Specialist',
+          strategyType: 'mean_reversion',
+          indicatorType: 'RSI',
+          specialization: 'rsi_reversion',
+          description: 'Especialista em RSI',
+          defaultParameters: JSON.stringify({
+            timeframe: '1h',
+            maxPositionSize: 500,
+          }),
+        },
+      }))
+      stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration())
+
+      const { response, body } = await requestJson('/api/dashboard/bots', {
+        method: 'POST',
+        headers: {
+          ...authHeaders(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          templateId: 'template_rsi',
+          name: 'Meu RSI Bot',
+          executionMode: 'paper',
+          status: 'offline',
+          parameters: {
+            allowedPairs: ['BTC/USDT', 'ETH/USDT'],
+            minConfidence: 72,
+          },
+        }),
+      })
+
+      assert.equal(response.status, 201)
+      assert.equal(body.success, true)
+      assert.equal(body.data.id, 'bot-created-1')
+      assert.equal(body.data.isCustom, true)
+      assert.deepEqual(body.data.effectiveAllowedPairs, ['BTC/USDT', 'ETH/USDT'])
+    })
+
+    it('PUT /api/dashboard/bots/:id materializes a shared bot into a user-owned instance before updating it', async () => {
+      stubAuthenticatedUser()
+      let findFirstCalls = 0
+
+      stub(prisma.bot, 'findFirst', async ({ where }) => {
+        findFirstCalls += 1
+
+        if (where?.id === 'bot-shared-1') {
+          return {
+            id: 'bot-shared-1',
+            userId: null,
+            templateId: 'template_macd',
+            name: 'MACD Shared Bot',
+            strategyType: 'momentum',
+            description: 'Bot do sistema',
+            executionMode: 'paper',
+            isSystemManaged: true,
+            status: 'online',
+            isPaused: false,
+            currentPair: 'BTC/USDT',
+            lastAnalysis: null,
+            recommendedAction: 'hold',
+            confidence: 55,
+            modelVersion: 'v1.0.0',
+            modelUrl: null,
+            parameters: JSON.stringify({
+              minConfidence: 60,
+            }),
+            createdAt: new Date('2026-04-10T10:00:00.000Z'),
+            updatedAt: new Date('2026-04-10T10:00:00.000Z'),
+            template: {
+              id: 'template_macd',
+              slug: 'macd-momentum-specialist',
+              name: 'MACD Momentum Specialist',
+              strategyType: 'momentum',
+              indicatorType: 'MACD',
+              specialization: 'macd_momentum',
+              description: 'Especialista em MACD',
+              defaultParameters: JSON.stringify({
+                maxPositionSize: 500,
+              }),
+            },
+          }
+        }
+
+        if (where?.userId === TEST_USER.id && where?.templateId === 'template_macd') {
+          return null
+        }
+
+        return null
+      })
+      stub(prisma.bot, 'create', async ({ data }) => ({
+        id: 'bot-user-override-1',
+        userId: data.userId,
+        templateId: data.templateId,
+        name: data.name,
+        strategyType: data.strategyType,
+        description: data.description,
+        executionMode: data.executionMode,
+        isSystemManaged: data.isSystemManaged,
+        status: data.status,
+        isPaused: data.isPaused,
+        currentPair: data.currentPair,
+        lastAnalysis: data.lastAnalysis,
+        recommendedAction: data.recommendedAction,
+        confidence: data.confidence,
+        modelVersion: data.modelVersion,
+        modelUrl: data.modelUrl,
+        parameters: data.parameters,
+        createdAt: new Date('2026-04-13T10:00:00.000Z'),
+        updatedAt: new Date('2026-04-13T10:00:00.000Z'),
+        template: {
+          id: 'template_macd',
+          slug: 'macd-momentum-specialist',
+          name: 'MACD Momentum Specialist',
+          strategyType: 'momentum',
+          indicatorType: 'MACD',
+          specialization: 'macd_momentum',
+          description: 'Especialista em MACD',
+          defaultParameters: JSON.stringify({
+            maxPositionSize: 500,
+          }),
+        },
+      }))
+      stub(prisma.bot, 'update', async ({ where, data }) => ({
+        id: where.id,
+        userId: TEST_USER.id,
+        templateId: 'template_macd',
+        name: data.name,
+        strategyType: 'momentum',
+        description: data.description,
+        executionMode: data.executionMode,
+        isSystemManaged: false,
+        status: data.status,
+        isPaused: data.isPaused,
+        currentPair: 'BTC/USDT',
+        lastAnalysis: null,
+        recommendedAction: 'hold',
+        confidence: 55,
+        modelVersion: 'v1.0.0',
+        modelUrl: null,
+        parameters: data.parameters,
+        createdAt: new Date('2026-04-13T10:00:00.000Z'),
+        updatedAt: new Date('2026-04-13T10:05:00.000Z'),
+        template: {
+          id: 'template_macd',
+          slug: 'macd-momentum-specialist',
+          name: 'MACD Momentum Specialist',
+          strategyType: 'momentum',
+          indicatorType: 'MACD',
+          specialization: 'macd_momentum',
+          description: 'Especialista em MACD',
+          defaultParameters: JSON.stringify({
+            maxPositionSize: 500,
+          }),
+        },
+      }))
+      stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration())
+
+      const { response, body } = await requestJson('/api/dashboard/bots/bot-shared-1', {
+        method: 'PUT',
+        headers: {
+          ...authHeaders(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: 'MACD Customizado',
+          executionMode: 'full_auto',
+          parameters: {
+            allowedPairs: ['BTC/USDT', 'SOL/USDT'],
+            maxPositionSize: 320,
+          },
+        }),
+      })
+
+      assert.equal(findFirstCalls >= 2, true)
+      assert.equal(response.status, 200)
+      assert.equal(body.success, true)
+      assert.equal(body.data.id, 'bot-user-override-1')
+      assert.equal(body.data.materializedFromTemplate, true)
+      assert.equal(body.data.executionMode, 'full_auto')
+      assert.deepEqual(body.data.effectiveAllowedPairs, ['BTC/USDT', 'SOL/USDT'])
+      assert.equal(body.data.effectiveParameters.maxPositionSize, 320)
+    })
+
+    it('GET /api/dashboard/bots/:id/history returns transactions, traces and training sessions for the bot', async () => {
+      stubAuthenticatedUser()
+      stub(prisma.bot, 'findFirst', async () => ({
+        id: 'bot-history-1',
+        userId: TEST_USER.id,
+        templateId: 'template_rsi',
+        name: 'History Bot',
+        strategyType: 'mean_reversion',
+        description: 'Bot com histórico',
+        executionMode: 'paper',
+        isSystemManaged: false,
+        status: 'online',
+        isPaused: false,
+        currentPair: null,
+        lastAnalysis: null,
+        recommendedAction: null,
+        confidence: null,
+        modelVersion: 'v1.0.0',
+        modelUrl: null,
+        parameters: '{}',
+        createdAt: new Date('2026-04-12T10:00:00.000Z'),
+        updatedAt: new Date('2026-04-12T10:00:00.000Z'),
+        template: null,
+      }))
+      stub(prisma.transaction, 'findMany', async () => [
+        {
+          id: 'tx-bot-1',
+          date: new Date('2026-04-13T09:00:00.000Z'),
+          pair: 'BTC/USDT',
+          type: 'buy',
+          quantity: 0.01,
+          requestedQuantity: 0.01,
+          price: 100000,
+          total: 1000,
+          fee: 1,
+          feeCurrency: 'USDT',
+          status: 'executed',
+          orderType: 'market',
+          origin: 'bot',
+          profitBrl: null,
+          profitPercent: null,
+          externalStatus: 'FILLED',
+          syncedAt: new Date('2026-04-13T09:00:02.000Z'),
+        },
+      ])
+      stub(prisma.trace, 'findMany', async () => [
+        {
+          id: 'trace-bot-1',
+          timestamp: new Date('2026-04-13T09:00:01.000Z'),
+          level: 'TRACE',
+          module: 'bot',
+          traceId: 'trace-1',
+          functionName: 'runBotCycle',
+          message: 'Executando ciclo',
+          durationMs: 120,
+          currentPair: 'BTC/USDT',
+          recommendedAction: 'buy',
+          confidence: 78,
+          errorFlag: false,
+        },
+      ])
+      stub(prisma.trainingSession, 'findMany', async () => [
+        {
+          id: 'session-1',
+          status: 'completed',
+          startTime: new Date('2026-04-12T09:00:00.000Z'),
+          endTime: new Date('2026-04-12T10:00:00.000Z'),
+          bestEpoch: 12,
+          bestValLoss: 0.14,
+          createdAt: new Date('2026-04-12T09:00:00.000Z'),
+          updatedAt: new Date('2026-04-12T10:00:00.000Z'),
+        },
+      ])
+
+      const { response, body } = await requestJson('/api/dashboard/bots/bot-history-1/history', {
+        headers: authHeaders(),
+      })
+
+      assert.equal(response.status, 200)
+      assert.equal(body.success, true)
+      assert.equal(body.data.transactions.length, 1)
+      assert.equal(body.data.traces.length, 1)
+      assert.equal(body.data.trainingSessions.length, 1)
+      assert.equal(body.data.traces[0].functionName, 'runBotCycle')
     })
 
     it('GET /api/dashboard/bots/:id/analysis returns a specialist-driven market reading for the selected bot', async () => {
@@ -598,6 +1087,1286 @@ describe('API contract tests', () => {
       assert.equal(Array.isArray(body.data.opportunities[0].specialists), true)
       assert.equal(body.data.socialSignals[0].pair, 'BTC/USDT')
     })
+
+    it('POST /api/dashboard/bots/:id/run returns the manual cycle execution contract', async () => {
+      stubAuthenticatedUser()
+      stub(botRunnerService, 'runBotCycle', async () => ({
+        botId: 'bot-macd-1',
+        botName: 'MACD Momentum Bot',
+        generatedAt: '2026-04-12T19:00:00.000Z',
+        analysis: {
+          botId: 'bot-macd-1',
+          botName: 'MACD Momentum Bot',
+          strategyId: 'template_macd',
+          primarySpecialist: 'macd_momentum',
+          timeframe: '1h',
+          generatedAt: '2026-04-12T19:00:00.000Z',
+          analyzedPairs: ['BTC/USDT'],
+          summary: {
+            analyzedPairs: 1,
+            actionablePairs: 1,
+            buySignals: 1,
+            sellSignals: 0,
+            holdSignals: 0,
+          },
+          bestOpportunity: {
+            pair: 'BTC/USDT',
+            action: 'buy',
+            confidence: 79,
+            price: 128,
+            reason: 'Consenso inclinado para compra',
+            specialists: [],
+          },
+          opportunities: [],
+          socialSignals: [],
+        },
+        execution: {
+          mode: 'paper',
+          status: 'executed',
+          reason: 'Executado automaticamente em modo paper',
+          pair: 'BTC/USDT',
+          action: 'buy',
+          quantity: 1.25,
+          transaction: {
+            id: 'tx-bot-1',
+            date: '2026-04-12T19:00:00.000Z',
+            pair: 'BTC/USDT',
+            origin: 'bot',
+            botId: 'bot-macd-1',
+            type: 'buy',
+            quantity: 1.25,
+            price: 128,
+            total: 160,
+            fee: 0.12,
+            feeCurrency: 'BNB',
+            feeRateApplied: 0.00075,
+            feeDiscountSource: 'bnb',
+            status: 'executed',
+            profitBrl: null,
+            profitPercent: null,
+          },
+        },
+      }))
+
+      const { response, body } = await requestJson('/api/dashboard/bots/bot-macd-1/run', {
+        method: 'POST',
+        headers: authHeaders(),
+      })
+
+      assert.equal(response.status, 200)
+      assert.equal(body.success, true)
+      assert.equal(body.data.botId, 'bot-macd-1')
+      assert.equal(body.data.execution.mode, 'paper')
+      assert.equal(body.data.execution.status, 'executed')
+      assert.equal(body.data.execution.transaction.origin, 'bot')
+    })
+
+  it('GET /api/dashboard/bots/worker-status exposes whether the bot worker is active', async () => {
+      stubAuthenticatedUser()
+      stub(botRunnerService, 'isBotWorkerRunning', () => true)
+
+      const { response, body } = await requestJson('/api/dashboard/bots/worker-status', {
+        headers: authHeaders(),
+      })
+
+      assert.equal(response.status, 200)
+    assert.equal(body.success, true)
+    assert.equal(body.data.running, true)
+  })
+
+  it('prepareSpotOrderRequest applies Binance stepSize, tickSize and minNotional filters before execution', async () => {
+    stub(externalHttpService, 'requestJson', async () => ({
+      timezone: 'UTC',
+      serverTime: Date.now(),
+      symbols: [
+        {
+          symbol: 'BTCUSDT',
+          status: 'TRADING',
+          baseAsset: 'BTC',
+          quoteAsset: 'USDT',
+          permissions: ['SPOT'],
+          filters: [
+            {
+              filterType: 'PRICE_FILTER',
+              minPrice: '0.01',
+              maxPrice: '1000000',
+              tickSize: '0.01',
+            },
+            {
+              filterType: 'LOT_SIZE',
+              minQty: '0.01',
+              maxQty: '100',
+              stepSize: '0.01',
+            },
+            {
+              filterType: 'MIN_NOTIONAL',
+              minNotional: '10',
+              applyToMarket: true,
+            },
+          ],
+        },
+      ],
+    }))
+
+    const prepared = await binanceService.prepareSpotOrderRequest({
+      pair: 'BTC/USDT',
+      quantity: 1.239,
+      orderType: 'LIMIT',
+      price: 127.129,
+    })
+
+    assert.equal(prepared.isValid, true)
+    assert.equal(prepared.quantity, 1.23)
+    assert.equal(prepared.price, 127.12)
+    assert.ok(prepared.notional > 156)
+    assert.equal(prepared.adjustments.length, 2)
+  })
+
+  it('syncBinanceUserStreamRegistry opens a native Binance user stream for eligible users', async () => {
+    class FakeWebSocket {
+      constructor(url) {
+        this.url = url
+        setTimeout(() => {
+          this.onopen?.()
+        }, 0)
+      }
+
+      close() {
+        this.onclose?.({ code: 1000, reason: 'closed' })
+      }
+    }
+
+    global.WebSocket = FakeWebSocket
+
+    stub(prisma.bot, 'findMany', async () => [{ userId: TEST_USER.id }])
+    stub(prisma.transaction, 'findMany', async ({ where }) => {
+      if (where?.externalOrderId) {
+        return []
+      }
+
+      return []
+    })
+    stub(prisma.configuration, 'findMany', async () => ([{
+      userId: TEST_USER.id,
+      apiKey: 'live-key',
+      secretKey: 'live-secret',
+    }]))
+    stub(externalHttpService, 'requestJson', async (url, options = {}) => {
+      if (url.includes('/api/v3/userDataStream') && options.method === 'POST') {
+        return { listenKey: 'listen-key-1' }
+      }
+
+      if (url.includes('/api/v3/userDataStream') && options.method === 'DELETE') {
+        return { listenKey: 'listen-key-1' }
+      }
+
+      if (url.includes('/api/v3/userDataStream') && options.method === 'PUT') {
+        return { listenKey: 'listen-key-1' }
+      }
+
+      throw new Error(`Unexpected request: ${options.method} ${url}`)
+    })
+
+    await binanceUserStreamService.syncBinanceUserStreamRegistry()
+    await wait(20)
+
+    const status = binanceUserStreamService.getBinanceUserStreamStatus()
+
+    assert.equal(status.activeUsers, 1)
+  })
+
+  it('processBinanceUserStreamMessage reconciles local orders after an executionReport event', async () => {
+    class FakeWebSocket {
+      constructor(url) {
+        this.url = url
+        setTimeout(() => {
+          this.onopen?.()
+        }, 0)
+      }
+
+      close() {
+        this.onclose?.({ code: 1000, reason: 'closed' })
+      }
+    }
+
+    global.WebSocket = FakeWebSocket
+
+    let reconciledTransactionId = null
+
+    stub(prisma.bot, 'findMany', async () => [{ userId: TEST_USER.id }])
+    stub(prisma.transaction, 'findMany', async ({ where }) => {
+      if (where?.externalOrderId) {
+        return []
+      }
+
+      return []
+    })
+    stub(prisma.configuration, 'findMany', async () => ([{
+      userId: TEST_USER.id,
+      apiKey: 'live-key',
+      secretKey: 'live-secret',
+    }]))
+    stub(prisma.transaction, 'findFirst', async ({ where }) => {
+      if (Array.isArray(where?.OR) && where.userId === TEST_USER.id) {
+        return { id: 'tx-stream-1' }
+      }
+
+      return null
+    })
+    stub(transactionsController, 'reconcileExchangeOrderForUser', async ({ transactionId }) => {
+      reconciledTransactionId = transactionId
+      return null
+    })
+    stub(externalHttpService, 'requestJson', async (url, options = {}) => {
+      if (url.includes('/api/v3/userDataStream') && options.method === 'POST') {
+        return { listenKey: 'listen-key-2' }
+      }
+
+      if (url.includes('/api/v3/userDataStream') && options.method === 'DELETE') {
+        return { listenKey: 'listen-key-2' }
+      }
+
+      if (url.includes('/api/v3/userDataStream') && options.method === 'PUT') {
+        return { listenKey: 'listen-key-2' }
+      }
+
+      throw new Error(`Unexpected request: ${options.method} ${url}`)
+    })
+
+    await binanceUserStreamService.syncBinanceUserStreamRegistry()
+    await wait(20)
+    await binanceUserStreamService.processBinanceUserStreamMessage(TEST_USER.id, {
+      e: 'executionReport',
+      i: 321,
+      c: 'client-order-stream-1',
+    })
+
+    assert.equal(reconciledTransactionId, 'tx-stream-1')
+  })
+
+  it('runBotCycle executes a live Binance order when the bot is in full_auto mode', async () => {
+    let createdSpotOrderPayload = null
+
+    stub(prisma.bot, 'findFirst', async () => ({
+      id: 'bot-live-1',
+      userId: TEST_USER.id,
+      templateId: 'template-macd',
+      name: 'Live MACD Bot',
+      strategyType: 'momentum',
+      description: 'Bot em execução real',
+      executionMode: 'full_auto',
+      isSystemManaged: true,
+      status: 'online',
+      isPaused: false,
+      currentPair: 'BTC/USDT',
+      lastAnalysis: null,
+      recommendedAction: 'buy',
+      confidence: 82,
+      modelVersion: 'v1.0.0',
+      modelUrl: null,
+      parameters: JSON.stringify({
+        minConfidence: 60,
+        stopLossPercent: 5,
+        takeProfitPercent: 10,
+      }),
+      template: {
+        id: 'template-macd',
+        name: 'MACD Momentum Specialist',
+      },
+    }))
+    stub(prisma.trainingSession, 'findFirst', async () => null)
+    stub(botAnalysisService, 'analyzeBotInstance', async () => ({
+      botId: 'bot-live-1',
+      botName: 'Live MACD Bot',
+      strategyId: 'template-macd',
+      templateId: 'template-macd',
+      templateName: 'MACD Momentum Specialist',
+      primarySpecialist: 'macd_momentum',
+      timeframe: '1h',
+      generatedAt: '2026-04-12T20:00:00.000Z',
+      analyzedPairs: ['BTC/USDT'],
+      summary: {
+        analyzedPairs: 1,
+        actionablePairs: 1,
+        buySignals: 1,
+        sellSignals: 0,
+        holdSignals: 0,
+      },
+      bestOpportunity: {
+        pair: 'BTC/USDT',
+        action: 'buy',
+        confidence: 82,
+        price: 127,
+        reason: 'Momentum e MACD alinhados',
+        specialists: [],
+      },
+      opportunities: [],
+      socialSignals: [],
+    }))
+    stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
+      apiKey: 'live-key',
+      secretKey: 'live-secret',
+      maxTradeAmount: 127,
+      maxTradeAmountUnit: 'USDT',
+      allowedPairs: JSON.stringify(['BTC/USDT']),
+    }))
+    stub(prisma.balance, 'findMany', async () => ([
+      {
+        id: 'balance-usdt',
+        currency: 'USDT',
+        available: 1000,
+        reserved: 0,
+        total: 1000,
+      },
+      {
+        id: 'balance-bnb',
+        currency: 'BNB',
+        available: 1,
+        reserved: 0,
+        total: 1,
+      },
+    ]))
+    stub(prisma.balance, 'upsert', async () => undefined)
+    stub(prisma.balance, 'update', async () => undefined)
+    stub(prisma.balance, 'create', async () => undefined)
+    stub(prisma.balanceHistory, 'findFirst', async () => ({ totalBrl: 5000 }))
+    stub(prisma.transaction, 'findFirst', async () => null)
+    stub(prisma.transaction, 'findMany', async ({ where }) => {
+      if (where?.botId) {
+        return []
+      }
+
+      return []
+    })
+    stub(prisma.transaction, 'create', async ({ data }) => ({
+      id: 'tx-live-1',
+      date: new Date('2026-04-12T20:00:01.000Z'),
+      ...data,
+    }))
+    stub(binanceService, 'getAccountBalances', async () => ([
+      {
+        currency: 'USDT',
+        available: 1000,
+        reserved: 0,
+        total: 1000,
+      },
+      {
+        currency: 'BNB',
+        available: 1,
+        reserved: 0,
+        total: 1,
+      },
+    ]))
+    stub(binanceService, 'prepareSpotOrderRequest', async () => ({
+      isValid: true,
+      quantity: 1,
+      notional: 127,
+      adjustments: ['Quantidade ajustada de 1.00393701 para 1 por stepSize'],
+      rules: {
+        pair: 'BTC/USDT',
+        symbol: 'BTCUSDT',
+        baseAsset: 'BTC',
+        quoteAsset: 'USDT',
+        minQty: 0.001,
+        stepSize: 0.001,
+        minNotional: 10,
+      },
+    }))
+    stub(binanceService, 'createSpotOrder', async (_apiKey, _secretKey, payload) => {
+      createdSpotOrderPayload = payload
+      return {
+        symbol: 'BTCUSDT',
+        orderId: 123,
+        clientOrderId: 'live-order-1',
+        price: '0',
+        origQty: '1',
+        executedQty: '1',
+        cummulativeQuoteQty: '127',
+        status: 'FILLED',
+        type: 'MARKET',
+        side: 'BUY',
+        fills: [
+          {
+            price: '127',
+            qty: '1',
+            commission: '0.0002',
+            commissionAsset: 'BNB',
+          },
+        ],
+      }
+    })
+    stub(marketValuationService, 'getCurrencyRateToBrl', async (currency) => {
+      if (currency === 'BNB') {
+        return 3000
+      }
+
+      if (currency === 'USDT') {
+        return 5
+      }
+
+      return 1
+    })
+    stub(portfolioService, 'recordBalanceHistorySnapshot', async () => undefined)
+    stub(webhookService, 'sendWebhook', async () => undefined)
+
+    const result = await botRunnerService.runBotCycle('bot-live-1', TEST_USER.id)
+
+    assert.equal(result.botId, 'bot-live-1')
+    assert.equal(result.execution.mode, 'full_auto')
+    assert.equal(result.execution.status, 'executed')
+    assert.match(result.execution.reason, /Binance/i)
+    assert.equal(result.execution.transaction.origin, 'bot')
+    assert.equal(result.execution.transaction.feeCurrency, 'BNB')
+    assert.equal(result.execution.transaction.feeDiscountSource, 'bnb')
+    assert.match(result.execution.reason, /stepSize/i)
+    assert.equal(createdSpotOrderPayload.pair, 'BTC/USDT')
+    assert.equal(createdSpotOrderPayload.side, 'BUY')
+  })
+
+  it('runBotCycle persists a submitted external order when Binance returns NEW instead of FILLED', async () => {
+    stub(prisma.bot, 'findFirst', async () => ({
+      id: 'bot-live-pending-1',
+      userId: TEST_USER.id,
+      templateId: 'template-macd',
+      name: 'Live Pending Bot',
+      strategyType: 'momentum',
+      description: 'Bot aguardando fill',
+      executionMode: 'full_auto',
+      isSystemManaged: true,
+      status: 'online',
+      isPaused: false,
+      currentPair: 'BTC/USDT',
+      lastAnalysis: null,
+      recommendedAction: 'buy',
+      confidence: 79,
+      modelVersion: 'v1.0.0',
+      modelUrl: null,
+      parameters: JSON.stringify({
+        minConfidence: 60,
+      }),
+      template: {
+        id: 'template-macd',
+        name: 'MACD Momentum Specialist',
+      },
+    }))
+    stub(prisma.trainingSession, 'findFirst', async () => null)
+    stub(botAnalysisService, 'analyzeBotInstance', async () => ({
+      botId: 'bot-live-pending-1',
+      botName: 'Live Pending Bot',
+      strategyId: 'template-macd',
+      templateId: 'template-macd',
+      templateName: 'MACD Momentum Specialist',
+      primarySpecialist: 'macd_momentum',
+      timeframe: '1h',
+      generatedAt: '2026-04-12T20:00:00.000Z',
+      analyzedPairs: ['BTC/USDT'],
+      summary: {
+        analyzedPairs: 1,
+        actionablePairs: 1,
+        buySignals: 1,
+        sellSignals: 0,
+        holdSignals: 0,
+      },
+      bestOpportunity: {
+        pair: 'BTC/USDT',
+        action: 'buy',
+        confidence: 79,
+        price: 127,
+        reason: 'Sinal comprador em andamento',
+        specialists: [],
+      },
+      opportunities: [],
+      socialSignals: [],
+    }))
+    stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
+      apiKey: 'live-key',
+      secretKey: 'live-secret',
+      maxTradeAmount: 127,
+      maxTradeAmountUnit: 'USDT',
+      allowedPairs: JSON.stringify(['BTC/USDT']),
+    }))
+    stub(prisma.balance, 'findMany', async () => ([
+      {
+        id: 'balance-usdt',
+        currency: 'USDT',
+        available: 1000,
+        reserved: 0,
+        total: 1000,
+      },
+      {
+        id: 'balance-bnb',
+        currency: 'BNB',
+        available: 1,
+        reserved: 0,
+        total: 1,
+      },
+    ]))
+    stub(prisma.balance, 'upsert', async () => undefined)
+    stub(prisma.balance, 'update', async () => undefined)
+    stub(prisma.balance, 'create', async () => undefined)
+    stub(prisma.balanceHistory, 'findFirst', async () => ({ totalBrl: 5000 }))
+    stub(prisma.transaction, 'findFirst', async () => null)
+    stub(prisma.transaction, 'findMany', async () => [])
+    stub(prisma.transaction, 'create', async ({ data }) => ({
+      id: 'tx-live-pending-1',
+      date: new Date('2026-04-12T20:00:01.000Z'),
+      ...data,
+    }))
+    stub(binanceService, 'getAccountBalances', async () => ([
+      {
+        currency: 'USDT',
+        available: 1000,
+        reserved: 0,
+        total: 1000,
+      },
+      {
+        currency: 'BNB',
+        available: 1,
+        reserved: 0,
+        total: 1,
+      },
+    ]))
+    stub(binanceService, 'prepareSpotOrderRequest', async () => ({
+      isValid: true,
+      quantity: 1,
+      notional: 127,
+      adjustments: [],
+      rules: {
+        pair: 'BTC/USDT',
+        symbol: 'BTCUSDT',
+        baseAsset: 'BTC',
+        quoteAsset: 'USDT',
+        minQty: 0.001,
+        stepSize: 0.001,
+        minNotional: 10,
+      },
+    }))
+    stub(binanceService, 'createSpotOrder', async () => ({
+      symbol: 'BTCUSDT',
+      orderId: 456,
+      clientOrderId: 'live-order-pending-1',
+      price: '0',
+      origQty: '1',
+      executedQty: '0',
+      cummulativeQuoteQty: '0',
+      status: 'NEW',
+      type: 'MARKET',
+      side: 'BUY',
+      fills: [],
+      updateTime: Date.parse('2026-04-12T20:00:02.000Z'),
+    }))
+    stub(portfolioService, 'recordBalanceHistorySnapshot', async () => undefined)
+    stub(webhookService, 'sendWebhook', async () => undefined)
+
+    const result = await botRunnerService.runBotCycle('bot-live-pending-1', TEST_USER.id)
+
+    assert.equal(result.botId, 'bot-live-pending-1')
+    assert.equal(result.execution.mode, 'full_auto')
+    assert.equal(result.execution.status, 'submitted')
+    assert.match(result.execution.reason, /pendente/i)
+    assert.equal(result.execution.transaction.status, 'pending')
+    assert.equal(result.execution.transaction.requestedQuantity, 1)
+    assert.equal(result.execution.transaction.quantity, 0)
+    assert.equal(result.execution.transaction.externalOrderId, '456')
+    assert.equal(result.execution.transaction.externalStatus, 'NEW')
+  })
+
+  it('processOpenExchangeOrdersCycle reconciles users that still have open external orders', async () => {
+    let reconciledOrderQueries = 0
+
+    stub(prisma.transaction, 'findMany', async (args) => {
+      if (args?.where?.externalOrderId && args?.distinct?.includes('userId')) {
+        return [{ userId: TEST_USER.id }]
+      }
+
+      if (args?.where?.externalOrderId) {
+        return [
+          {
+            id: 'tx-open-1',
+            userId: TEST_USER.id,
+            botId: 'bot-1',
+            date: new Date('2026-04-12T21:00:00.000Z'),
+            pair: 'BTC/USDT',
+            origin: 'bot',
+            type: 'buy',
+            quantity: 0,
+            requestedQuantity: 1,
+            orderType: 'market',
+            price: 127,
+            total: 0,
+            fee: 0,
+            feeCurrency: 'USDT',
+            feeRateApplied: 0,
+            feeDiscountSource: null,
+            status: 'pending',
+            externalOrderId: '999',
+            externalClientOrderId: 'client-open-1',
+            externalStatus: 'NEW',
+            syncedAt: new Date('2026-04-12T21:00:01.000Z'),
+            profitBrl: null,
+            profitPercent: null,
+          },
+        ]
+      }
+
+      return []
+    })
+    stub(prisma.transaction, 'findFirst', async ({ where }) => {
+      if (where?.id === 'tx-open-1') {
+        reconciledOrderQueries += 1
+        return {
+          id: 'tx-open-1',
+          userId: TEST_USER.id,
+          botId: 'bot-1',
+          date: new Date('2026-04-12T21:00:00.000Z'),
+          pair: 'BTC/USDT',
+          origin: 'bot',
+          type: 'buy',
+          quantity: 0,
+          requestedQuantity: 1,
+          orderType: 'market',
+          price: 127,
+          total: 0,
+          fee: 0,
+          feeCurrency: 'USDT',
+          feeRateApplied: 0,
+          feeDiscountSource: null,
+          status: 'pending',
+          externalOrderId: '999',
+          externalClientOrderId: 'client-open-1',
+          externalStatus: 'NEW',
+          syncedAt: new Date('2026-04-12T21:00:01.000Z'),
+          profitBrl: null,
+          profitPercent: null,
+        }
+      }
+
+      return null
+    })
+    stub(prisma.transaction, 'update', async ({ data }) => ({
+      id: 'tx-open-1',
+      userId: TEST_USER.id,
+      pair: 'BTC/USDT',
+      origin: 'bot',
+      type: 'buy',
+      botId: 'bot-1',
+      date: new Date('2026-04-12T21:00:00.000Z'),
+      ...data,
+    }))
+    stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
+      apiKey: 'live-key',
+      secretKey: 'live-secret',
+    }))
+    stub(binanceService, 'getSpotOrder', async () => ({
+      symbol: 'BTCUSDT',
+      orderId: 999,
+      clientOrderId: 'client-open-1',
+      price: '0',
+      origQty: '1',
+      executedQty: '1',
+      cummulativeQuoteQty: '127',
+      status: 'FILLED',
+      type: 'MARKET',
+      side: 'BUY',
+      updateTime: Date.parse('2026-04-12T21:05:00.000Z'),
+    }))
+    stub(binanceService, 'getSpotOrderTrades', async () => [])
+    stub(binanceService, 'getAccountBalances', async () => [])
+    stub(portfolioService, 'recordBalanceHistorySnapshot', async () => undefined)
+
+    await botRunnerService.processOpenExchangeOrdersCycle()
+
+    assert.equal(reconciledOrderQueries, 1)
+  })
+
+  it('runBotCycle skips full_auto execution when Binance minNotional filters reject the order', async () => {
+    stub(prisma.bot, 'findFirst', async () => ({
+      id: 'bot-filter-1',
+      userId: TEST_USER.id,
+      templateId: 'template-macd',
+      name: 'Filter Guard Bot',
+      strategyType: 'momentum',
+      description: 'Bot validando filtros',
+      executionMode: 'full_auto',
+      isSystemManaged: true,
+      status: 'online',
+      isPaused: false,
+      currentPair: 'BTC/USDT',
+      lastAnalysis: null,
+      recommendedAction: 'buy',
+      confidence: 81,
+      modelVersion: 'v1.0.0',
+      modelUrl: null,
+      parameters: JSON.stringify({
+        minConfidence: 60,
+      }),
+      template: {
+        id: 'template-macd',
+        name: 'MACD Momentum Specialist',
+      },
+    }))
+    stub(prisma.trainingSession, 'findFirst', async () => null)
+    stub(botAnalysisService, 'analyzeBotInstance', async () => ({
+      botId: 'bot-filter-1',
+      botName: 'Filter Guard Bot',
+      strategyId: 'template-macd',
+      templateId: 'template-macd',
+      templateName: 'MACD Momentum Specialist',
+      primarySpecialist: 'macd_momentum',
+      timeframe: '1h',
+      generatedAt: '2026-04-12T20:10:00.000Z',
+      analyzedPairs: ['BTC/USDT'],
+      summary: {
+        analyzedPairs: 1,
+        actionablePairs: 1,
+        buySignals: 1,
+        sellSignals: 0,
+        holdSignals: 0,
+      },
+      bestOpportunity: {
+        pair: 'BTC/USDT',
+        action: 'buy',
+        confidence: 81,
+        price: 10,
+        reason: 'Sinal comprador válido',
+        specialists: [],
+      },
+      opportunities: [],
+      socialSignals: [],
+    }))
+    stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
+      apiKey: 'live-key',
+      secretKey: 'live-secret',
+      maxTradeAmount: 12,
+      maxTradeAmountUnit: 'USDT',
+      allowedPairs: JSON.stringify(['BTC/USDT']),
+    }))
+    stub(prisma.balance, 'findMany', async () => ([
+      {
+        id: 'balance-usdt',
+        currency: 'USDT',
+        available: 1000,
+        reserved: 0,
+        total: 1000,
+      },
+      {
+        id: 'balance-bnb',
+        currency: 'BNB',
+        available: 1,
+        reserved: 0,
+        total: 1,
+      },
+    ]))
+    stub(prisma.balance, 'upsert', async () => undefined)
+    stub(prisma.balanceHistory, 'findFirst', async () => ({ totalBrl: 5000 }))
+    stub(prisma.transaction, 'findFirst', async () => null)
+    stub(prisma.transaction, 'findMany', async () => [])
+    stub(binanceService, 'getAccountBalances', async () => ([
+      {
+        currency: 'USDT',
+        available: 1000,
+        reserved: 0,
+        total: 1000,
+      },
+      {
+        currency: 'BNB',
+        available: 1,
+        reserved: 0,
+        total: 1,
+      },
+    ]))
+    stub(binanceService, 'prepareSpotOrderRequest', async () => ({
+      isValid: false,
+      rejectionReason: 'Notional 12.00000000 abaixo do mínimo 20 da Binance',
+      adjustments: [],
+      rules: {
+        pair: 'BTC/USDT',
+        symbol: 'BTCUSDT',
+        baseAsset: 'BTC',
+        quoteAsset: 'USDT',
+        minQty: 0.001,
+        stepSize: 0.001,
+        minNotional: 20,
+      },
+    }))
+
+    const result = await botRunnerService.runBotCycle('bot-filter-1', TEST_USER.id)
+
+    assert.equal(result.execution.mode, 'full_auto')
+    assert.equal(result.execution.status, 'skipped')
+    assert.match(result.execution.reason, /Notional/i)
+  })
+
+  it('runBotCycle skips new buys when the portfolio exposure limit is already reached', async () => {
+    stub(prisma.bot, 'findFirst', async () => ({
+      id: 'bot-risk-exposure-1',
+      userId: TEST_USER.id,
+      templateId: 'template-rsi',
+      name: 'Risk Exposure Bot',
+      strategyType: 'reversion',
+      description: 'Bot limitado por exposição',
+      executionMode: 'paper',
+      isSystemManaged: true,
+      status: 'online',
+      isPaused: false,
+      currentPair: 'ETH/USDT',
+      lastAnalysis: null,
+      recommendedAction: 'buy',
+      confidence: 76,
+      modelVersion: 'v1.0.0',
+      modelUrl: null,
+      parameters: JSON.stringify({
+        minConfidence: 60,
+        maxExposurePerCoin: 0.1,
+        maxTotalExposure: 0.5,
+        maxConcurrentTrades: 3,
+      }),
+      template: {
+        id: 'template-rsi',
+        name: 'RSI Reversion Specialist',
+      },
+    }))
+    stub(prisma.trainingSession, 'findFirst', async () => null)
+    stub(botAnalysisService, 'analyzeBotInstance', async () => ({
+      botId: 'bot-risk-exposure-1',
+      botName: 'Risk Exposure Bot',
+      strategyId: 'template-rsi',
+      templateId: 'template-rsi',
+      templateName: 'RSI Reversion Specialist',
+      primarySpecialist: 'rsi_reversion',
+      timeframe: '1h',
+      generatedAt: '2026-04-12T21:30:00.000Z',
+      analyzedPairs: ['ETH/USDT', 'BTC/USDT'],
+      summary: {
+        analyzedPairs: 2,
+        actionablePairs: 1,
+        buySignals: 1,
+        sellSignals: 0,
+        holdSignals: 1,
+      },
+      bestOpportunity: {
+        pair: 'ETH/USDT',
+        action: 'buy',
+        confidence: 76,
+        price: 100,
+        reason: 'Sinal comprador válido',
+        specialists: [],
+      },
+      opportunities: [],
+      socialSignals: [],
+    }))
+    stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
+      maxTradeAmount: 100,
+      maxTradeAmountUnit: 'USDT',
+      allowedPairs: JSON.stringify(['ETH/USDT', 'BTC/USDT']),
+    }))
+    stub(prisma.balance, 'findMany', async () => ([
+      {
+        id: 'balance-usdt',
+        currency: 'USDT',
+        available: 1000,
+        reserved: 0,
+        total: 1000,
+      },
+    ]))
+    stub(prisma.balanceHistory, 'findFirst', async () => ({
+      totalBrl: 500,
+    }))
+    stub(prisma.transaction, 'findFirst', async () => null)
+    stub(prisma.transaction, 'findMany', async (args) => {
+      if (args?.where?.botId) {
+        return []
+      }
+
+      if (args?.where?.externalOrderId) {
+        return []
+      }
+
+      if (args?.where?.userId === TEST_USER.id && args?.where?.status === 'executed' && args?.distinct?.includes('pair')) {
+        return [{ pair: 'BTC/USDT' }]
+      }
+
+      if (args?.where?.pair === 'BTC/USDT' && args?.where?.status === 'executed') {
+        return [
+          {
+            type: 'buy',
+            quantity: 1,
+            total: 100,
+            fee: 0,
+            date: new Date('2026-04-12T20:00:00.000Z'),
+            createdAt: new Date('2026-04-12T20:00:00.000Z'),
+          },
+        ]
+      }
+
+      return []
+    })
+    stub(binanceService, 'getTickerPrice', async () => 100)
+    stub(marketValuationService, 'getCurrencyRateToBrl', async (currency) => {
+      if (currency === 'USDT') {
+        return 5
+      }
+
+      return 1
+    })
+
+    const result = await botRunnerService.runBotCycle('bot-risk-exposure-1', TEST_USER.id)
+
+    assert.equal(result.botId, 'bot-risk-exposure-1')
+    assert.equal(result.execution.status, 'skipped')
+    assert.match(result.execution.reason, /Exposição máxima por moeda/i)
+  })
+
+  it('runBotCycle reduces buy size using ATR-based volatility sizing and max position caps', async () => {
+    stub(prisma.bot, 'findFirst', async () => ({
+      id: 'bot-risk-atr-1',
+      userId: TEST_USER.id,
+      templateId: 'template-rsi',
+      name: 'ATR Risk Bot',
+      strategyType: 'mean_reversion',
+      description: 'Bot com sizing por volatilidade',
+      executionMode: 'semi_auto',
+      isSystemManaged: true,
+      status: 'online',
+      isPaused: false,
+      currentPair: 'ETH/USDT',
+      lastAnalysis: null,
+      recommendedAction: 'buy',
+      confidence: 78,
+      modelVersion: 'v1.0.0',
+      modelUrl: null,
+      parameters: JSON.stringify({
+        minConfidence: 60,
+        timeframe: '1h',
+      }),
+      template: {
+        id: 'template-rsi',
+        name: 'RSI Reversion Specialist',
+        defaultParameters: JSON.stringify({
+          maxPositionSize: 200,
+          atrPeriod: 14,
+          targetAtrPercent: 0.02,
+          minAtrPositionFactor: 0.35,
+        }),
+      },
+    }))
+    stub(prisma.trainingSession, 'findFirst', async () => null)
+    stub(botAnalysisService, 'analyzeBotInstance', async () => ({
+      botId: 'bot-risk-atr-1',
+      botName: 'ATR Risk Bot',
+      strategyId: 'template-rsi',
+      templateId: 'template-rsi',
+      templateName: 'RSI Reversion Specialist',
+      primarySpecialist: 'rsi_reversion',
+      timeframe: '1h',
+      generatedAt: '2026-04-13T10:00:00.000Z',
+      analyzedPairs: ['ETH/USDT'],
+      summary: {
+        analyzedPairs: 1,
+        actionablePairs: 1,
+        buySignals: 1,
+        sellSignals: 0,
+        holdSignals: 0,
+      },
+      bestOpportunity: {
+        pair: 'ETH/USDT',
+        action: 'buy',
+        confidence: 78,
+        price: 100,
+        reason: 'Entrada válida por reversão',
+        specialists: [],
+      },
+      opportunities: [],
+      socialSignals: [],
+    }))
+    stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
+      maxTradeAmount: 1000,
+      maxTradeAmountUnit: 'USDT',
+      allowedPairs: JSON.stringify(['ETH/USDT']),
+    }))
+    stub(prisma.balance, 'findMany', async () => ([
+      {
+        id: 'balance-usdt',
+        currency: 'USDT',
+        available: 1000,
+        reserved: 0,
+        total: 1000,
+      },
+    ]))
+    stub(prisma.balanceHistory, 'findFirst', async () => ({
+      totalBrl: 5000,
+    }))
+    stub(prisma.transaction, 'findFirst', async () => null)
+    stub(prisma.transaction, 'findMany', async (args) => {
+      if (args?.where?.botId) {
+        return []
+      }
+
+      if (args?.where?.externalOrderId) {
+        return []
+      }
+
+      if (args?.where?.userId === TEST_USER.id && args?.where?.status === 'executed' && args?.distinct?.includes('pair')) {
+        return []
+      }
+
+      return []
+    })
+    stub(binanceService, 'getCandles', async () => Array.from({ length: 20 }, (_, index) => ({
+      timestamp: `2026-04-13T${String(index).padStart(2, '0')}:00:00.000Z`,
+      open: 100,
+      high: 110,
+      low: 100,
+      close: 100,
+      volume: 1000,
+    })))
+
+    const result = await botRunnerService.runBotCycle('bot-risk-atr-1', TEST_USER.id)
+
+    assert.equal(result.botId, 'bot-risk-atr-1')
+    assert.equal(result.execution.status, 'suggested')
+    assert.equal(result.execution.quantity, 0.7)
+    assert.match(result.execution.reason, /ATR/i)
+    assert.match(result.execution.reason, /200\.00 USDT/i)
+  })
+
+  it('runBotCycle skips buys that are too correlated with open portfolio positions', async () => {
+    const correlatedCandles = Array.from({ length: 20 }, (_, index) => {
+      const close = 100 + (index * 2)
+
+      return {
+        timestamp: `2026-04-13T${String(index).padStart(2, '0')}:00:00.000Z`,
+        open: close - 1,
+        high: close + 2,
+        low: close - 2,
+        close,
+        volume: 1000 + (index * 20),
+      }
+    })
+
+    stub(prisma.bot, 'findFirst', async () => ({
+      id: 'bot-risk-correlation-1',
+      userId: TEST_USER.id,
+      templateId: 'template-macd',
+      name: 'Correlation Guard Bot',
+      strategyType: 'momentum',
+      description: 'Bot com bloqueio por correlação',
+      executionMode: 'paper',
+      isSystemManaged: true,
+      status: 'online',
+      isPaused: false,
+      currentPair: 'ETH/USDT',
+      lastAnalysis: null,
+      recommendedAction: 'buy',
+      confidence: 81,
+      modelVersion: 'v1.0.0',
+      modelUrl: null,
+      parameters: JSON.stringify({
+        minConfidence: 60,
+        timeframe: '1h',
+      }),
+      template: {
+        id: 'template-macd',
+        name: 'MACD Momentum Specialist',
+        defaultParameters: JSON.stringify({
+          minCorrelationThreshold: 0.8,
+          correlationLookbackCandles: 12,
+        }),
+      },
+    }))
+    stub(prisma.trainingSession, 'findFirst', async () => null)
+    stub(botAnalysisService, 'analyzeBotInstance', async () => ({
+      botId: 'bot-risk-correlation-1',
+      botName: 'Correlation Guard Bot',
+      strategyId: 'template-macd',
+      templateId: 'template-macd',
+      templateName: 'MACD Momentum Specialist',
+      primarySpecialist: 'macd_momentum',
+      timeframe: '1h',
+      generatedAt: '2026-04-13T10:00:00.000Z',
+      analyzedPairs: ['ETH/USDT', 'BTC/USDT'],
+      summary: {
+        analyzedPairs: 2,
+        actionablePairs: 1,
+        buySignals: 1,
+        sellSignals: 0,
+        holdSignals: 1,
+      },
+      bestOpportunity: {
+        pair: 'ETH/USDT',
+        action: 'buy',
+        confidence: 81,
+        price: 100,
+        reason: 'Momentum favorável',
+        specialists: [],
+      },
+      opportunities: [],
+      socialSignals: [],
+    }))
+    stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
+      maxTradeAmount: 100,
+      maxTradeAmountUnit: 'USDT',
+      allowedPairs: JSON.stringify(['ETH/USDT', 'BTC/USDT']),
+    }))
+    stub(prisma.balance, 'findMany', async () => ([
+      {
+        id: 'balance-usdt',
+        currency: 'USDT',
+        available: 1000,
+        reserved: 0,
+        total: 1000,
+      },
+    ]))
+    stub(prisma.balanceHistory, 'findFirst', async () => ({
+      totalBrl: 5000,
+    }))
+    stub(prisma.transaction, 'findFirst', async () => null)
+    stub(prisma.transaction, 'findMany', async (args) => {
+      if (args?.where?.botId) {
+        return []
+      }
+
+      if (args?.where?.externalOrderId) {
+        return []
+      }
+
+      if (args?.where?.userId === TEST_USER.id && args?.where?.status === 'executed' && args?.distinct?.includes('pair')) {
+        return [{ pair: 'BTC/USDT' }]
+      }
+
+      if (args?.where?.pair === 'BTC/USDT' && args?.where?.status === 'executed') {
+        return [
+          {
+            type: 'buy',
+            quantity: 1,
+            total: 100,
+            fee: 0,
+            date: new Date('2026-04-12T20:00:00.000Z'),
+            createdAt: new Date('2026-04-12T20:00:00.000Z'),
+          },
+        ]
+      }
+
+      return []
+    })
+    stub(binanceService, 'getTickerPrice', async () => 100)
+    stub(binanceService, 'getCandles', async (pair) => {
+      if (pair === 'ETH/USDT' || pair === 'BTC/USDT') {
+        return correlatedCandles
+      }
+
+      return []
+    })
+    stub(marketValuationService, 'getCurrencyRateToBrl', async (currency) => {
+      if (currency === 'USDT') {
+        return 5
+      }
+
+      return 1
+    })
+
+    const result = await botRunnerService.runBotCycle('bot-risk-correlation-1', TEST_USER.id)
+
+    assert.equal(result.botId, 'bot-risk-correlation-1')
+    assert.equal(result.execution.status, 'skipped')
+    assert.match(result.execution.reason, /Correlação/i)
+    assert.match(result.execution.reason, /BTC\/USDT/i)
+  })
+
+  it('runBotCycle skips execution when the circuit breaker is active for the bot instance', async () => {
+    const now = Date.now()
+
+    stub(prisma.bot, 'findFirst', async () => ({
+      id: 'bot-risk-1',
+      userId: TEST_USER.id,
+      templateId: 'template-macd',
+      name: 'Risk Guard Bot',
+      strategyType: 'momentum',
+      description: 'Bot com guardrail',
+      executionMode: 'paper',
+      isSystemManaged: true,
+      status: 'online',
+      isPaused: false,
+      currentPair: 'BTC/USDT',
+      lastAnalysis: null,
+      recommendedAction: 'buy',
+      confidence: 84,
+      modelVersion: 'v1.0.0',
+      modelUrl: null,
+      parameters: JSON.stringify({
+        minConfidence: 60,
+        maxConsecutiveLosses: 3,
+        circuitBreakerCooldownMinutes: 120,
+      }),
+      template: {
+        id: 'template-macd',
+        name: 'MACD Momentum Specialist',
+      },
+    }))
+    stub(prisma.trainingSession, 'findFirst', async () => null)
+    stub(botAnalysisService, 'analyzeBotInstance', async () => ({
+      botId: 'bot-risk-1',
+      botName: 'Risk Guard Bot',
+      strategyId: 'template-macd',
+      templateId: 'template-macd',
+      templateName: 'MACD Momentum Specialist',
+      primarySpecialist: 'macd_momentum',
+      timeframe: '1h',
+      generatedAt: '2026-04-12T20:05:00.000Z',
+      analyzedPairs: ['BTC/USDT'],
+      summary: {
+        analyzedPairs: 1,
+        actionablePairs: 1,
+        buySignals: 1,
+        sellSignals: 0,
+        holdSignals: 0,
+      },
+      bestOpportunity: {
+        pair: 'BTC/USDT',
+        action: 'buy',
+        confidence: 84,
+        price: 130,
+        reason: 'Sinal comprador válido',
+        specialists: [],
+      },
+      opportunities: [],
+      socialSignals: [],
+    }))
+    stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
+      allowedPairs: JSON.stringify(['BTC/USDT']),
+    }))
+    stub(prisma.balanceHistory, 'findFirst', async () => ({
+      totalBrl: 10000,
+    }))
+    stub(prisma.balance, 'findMany', async () => ([
+      {
+        id: 'balance-usdt',
+        currency: 'USDT',
+        available: 1000,
+        reserved: 0,
+        total: 1000,
+      },
+    ]))
+    stub(prisma.transaction, 'findFirst', async () => null)
+    stub(prisma.transaction, 'findMany', async ({ where }) => {
+      if (where?.botId && where?.type === 'sell') {
+        return [
+          { date: new Date(now - (10 * 60 * 1000)), profitBrl: -300 },
+          { date: new Date(now - (25 * 60 * 1000)), profitBrl: -180 },
+          { date: new Date(now - (40 * 60 * 1000)), profitBrl: -90 },
+        ]
+      }
+
+      return []
+    })
+
+    const result = await botRunnerService.runBotCycle('bot-risk-1', TEST_USER.id)
+
+    assert.equal(result.botId, 'bot-risk-1')
+    assert.equal(result.execution.mode, 'paper')
+    assert.equal(result.execution.status, 'skipped')
+    assert.match(result.execution.reason, /Circuit breaker/i)
+  })
 
   it('POST /api/configurations/pair-discovery/preview returns the next suggestion set for the current draft', async () => {
     stubAuthenticatedUser()
@@ -974,6 +2743,95 @@ describe('API contract tests', () => {
     assert.equal(body.data.feeCurrency, 'BNB')
     assert.equal(body.data.feeDiscountSource, 'bnb')
     assert.ok(Math.abs(body.data.fee - 0.0003083333333333333) < 1e-12)
+  })
+
+  it('POST /api/orders/reconcile returns reconciled external orders with lifecycle metadata', async () => {
+    stubAuthenticatedUser()
+
+    const pendingOrder = {
+      id: 'order-external-1',
+      userId: TEST_USER.id,
+      botId: 'bot-live-1',
+      date: new Date('2026-04-12T19:00:00.000Z'),
+      pair: 'BTC/USDT',
+      origin: 'bot',
+      type: 'buy',
+      quantity: 0,
+      requestedQuantity: 1,
+      orderType: 'market',
+      price: 127,
+      total: 0,
+      fee: 0,
+      feeCurrency: 'USDT',
+      feeRateApplied: 0,
+      feeDiscountSource: null,
+      status: 'pending',
+      externalOrderId: '321',
+      externalClientOrderId: 'client-order-1',
+      externalStatus: 'NEW',
+      syncedAt: new Date('2026-04-12T19:00:01.000Z'),
+      profitBrl: null,
+      profitPercent: null,
+    }
+
+    stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
+      apiKey: 'live-key',
+      secretKey: 'live-secret',
+    }))
+    stub(prisma.transaction, 'findMany', async ({ where }) => {
+      if (where?.externalOrderId) {
+        return [pendingOrder]
+      }
+
+      return []
+    })
+    stub(prisma.transaction, 'findFirst', async ({ where }) => {
+      if (where?.id === 'order-external-1') {
+        return pendingOrder
+      }
+
+      return null
+    })
+    stub(prisma.transaction, 'update', async ({ data }) => ({
+      ...pendingOrder,
+      ...data,
+    }))
+    stub(binanceService, 'getSpotOrder', async () => ({
+      symbol: 'BTCUSDT',
+      orderId: 321,
+      clientOrderId: 'client-order-1',
+      price: '0',
+      origQty: '1',
+      executedQty: '0.4',
+      cummulativeQuoteQty: '50.8',
+      status: 'PARTIALLY_FILLED',
+      type: 'MARKET',
+      side: 'BUY',
+      updateTime: Date.parse('2026-04-12T19:05:00.000Z'),
+    }))
+    stub(binanceService, 'getSpotOrderTrades', async () => ([
+      {
+        commission: '0.01',
+        commissionAsset: 'USDT',
+      },
+    ]))
+    stub(binanceService, 'getAccountBalances', async () => [])
+    stub(portfolioService, 'recordBalanceHistorySnapshot', async () => undefined)
+
+    const { response, body } = await requestJson('/api/orders/reconcile', {
+      method: 'POST',
+      headers: authHeaders(),
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(body.success, true)
+    assert.equal(body.data.length, 1)
+    assert.equal(body.data[0].id, 'order-external-1')
+    assert.equal(body.data[0].status, 'partially_filled')
+    assert.equal(body.data[0].requestedQuantity, 1)
+    assert.equal(body.data[0].quantity, 0.4)
+    assert.equal(body.data[0].externalOrderId, '321')
+    assert.equal(body.data[0].externalStatus, 'PARTIALLY_FILLED')
   })
 
   it('POST /api/training/sessions returns the pending session contract', async () => {
@@ -1540,6 +3398,14 @@ describe('API contract tests', () => {
     assert.equal(typeof body.data.sharpeRatio, 'number')
     assert.equal(typeof body.data.maxDrawdown, 'number')
     assert.equal(typeof body.data.profitFactor, 'number')
+    assert.equal(typeof body.data.benchmark.totalProfit, 'number')
+    assert.equal(Array.isArray(body.data.benchmarks), true)
+    assert.equal(body.data.benchmarks.length >= 2, true)
+    assert.equal(Array.isArray(body.data.pairBreakdown), true)
+    assert.equal(body.data.validation.mode, 'walk_forward')
+    assert.equal(typeof body.data.validation.folds, 'number')
+    assert.equal(typeof body.data.validation.labeling.horizonCandles, 'number')
+    assert.equal(Array.isArray(body.data.validation.windows), true)
   })
 
   it('POST /api/training/sessions/:id/save persists a model artifact and updates session/bot metadata', async () => {
@@ -1589,6 +3455,14 @@ describe('API contract tests', () => {
     assert.equal(artifactContent.sessionId, 'session-1')
     assert.equal(artifactContent.botId, 'bot1')
     assert.equal(artifactContent.modelVersion, 'v2.1.0')
+    assert.equal(artifactContent.formatVersion, 4)
+    assert.equal(artifactContent.summary.architecture, null)
+    assert.equal(artifactContent.summary.totalEpochs, 1)
+    assert.equal(artifactContent.summary.validationStrategy, 'walk_forward')
+    assert.equal(artifactContent.evaluation.validationStrategy, 'walk_forward')
+    assert.equal(typeof artifactContent.reproducibility.configFingerprint, 'string')
+    assert.equal(typeof artifactContent.reproducibility.forecastHorizonCandles, 'number')
+    assert.equal(Array.isArray(artifactContent.reproducibility.includedPairs), true)
   })
 
   it('GET /api/training/sessions/:id/download streams the saved model artifact', async () => {

@@ -106,3 +106,30 @@ export function usePairDiscoveryApply() {
     },
   })
 }
+
+export function useRunPairDiscoveryNow() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: () => configurationsService.runPairDiscoveryNow(),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: CONFIGURATIONS_QUERY_KEYS.socialSignals })
+      queryClient.invalidateQueries({ queryKey: CONFIGURATIONS_QUERY_KEYS.all })
+
+      if (result.applied) {
+        toast.success('Curadoria automática executada e aplicada com sucesso!')
+        return
+      }
+
+      if (result.previewRequired) {
+        toast('Curadoria executada. Há sugestões aguardando revisão.')
+        return
+      }
+
+      toast.success(result.summary)
+    },
+    onError: (error: Error) => {
+      toast.error(`Erro ao executar curadoria automática: ${error.message}`)
+    },
+  })
+}

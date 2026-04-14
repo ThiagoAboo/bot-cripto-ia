@@ -6,6 +6,7 @@ import type {
   PairDiscoveryApplyResponse,
   PairDiscoveryConfig,
   PairDiscoveryPreview,
+  PairDiscoveryRunResponse,
   SocialSignal,
 } from '../types/configurations.types'
 
@@ -46,5 +47,9 @@ export const configurationsService = {
     force?: boolean
   }): Promise<PairDiscoveryApplyResponse> {
     return apiClient.postData('/configurations/pair-discovery/apply', payload)
+  },
+
+  async runPairDiscoveryNow(): Promise<PairDiscoveryRunResponse> {
+    return apiClient.postData('/configurations/pair-discovery/run', {})
   },
 }

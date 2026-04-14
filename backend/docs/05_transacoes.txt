@@ -210,10 +210,19 @@ RESPONSE (200 - Sucesso):
     "origin": "manual",
     "type": "buy",
     "quantity": 0.05,
+    "requestedQuantity": 0.05,
+    "orderType": "limit",
     "price": 62000,
     "total": 3100,
     "fee": 12.50,
-    "status": "executed"
+    "feeCurrency": "USDT",
+    "feeRateApplied": 0.00075,
+    "feeDiscountSource": "usdt",
+    "status": "executed",
+    "externalOrderId": null,
+    "externalClientOrderId": null,
+    "externalStatus": null,
+    "syncedAt": "2024-01-15T10:35:02Z"
   }
 }
 
@@ -229,11 +238,17 @@ CAMPOS INSERIDOS (Transaction):
 - origin = 'manual'
 - type
 - quantity
+- requestedQuantity
+- orderType
 - price
 - total = quantity * price
 - fee = calculada conforme política da exchange e configuração ativa
 - feeCurrency = "BNB" ou moeda padrão da operação
+- feeRateApplied
+- feeDiscountSource
 - status = 'executed'
+- externalOrderId / externalClientOrderId / externalStatus (quando houver ordem real na exchange)
+- syncedAt
 
 CAMPOS ATUALIZADOS (Balance):
 - Para compra: decrease available, increase reserved
@@ -286,6 +301,44 @@ CAMPOS ATUALIZADOS (Balance):
 - Liberar saldo reservado
 
 -------------------------------------------------------------------------------
+6.1 API: POST /api/orders/reconcile
+-------------------------------------------------------------------------------
+
+Descrição: Reconciliar todas as ordens externas em aberto do usuário
+
+HEADERS:
+  Authorization: Bearer {token}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": [
+    {
+      "id": "tx_123",
+      "pair": "BTC/USDT",
+      "requestedQuantity": 1,
+      "quantity": 0.4,
+      "status": "partially_filled",
+      "externalOrderId": "321",
+      "externalStatus": "PARTIALLY_FILLED",
+      "syncedAt": "2026-04-12T19:05:00Z"
+    }
+  ]
+}
+
+-------------------------------------------------------------------------------
+6.2 API: POST /api/orders/{id}/reconcile
+-------------------------------------------------------------------------------
+
+Descrição: Reconciliar uma ordem externa específica pelo ID local da transação
+
+HEADERS:
+  Authorization: Bearer {token}
+
+PATH PARAMS:
+  id: string (ID local da transação)
+
+-------------------------------------------------------------------------------
 7. MODELO DE DADOS - Transaction
 -------------------------------------------------------------------------------
 
@@ -300,10 +353,19 @@ origin          | String    | Sim   | manual ou bot
 botId           | String    | Não   | FK para Bot (se origin=bot)
 type            | String    | Sim   | buy ou sell
 quantity        | Float     | Sim   | Quantidade negociada
+requestedQuantity | Float   | Não   | Quantidade originalmente enviada para a exchange
+orderType       | String    | Não   | market ou limit
 price           | Float     | Sim   | Preço da transação
 total           | Float     | Sim   | Valor total (quantity * price)
 fee             | Float     | Sim   | Taxa da transação
-status          | String    | Sim   | executed/pending/cancelled
+feeCurrency     | String    | Não   | Moeda usada na taxa
+feeRateApplied  | Float     | Não   | Taxa efetivamente aplicada
+feeDiscountSource | String  | Não   | bnb/usdt/standard
+status          | String    | Sim   | executed/pending/partially_filled/cancelled/rejected
+externalOrderId | String    | Não   | ID da ordem na exchange
+externalClientOrderId | String | Não | clientOrderId da exchange
+externalStatus  | String    | Não   | Status bruto retornado pela exchange
+syncedAt        | DateTime  | Não   | Última reconciliação com a exchange
 profitBrl       | Float     | Não   | Lucro/perda em reais
 profitPercent   | Float     | Não   | Percentual de lucro/perda
 userId          | String    | Sim   | FK para User

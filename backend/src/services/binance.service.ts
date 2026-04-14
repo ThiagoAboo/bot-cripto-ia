@@ -29,6 +29,22 @@ interface BinanceExchangeInfoSymbol {
   quoteAsset: string
   isSpotTradingAllowed?: boolean
   permissions?: string[]
+  filters?: BinanceExchangeInfoFilter[]
+}
+
+interface BinanceExchangeInfoFilter {
+  filterType: string
+  minPrice?: string
+  maxPrice?: string
+  tickSize?: string
+  minQty?: string
+  maxQty?: string
+  stepSize?: string
+  minNotional?: string
+  maxNotional?: string
+  applyToMarket?: boolean
+  applyMinToMarket?: boolean
+  applyMaxToMarket?: boolean
 }
 
 interface BinanceExchangeInfoResponse {
@@ -70,6 +86,7 @@ interface BinanceOrderResponse {
   orderId: number
   clientOrderId: string
   transactTime?: number
+  updateTime?: number
   price: string
   origQty: string
   executedQty: string
@@ -78,6 +95,19 @@ interface BinanceOrderResponse {
   timeInForce?: string
   type: string
   side: string
+  fills?: BinanceOrderFill[]
+}
+
+interface BinanceOrderFill {
+  price: string
+  qty: string
+  commission: string
+  commissionAsset: string
+  tradeId?: number
+}
+
+interface BinanceUserDataStreamResponse {
+  listenKey: string
 }
 
 interface CreateOrderParams {
@@ -94,12 +124,60 @@ interface CancelOrderParams {
   recvWindow?: number
 }
 
+interface GetOrderParams {
+  pair: string
+  orderId?: string | number
+  origClientOrderId?: string
+  recvWindow?: number
+}
+
 interface HistoricalCandlesParams {
   pair: string
   interval: string
   startTime: number
   endTime: number
 }
+
+export interface BinanceTradeFill {
+  id: number
+  orderId: number
+  price: string
+  qty: string
+  quoteQty: string
+  commission: string
+  commissionAsset: string
+  time: number
+  isBuyer: boolean
+  isMaker: boolean
+  isBestMatch: boolean
+}
+
+export interface BinanceSpotTradingRules {
+  pair: string
+  symbol: string
+  baseAsset: string
+  quoteAsset: string
+  minQty: number
+  maxQty?: number
+  stepSize: number
+  minPrice?: number
+  maxPrice?: number
+  tickSize?: number
+  minNotional?: number
+  maxNotional?: number
+}
+
+export interface PreparedSpotOrderRequest {
+  isValid: boolean
+  quantity?: number
+  price?: number
+  notional?: number
+  rejectionReason?: string
+  adjustments: string[]
+  rules: BinanceSpotTradingRules
+}
+
+export type LocalExchangeOrderStatus = 'pending' | 'partially_filled' | 'executed' | 'cancelled' | 'rejected'
 
 const QUOTE_ASSET_PRIORITY = ['USDT', 'FDUSD', 'USDC', 'BUSD', 'BTC', 'ETH', 'BNB', 'EUR', 'BRL', 'TRY']
 const DEFAULT_BINANCE_TIMEOUT = Number(process.env.BINANCE_TIMEOUT ?? 30000)
@@ -204,6 +282,42 @@ function formatPair(symbol: string, baseAsset?: string, quoteAsset?: string): st
   return `${base}/${matchedQuote}`
 }
 
+function countDecimals(value: number | string | undefined): number {
+  if (value === undefined || value === null) {
+    return 0
+  }
+
+  const stringValue = String(value)
+  if (!stringValue.includes('.')) {
+    return 0
+  }
+
+  return stringValue.replace(/0+$/, '').split('.')[1]?.length ?? 0
+}
+
+function normalizeDownToIncrement(value: number, increment: number): number {
+  if (!Number.isFinite(value) || value <= 0 || !Number.isFinite(increment) || increment <= 0) {
+    return value
+  }
+
+  const decimals = Math.max(countDecimals(increment), countDecimals(value))
+  const scale = 10 ** Math.min(decimals, 8)
+  const scaledValue = Math.floor((value + 1e-12) * scale)
+  const scaledIncrement = Math.max(1, Math.round(increment * scale))
+  const normalizedScaled = Math.floor(scaledValue / scaledIncrement) * scaledIncrement
+
+  return Number((normalizedScaled / scale).toFixed(Math.min(countDecimals(increment), 8)))
+}
+
+function parseFilterNumber(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined
+  }
+
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+}
+
 function buildQueryString(params: Record<string, string | number | boolean | undefined>): string {
   const searchParams = new URLSearchParams()
 
@@ -280,6 +394,33 @@ async function signedRequest<T>(
   }))
 }
 
+async function apiKeyRequest<T>(
+  endpoint: string,
+  method: 'POST' | 'PUT' | 'DELETE',
+  credentials: Pick<BinanceCredentials, 'apiKey'>,
+  params: Record<string, string | number | boolean | undefined> = {},
+  options: { weight?: number; timeoutMs?: number } = {},
+): Promise<T> {
+  const queryString = buildQueryString(params)
+  const url = queryString
+    ? `${BINANCE_BASE_URL}${endpoint}?${queryString}`
+    : `${BINANCE_BASE_URL}${endpoint}`
+
+  await rateLimiter.waitForWeight(options.weight ?? 1)
+
+  return binanceCircuitBreaker.execute(async () => requestJson<T>(url, {
+    method,
+    timeoutMs: options.timeoutMs ?? DEFAULT_BINANCE_TIMEOUT,
+    retries: 3,
+    retryDelayMs: 800,
+    headers: {
+      'X-MBX-APIKEY': credentials.apiKey,
+    },
+    module: 'binance',
+    requestName: endpoint,
+  }))
+}
+
 function normalizeInterval(interval: string): string {
   const normalized = interval.trim().toLowerCase()
   const supported = new Set(['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'])
@@ -320,6 +461,166 @@ export async function getExchangeInfo(): Promise<BinanceExchangeInfoResponse> {
 
   const data = await publicRequest<BinanceExchangeInfoResponse>('/api/v3/exchangeInfo', {}, { weight: 10 })
   return setCacheValue(exchangeInfoCache, 'exchange-info', data)
+}
+
+export async function getSpotTradingRules(pair: string): Promise<BinanceSpotTradingRules> {
+  const normalizedPair = normalizePair(pair)
+  const exchangeInfo = await getExchangeInfo()
+  const symbolInfo = exchangeInfo.symbols.find((symbol) => normalizePair(symbol.symbol) === normalizedPair)
+
+  if (!symbolInfo) {
+    throw new ExternalApiError(`Par não encontrado na Binance: ${pair}`)
+  }
+
+  const priceFilter = symbolInfo.filters?.find((filter) => filter.filterType === 'PRICE_FILTER')
+  const lotSizeFilter = symbolInfo.filters?.find((filter) => filter.filterType === 'LOT_SIZE')
+  const marketLotSizeFilter = symbolInfo.filters?.find((filter) => filter.filterType === 'MARKET_LOT_SIZE')
+  const minNotionalFilter = symbolInfo.filters?.find((filter) => filter.filterType === 'MIN_NOTIONAL')
+  const notionalFilter = symbolInfo.filters?.find((filter) => filter.filterType === 'NOTIONAL')
+
+  const stepSize = parseFilterNumber(marketLotSizeFilter?.stepSize)
+    ?? parseFilterNumber(lotSizeFilter?.stepSize)
+    ?? 0.00000001
+  const minQty = parseFilterNumber(marketLotSizeFilter?.minQty)
+    ?? parseFilterNumber(lotSizeFilter?.minQty)
+    ?? stepSize
+
+  return {
+    pair: formatPair(symbolInfo.symbol, symbolInfo.baseAsset, symbolInfo.quoteAsset),
+    symbol: symbolInfo.symbol,
+    baseAsset: symbolInfo.baseAsset,
+    quoteAsset: symbolInfo.quoteAsset,
+    minQty,
+    maxQty: parseFilterNumber(marketLotSizeFilter?.maxQty) ?? parseFilterNumber(lotSizeFilter?.maxQty),
+    stepSize,
+    minPrice: parseFilterNumber(priceFilter?.minPrice),
+    maxPrice: parseFilterNumber(priceFilter?.maxPrice),
+    tickSize: parseFilterNumber(priceFilter?.tickSize),
+    minNotional: parseFilterNumber(notionalFilter?.minNotional) ?? parseFilterNumber(minNotionalFilter?.minNotional),
+    maxNotional: parseFilterNumber(notionalFilter?.maxNotional),
+  }
+}
+
+export async function prepareSpotOrderRequest(params: {
+  pair: string
+  quantity: number
+  orderType: 'MARKET' | 'LIMIT'
+  price?: number
+  referencePrice?: number
+}): Promise<PreparedSpotOrderRequest> {
+  const rules = await getSpotTradingRules(params.pair)
+  const adjustments: string[] = []
+  const normalizedQuantity = normalizeDownToIncrement(params.quantity, rules.stepSize)
+
+  if (!Number.isFinite(normalizedQuantity) || normalizedQuantity <= 0) {
+    return {
+      isValid: false,
+      rejectionReason: 'Quantidade inválida após aplicar stepSize da Binance',
+      adjustments,
+      rules,
+    }
+  }
+
+  if (Math.abs(normalizedQuantity - params.quantity) > 1e-8) {
+    adjustments.push(`Quantidade ajustada de ${params.quantity} para ${normalizedQuantity} por stepSize`)
+  }
+
+  if (normalizedQuantity < rules.minQty) {
+    return {
+      isValid: false,
+      rejectionReason: `Quantidade ${normalizedQuantity} abaixo do mínimo ${rules.minQty} exigido pela Binance`,
+      adjustments,
+      rules,
+    }
+  }
+
+  if (typeof rules.maxQty === 'number' && normalizedQuantity > rules.maxQty) {
+    return {
+      isValid: false,
+      rejectionReason: `Quantidade ${normalizedQuantity} acima do máximo ${rules.maxQty} permitido pela Binance`,
+      adjustments,
+      rules,
+    }
+  }
+
+  let normalizedPrice = params.price
+  if (params.orderType === 'LIMIT') {
+    if (!Number.isFinite(normalizedPrice) || !normalizedPrice || normalizedPrice <= 0) {
+      return {
+        isValid: false,
+        rejectionReason: 'Preço é obrigatório para ordem LIMIT',
+        adjustments,
+        rules,
+      }
+    }
+
+    if (rules.tickSize) {
+      const adjustedPrice = normalizeDownToIncrement(normalizedPrice, rules.tickSize)
+      if (Math.abs(adjustedPrice - normalizedPrice) > 1e-8) {
+        adjustments.push(`Preço ajustado de ${normalizedPrice} para ${adjustedPrice} por tickSize`)
+      }
+      normalizedPrice = adjustedPrice
+    }
+
+    if (typeof rules.minPrice === 'number' && normalizedPrice < rules.minPrice) {
+      return {
+        isValid: false,
+        rejectionReason: `Preço ${normalizedPrice} abaixo do mínimo ${rules.minPrice} da Binance`,
+        adjustments,
+        rules,
+      }
+    }
+
+    if (typeof rules.maxPrice === 'number' && normalizedPrice > rules.maxPrice) {
+      return {
+        isValid: false,
+        rejectionReason: `Preço ${normalizedPrice} acima do máximo ${rules.maxPrice} da Binance`,
+        adjustments,
+        rules,
+      }
+    }
+  }
+
+  const referencePrice = params.orderType === 'LIMIT'
+    ? normalizedPrice
+    : (params.referencePrice ?? params.price ?? await getTickerPrice(params.pair))
+  const notional = normalizedQuantity * (referencePrice ?? 0)
+
+  if (!Number.isFinite(notional) || notional <= 0) {
+    return {
+      isValid: false,
+      rejectionReason: 'Não foi possível calcular o notional da ordem',
+      adjustments,
+      rules,
+    }
+  }
+
+  if (typeof rules.minNotional === 'number' && notional + 1e-8 < rules.minNotional) {
+    return {
+      isValid: false,
+      rejectionReason: `Notional ${notional.toFixed(8)} abaixo do mínimo ${rules.minNotional} da Binance`,
+      adjustments,
+      rules,
+    }
+  }
+
+  if (typeof rules.maxNotional === 'number' && notional - 1e-8 > rules.maxNotional) {
+    return {
+      isValid: false,
+      rejectionReason: `Notional ${notional.toFixed(8)} acima do máximo ${rules.maxNotional} da Binance`,
+      adjustments,
+      rules,
+    }
+  }
+
+  return {
+    isValid: true,
+    quantity: normalizedQuantity,
+    price: normalizedPrice,
+    notional,
+    adjustments,
+    rules,
+  }
 }
 
 export async function getAvailablePairs(): Promise<string[]> {
@@ -389,9 +690,13 @@ export async function getCandles(
   return setCacheValue(candlesCache, cacheKey, candles)
 }
 
-export async function getAccountInfo(apiKey: string, secretKey: string): Promise<BinanceAccountResponse> {
+export async function getAccountInfo(
+  apiKey: string,
+  secretKey: string,
+  options: { forceRefresh?: boolean } = {},
+): Promise<BinanceAccountResponse> {
   const cacheKey = getAccountCacheKey(apiKey)
-  const cached = getCacheValue(accountCache, cacheKey, CACHE_TTL_BALANCE)
+  const cached = options.forceRefresh ? null : getCacheValue(accountCache, cacheKey, CACHE_TTL_BALANCE)
   if (cached) {
     return cached
   }
@@ -400,8 +705,12 @@ export async function getAccountInfo(apiKey: string, secretKey: string): Promise
   return setCacheValue(accountCache, cacheKey, data)
 }
 
-export async function getAccountBalances(apiKey: string, secretKey: string): Promise<Array<{ currency: string; available: number; reserved: number; total: number }>> {
-  const account = await getAccountInfo(apiKey, secretKey)
+export async function getAccountBalances(
+  apiKey: string,
+  secretKey: string,
+  options: { forceRefresh?: boolean } = {},
+): Promise<Array<{ currency: string; available: number; reserved: number; total: number }>> {
+  const account = await getAccountInfo(apiKey, secretKey, options)
 
   return account.balances
     .map((balance) => {
@@ -434,6 +743,7 @@ export async function createSpotOrder(apiKey: string, secretKey: string, params:
     type: normalizedPrice !== undefined ? 'LIMIT' : 'MARKET',
     quantity: quantity.toString(),
     recvWindow: params.recvWindow ?? DEFAULT_RECV_WINDOW,
+    newOrderRespType: normalizedPrice !== undefined ? 'RESULT' : 'FULL',
   }
 
   if (normalizedPrice !== undefined) {
@@ -441,7 +751,9 @@ export async function createSpotOrder(apiKey: string, secretKey: string, params:
     payload.timeInForce = 'GTC'
   }
 
-  return signedRequest<BinanceOrderResponse>('/api/v3/order', 'POST', payload, { apiKey, secretKey }, { weight: 1, isOrder: true })
+  const response = await signedRequest<BinanceOrderResponse>('/api/v3/order', 'POST', payload, { apiKey, secretKey }, { weight: 1, isOrder: true })
+  accountCache.delete(getAccountCacheKey(apiKey))
+  return response
 }
 
 export async function cancelSpotOrder(apiKey: string, secretKey: string, params: CancelOrderParams): Promise<BinanceOrderResponse> {
@@ -450,6 +762,85 @@ export async function cancelSpotOrder(apiKey: string, secretKey: string, params:
     orderId: params.orderId,
     recvWindow: params.recvWindow ?? DEFAULT_RECV_WINDOW,
   }, { apiKey, secretKey }, { weight: 1, isOrder: true })
+}
+
+export async function getSpotOrder(apiKey: string, secretKey: string, params: GetOrderParams): Promise<BinanceOrderResponse> {
+  if (!params.orderId && !params.origClientOrderId) {
+    throw new ExternalApiError('É necessário informar orderId ou origClientOrderId para consultar a ordem')
+  }
+
+  return signedRequest<BinanceOrderResponse>('/api/v3/order', 'GET', {
+    symbol: normalizePair(params.pair),
+    orderId: params.orderId,
+    origClientOrderId: params.origClientOrderId,
+    recvWindow: params.recvWindow ?? DEFAULT_RECV_WINDOW,
+  }, { apiKey, secretKey }, { weight: 1, isOrder: true })
+}
+
+export async function getSpotOrderTrades(apiKey: string, secretKey: string, params: {
+  pair: string
+  orderId: string | number
+  recvWindow?: number
+}): Promise<BinanceTradeFill[]> {
+  return signedRequest<BinanceTradeFill[]>('/api/v3/myTrades', 'GET', {
+    symbol: normalizePair(params.pair),
+    orderId: params.orderId,
+    recvWindow: params.recvWindow ?? DEFAULT_RECV_WINDOW,
+  }, { apiKey, secretKey }, { weight: 10 })
+}
+
+export async function createUserDataStream(apiKey: string): Promise<string> {
+  const response = await apiKeyRequest<BinanceUserDataStreamResponse>(
+    '/api/v3/userDataStream',
+    'POST',
+    { apiKey },
+    {},
+    { weight: 1 },
+  )
+
+  return response.listenKey
+}
+
+export async function keepaliveUserDataStream(apiKey: string, listenKey: string): Promise<void> {
+  await apiKeyRequest<BinanceUserDataStreamResponse>(
+    '/api/v3/userDataStream',
+    'PUT',
+    { apiKey },
+    { listenKey },
+    { weight: 1 },
+  )
+}
+
+export async function closeUserDataStream(apiKey: string, listenKey: string): Promise<void> {
+  await apiKeyRequest<BinanceUserDataStreamResponse>(
+    '/api/v3/userDataStream',
+    'DELETE',
+    { apiKey },
+    { listenKey },
+    { weight: 1 },
+  )
+}
+
+export function mapBinanceOrderStatusToLocalStatus(status: string, executedQuantity: number): LocalExchangeOrderStatus {
+  const normalizedStatus = status.trim().toUpperCase()
+
+  if (normalizedStatus === 'FILLED') {
+    return 'executed'
+  }
+
+  if (normalizedStatus === 'PARTIALLY_FILLED') {
+    return 'partially_filled'
+  }
+
+  if (normalizedStatus === 'REJECTED') {
+    return 'rejected'
+  }
+
+  if (['CANCELED', 'EXPIRED', 'EXPIRED_IN_MATCH'].includes(normalizedStatus)) {
+    return executedQuantity > 0 ? 'cancelled' : 'cancelled'
+  }
+
+  return 'pending'
 }
 
 export async function fetchHistoricalCandles(params: HistoricalCandlesParams): Promise<Array<{ timestamp: string; open: number; high: number; low: number; close: number; volume: number }>> {

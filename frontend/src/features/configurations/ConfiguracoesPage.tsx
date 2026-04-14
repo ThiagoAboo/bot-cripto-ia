@@ -186,6 +186,22 @@ export default function ConfiguracoesPage() {
                 }
               })
             }}
+            onRunResult={({ allowedPairs, pairDiscovery }) => {
+              setLocalConfig((current) => {
+                if (!current) {
+                  return current
+                }
+
+                return {
+                  ...current,
+                  botParameters: {
+                    ...current.botParameters,
+                    allowedPairs,
+                    pairDiscovery,
+                  },
+                }
+              })
+            }}
           />
           
           <AdvancedOptionsCard

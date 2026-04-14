@@ -330,6 +330,109 @@ OBSERVAÇÕES:
 - Usa o runtime compartilhado em `bots/src`
 
 -------------------------------------------------------------------------------
+4.2 API: POST /api/dashboard/bots/{id}/run
+-------------------------------------------------------------------------------
+
+Descrição: Dispara manualmente um ciclo operacional do bot selecionado.
+
+HEADERS:
+  Authorization: Bearer {token}
+
+PATH PARAMS:
+  id: string (ID do bot)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "botId": "bot1",
+    "mode": "paper",
+    "executed": true,
+    "suggested": false,
+    "skipped": false,
+    "reason": "Executado pelo bot em modo paper",
+    "analysis": {
+      "pair": "BTC/USDT",
+      "action": "buy",
+      "confidence": 78
+    },
+    "execution": {
+      "transactionId": "tx_123",
+      "pair": "BTC/USDT",
+      "type": "buy",
+      "quantity": 0.001,
+      "price": 62345.67,
+      "origin": "bot"
+    }
+  }
+}
+
+REGRAS:
+- `semi_auto`: nao executa ordem; devolve `suggested = true`
+- `paper`: executa via carteira local/backend
+- `full_auto`: envia ordem real para a Binance e depois sincroniza saldos locais,
+  mantendo o registro interno de taxa, FIFO, historico e eventos
+- quando a Binance devolver `NEW` ou `PARTIALLY_FILLED`, o ciclo retorna a ordem como
+  `submitted`, persiste os metadados externos e passa a aguardar reconciliação
+- antes de abrir nova posição em `full_auto`, o runner reconcilia ordens externas em
+  aberto do mesmo bot e ignora o ciclo se ainda existir ordem `pending` ou
+  `partially_filled`
+- o worker interno tambem percorre periodicamente ordens externas em aberto de todos
+  os usuários para capturar fills, cancelamentos e rejeições quase em tempo real
+- quando disponível, o backend também abre `userDataStream` nativo da Binance
+  (`listenKey`) para usuários elegíveis em `full_auto`, usando esses eventos como
+  gatilho prioritário de reconciliação; o ciclo interno permanece como fallback
+- antes da ordem, o runner aplica guardrails por instancia:
+  - stop loss
+  - take profit
+  - circuit breaker por perda diaria/perdas consecutivas
+- antes de comprar, o runner valida diversificação e exposição:
+  - `maxPositionSize`
+  - `maxConcurrentTrades`
+  - `maxExposurePerCoin`
+  - `maxTotalExposure`
+- ainda antes da ordem, o capital planejado pode ser reduzido por volatilidade usando
+  `ATR / preço` do par, evitando posição cheia em regimes mais agressivos
+- para novas compras, o runner também bloqueia entradas quando a correlação da
+  oportunidade com posições já abertas excede `minCorrelationThreshold`
+- antes do envio real, o backend tambem prepara a ordem com os filtros do simbolo:
+  - `stepSize`
+  - `tickSize`
+  - `minQty`
+  - `minNotional`
+- O ciclo pode ser ignorado com `skipped = true` quando:
+  - o bot estiver pausado/offline
+  - houver treinamento ativo
+  - a confianca estiver abaixo do limite
+  - houver cooldown recente para o mesmo par/acao
+  - o circuit breaker estiver ativo
+  - a ordem nao atender aos filtros da Binance
+
+-------------------------------------------------------------------------------
+4.3 API: GET /api/dashboard/bots/worker-status
+-------------------------------------------------------------------------------
+
+Descrição: Retorna o estado do worker interno responsavel por percorrer os bots
+online em loop.
+
+HEADERS:
+  Authorization: Bearer {token}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "running": true
+  }
+}
+
+CONFIGURACOES RELACIONADAS:
+- BOT_WORKER_AUTOSTART
+- BOT_WORKER_POLL_MS
+- BOT_TRADE_COOLDOWN_MS
+- BOT_MIN_CONFIDENCE
+
+-------------------------------------------------------------------------------
 5. API: PUT /api/dashboard/bots/{id}/pause
 -------------------------------------------------------------------------------
 

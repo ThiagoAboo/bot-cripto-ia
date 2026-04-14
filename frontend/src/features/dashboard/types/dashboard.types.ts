@@ -105,6 +105,47 @@ export interface BotAnalysis {
   socialSignals: BotSocialSignal[]
 }
 
+export interface BotCycleExecution {
+  mode: 'paper' | 'semi_auto' | 'full_auto'
+  status: 'skipped' | 'suggested' | 'submitted' | 'executed'
+  reason: string
+  pair?: string
+  action?: 'buy' | 'sell' | 'hold'
+  quantity?: number
+  transaction?: {
+    id: string
+    date: string
+    pair: string
+    origin: string
+    botId?: string
+    type: string
+    quantity: number
+    requestedQuantity?: number
+    price: number
+    total: number
+    fee: number
+    feeCurrency: string
+    feeRateApplied: number
+    feeDiscountSource?: string
+    status: string
+    orderType?: string
+    externalOrderId?: string
+    externalClientOrderId?: string
+    externalStatus?: string
+    syncedAt?: string
+    profitBrl: number | null
+    profitPercent: number | null
+  }
+}
+
+export interface BotCycleResult {
+  botId: string
+  botName: string
+  generatedAt: string
+  analysis: BotAnalysis
+  execution: BotCycleExecution
+}
+
 export interface PerformanceData {
   period: '24h' | '7d' | '30d' | 'total'
   data: Array<{
