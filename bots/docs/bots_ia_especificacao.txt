@@ -1375,6 +1375,17 @@ Regras obrigatorias:
 - `paper` executa na carteira local do backend
 - `full_auto` envia ordem spot real para a Binance e depois reconcilia o estado
   local para preservar saldo, taxa, FIFO, BNB e historico
+- antes de considerar um bot apto para `full_auto`, a camada operacional deve manter
+  um placar de validação em `paper` com:
+  - quantidade mínima de sinais avaliados
+  - acurácia online mínima
+  - retorno médio mínimo da estratégia
+  - edge médio mínimo contra o mercado
+  - drawdown máximo tolerado
+  - limite de erros consecutivos
+- esse placar deve ser exposto como `paperReadiness`, com `readyForFullAuto` e uma
+  lista objetiva de `blockers`, para que a promoção para operação real seja guiada por
+  critérios verificáveis e não só por feeling
 - se a exchange responder `NEW` ou `PARTIALLY_FILLED`, o runner deve persistir a
   ordem como `submitted`, bloquear novas entradas para o mesmo bot e aguardar
   a reconciliação antes de abrir outra posição

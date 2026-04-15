@@ -28,6 +28,8 @@ model User {
   trainingSessions TrainingSession[]
   balanceHistory  BalanceHistory[]
   bots            Bot[]
+  botDecisions    BotDecision[]
+  botModelArtifacts BotModelArtifact[]
 }
 
 // ==============================
@@ -114,6 +116,8 @@ model Bot {
   transactions     Transaction[]
   trainingSessions TrainingSession[]
   traces           Trace[]
+  decisions        BotDecision[]
+  modelArtifacts   BotModelArtifact[]
 
   @@index([userId])
   @@index([templateId])
@@ -206,6 +210,85 @@ model TrainingSession {
   
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+
+  modelArtifacts BotModelArtifact[]
+}
+
+// ==============================
+// ARTEFATO DE MODELO DO BOT
+// ==============================
+model BotModelArtifact {
+  id                   String   @id @default(cuid())
+  userId               String
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  botId                String
+  bot                  Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  trainingSessionId    String?
+  trainingSession      TrainingSession? @relation(fields: [trainingSessionId], references: [id], onDelete: SetNull)
+  modelVersion         String
+  modelUrl             String
+  fingerprint          String
+  architecture         String?
+  validationStrategy   String?
+  forecastHorizonCandles Int?
+  governanceRole       String   @default("challenger")
+  isActive             Boolean  @default(false)
+  notes                String?
+  evaluationSummary    String   @default("{}")
+  reproducibilitySummary String @default("{}")
+  promotedAt           DateTime?
+  archivedAt           DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@unique([botId, modelUrl])
+  @@index([userId, botId, createdAt])
+  @@index([botId, isActive])
+}
+
+// ==============================
+// DECISÃO / AVALIAÇÃO DO BOT
+// ==============================
+model BotDecision {
+  id                  String   @id @default(cuid())
+  userId              String
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  botId               String
+  bot                 Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  pair                String
+  action              String
+  confidence          Float
+  reason              String
+  timeframe           String
+  executionMode       String
+  executionStatus     String
+  modelVersion        String?
+  modelUrl            String?
+  modelArchitecture   String?
+  horizonCandles      Int      @default(5)
+  buyThresholdPercent Float    @default(0.3)
+  sellThresholdPercent Float   @default(-0.3)
+  decisionPrice       Float
+  requestedQuantity   Float?
+  executedQuantity    Float?
+  transactionId       String?
+  slippagePercent     Float?
+  simulatedLatencyMs  Int?
+  simulatedFillPercent Float?
+  createdAt           DateTime @default(now())
+  dueAt               DateTime
+  evaluatedAt         DateTime?
+  evaluationStatus    String   @default("pending")
+  evaluationPrice     Float?
+  marketReturnPercent Float?
+  strategyReturnPercent Float?
+  realizedEdgePercent Float?
+  actualLabel         String?
+  expectedLabel       String?
+  isCorrect           Boolean?
+
+  @@index([userId, botId, createdAt])
+  @@index([userId, evaluationStatus, dueAt])
 }
 
 // ==============================

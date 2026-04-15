@@ -20,9 +20,12 @@ import {
   BOTS_QUERY_KEYS,
   useBotDetail,
   useBotHistory,
+  useBotModels,
   useBotTemplates,
   useBots,
   useBotWorkerStatus,
+  useArchiveBotModel,
+  usePromoteBotModel,
   useCreateBot,
   useDeleteBot,
   usePauseBot,
@@ -35,6 +38,8 @@ import type {
   BotExecutionMode,
   BotHistory,
   BotListItem,
+  BotModelArtifact,
+  BotPaperReadiness,
   BotOperationalStatus,
   BotTemplateSummary,
   CreateBotPayload,
@@ -185,6 +190,41 @@ function ActionBadge({ action }: { action?: 'buy' | 'sell' | 'hold' }) {
   return <Badge variant="default">Hold</Badge>
 }
 
+function DecisionExecutionBadge({ status }: { status: 'skipped' | 'suggested' | 'submitted' | 'executed' }) {
+  if (status === 'executed') return <Badge variant="success">Executado</Badge>
+  if (status === 'submitted') return <Badge variant="warning">Enviado</Badge>
+  if (status === 'suggested') return <Badge variant="primary">Sugerido</Badge>
+  return <Badge variant="default">Ignorado</Badge>
+}
+
+function ModelReadinessBadge({ modelReady }: { modelReady: boolean }) {
+  return modelReady
+    ? <Badge variant="success">Modelo pronto</Badge>
+    : <Badge variant="warning">Modelo pendente</Badge>
+}
+
+function PaperReadinessBadge({ readiness }: { readiness?: BotPaperReadiness }) {
+  if (!readiness) {
+    return <Badge variant="default">Paper sem histórico</Badge>
+  }
+
+  return readiness.readyForFullAuto
+    ? <Badge variant="success">Pronto para full_auto</Badge>
+    : <Badge variant="warning">Em validação paper</Badge>
+}
+
+function ModelGovernanceBadge({ model }: { model: BotModelArtifact }) {
+  if (model.governanceRole === 'champion') {
+    return <Badge variant="success">Champion</Badge>
+  }
+
+  if (model.governanceRole === 'archived') {
+    return <Badge variant="default">Arquivado</Badge>
+  }
+
+  return <Badge variant="primary">Challenger</Badge>
+}
+
 function MetricCard({ icon: Icon, title, value, caption }: { icon: typeof Bot; title: string; value: string; caption: string }) {
   return (
     <Card variant="compact">
@@ -269,6 +309,7 @@ function BotListPanel({
                       <Badge variant="default">{bot.executionMode ?? 'paper'}</Badge>
                       <Badge variant={bot.userId ? 'primary' : 'default'}>{bot.userId ? 'Customizado' : 'Sistema'}</Badge>
                       {bot.indicatorType && <Badge variant="default">{bot.indicatorType}</Badge>}
+                      <PaperReadinessBadge readiness={bot.paperReadiness} />
                     </div>
 
                     <div className="mt-3 flex items-center justify-between text-xs" style={{ color: 'var(--text-muted)' }}>
@@ -285,6 +326,19 @@ function BotListPanel({
 }
 
 function BotHistoryPanel({ history, isLoading }: { history?: BotHistory; isLoading: boolean }) {
+  const summary = history?.decisionSummary ?? {
+    total: 0,
+    pending: 0,
+    evaluated: 0,
+    correct: 0,
+    accuracyPercent: 0,
+    averageConfidence: 0,
+    averageMarketReturnPercent: 0,
+    averageStrategyReturnPercent: 0,
+    bestEdgePercent: 0,
+    worstEdgePercent: 0,
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -299,12 +353,138 @@ function BotHistoryPanel({ history, isLoading }: { history?: BotHistory; isLoadi
             <Skeleton className="h-48 rounded-2xl" />
           </div>
         ) : (
-          <Tabs defaultValue="transactions">
+          <>
+            <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+              <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Sinais rastreados</p>
+                <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{summary.total}</p>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{summary.pending} pendentes de avaliação</p>
+              </div>
+              <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Acurácia online</p>
+                <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{formatPercent(summary.accuracyPercent)}</p>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{summary.correct}/{summary.evaluated} sinais avaliados</p>
+              </div>
+              <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Confiança média</p>
+                <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{formatPercent(summary.averageConfidence)}</p>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>sinais sugeridos pelo modelo</p>
+              </div>
+              <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Retorno médio da estratégia</p>
+                <p className={`mt-2 font-semibold ${getProfitColor(summary.averageStrategyReturnPercent)}`}>{formatPercent(summary.averageStrategyReturnPercent)}</p>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>mercado: {formatPercent(summary.averageMarketReturnPercent)}</p>
+              </div>
+              <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Melhor edge</p>
+                <p className={`mt-2 font-semibold ${getProfitColor(summary.bestEdgePercent)}`}>{formatPercent(summary.bestEdgePercent)}</p>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>pior: {formatPercent(summary.worstEdgePercent)}</p>
+              </div>
+            </div>
+
+            <Tabs defaultValue="decisions">
             <TabsList>
+              <TabsTrigger value="decisions">Sinais</TabsTrigger>
               <TabsTrigger value="transactions">Transações</TabsTrigger>
-              <TabsTrigger value="traces">Decisões</TabsTrigger>
+              <TabsTrigger value="traces">Traces</TabsTrigger>
               <TabsTrigger value="training">Treinos</TabsTrigger>
             </TabsList>
+
+            <TabsContent value="decisions">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Momento</TableHead>
+                    <TableHead>Par</TableHead>
+                    <TableHead>Sinal</TableHead>
+                    <TableHead>Execução</TableHead>
+                    <TableHead>Resultado</TableHead>
+                    <TableHead>Edge</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {history?.decisions.length
+                    ? history.decisions.map((decision) => (
+                        <TableRow key={decision.id}>
+                          <TableCell>
+                            <div className="space-y-1">
+                              <div>{formatDate(decision.createdAt)}</div>
+                              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                                horizonte: {decision.horizonCandles} candle(s)
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="space-y-1">
+                              <div>{decision.pair}</div>
+                              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{decision.timeframe}</div>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <ActionBadge action={decision.action} />
+                                <span style={{ color: 'var(--text-secondary)' }}>{formatPercent(decision.confidence)}</span>
+                              </div>
+                              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{decision.reason}</p>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="space-y-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <DecisionExecutionBadge status={decision.executionStatus} />
+                                <Badge variant={decision.executionMode === 'full_auto' ? 'error' : decision.executionMode === 'semi_auto' ? 'primary' : 'default'}>
+                                  {decision.executionMode}
+                                </Badge>
+                              </div>
+                              <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                                {typeof decision.requestedQuantity === 'number' ? `qtd. ${formatNumber(decision.requestedQuantity, 6)}` : 'sem ordem'}
+                              </div>
+                              {(typeof decision.slippagePercent === 'number' || typeof decision.simulatedFillPercent === 'number') && (
+                                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                                  {typeof decision.slippagePercent === 'number' ? `slippage ${formatPercent(decision.slippagePercent)}` : ''}
+                                  {typeof decision.slippagePercent === 'number' && typeof decision.simulatedFillPercent === 'number' ? ' · ' : ''}
+                                  {typeof decision.simulatedFillPercent === 'number' ? `fill ${formatPercent(decision.simulatedFillPercent * 100)}` : ''}
+                                </div>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="space-y-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge variant={decision.evaluationStatus === 'evaluated' ? 'success' : 'warning'}>
+                                  {decision.evaluationStatus === 'evaluated' ? 'Avaliado' : 'Pendente'}
+                                </Badge>
+                                {typeof decision.isCorrect === 'boolean' && (
+                                  <Badge variant={decision.isCorrect ? 'success' : 'error'}>
+                                    {decision.isCorrect ? 'Acerto' : 'Erro'}
+                                  </Badge>
+                                )}
+                              </div>
+                              {decision.evaluationStatus === 'evaluated' && (
+                                <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                                  mercado {formatPercent(decision.marketReturnPercent ?? 0)} · estratégia {formatPercent(decision.strategyReturnPercent ?? 0)}
+                                </div>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell className={getProfitColor(decision.realizedEdgePercent ?? 0)}>
+                            {decision.evaluationStatus === 'evaluated'
+                              ? formatPercent(decision.realizedEdgePercent ?? 0)
+                              : '-'}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    : (
+                        <TableRow>
+                          <TableCell colSpan={6} className="text-center" style={{ color: 'var(--text-muted)' }}>
+                            Ainda não há sinais avaliáveis para este bot.
+                          </TableCell>
+                        </TableRow>
+                      )}
+                </TableBody>
+              </Table>
+            </TabsContent>
 
             <TabsContent value="transactions">
               <Table>
@@ -397,7 +577,7 @@ function BotHistoryPanel({ history, isLoading }: { history?: BotHistory; isLoadi
                     : (
                         <TableRow>
                           <TableCell colSpan={5} className="text-center" style={{ color: 'var(--text-muted)' }}>
-                            Ainda não há decisões rastreadas para este bot.
+                            Ainda não há traces operacionais para este bot.
                           </TableCell>
                         </TableRow>
                       )}
@@ -435,8 +615,134 @@ function BotHistoryPanel({ history, isLoading }: { history?: BotHistory; isLoadi
                 </TableBody>
               </Table>
             </TabsContent>
-          </Tabs>
+            </Tabs>
+          </>
         )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function BotModelsPanel({
+  botName,
+  models,
+  isLoading,
+  isPromoting,
+  isArchiving,
+  onPromote,
+  onArchive,
+}: {
+  botName: string
+  models?: BotModelArtifact[]
+  isLoading: boolean
+  isPromoting: boolean
+  isArchiving: boolean
+  onPromote: (modelId: string) => Promise<void>
+  onArchive: (modelId: string) => Promise<void>
+}) {
+  const activeModel = models?.find((item) => item.isActive) ?? models?.find((item) => item.governanceRole === 'champion')
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Governança de Modelos</CardTitle>
+        <CardDescription>
+          Controle champion/challenger do bot {botName}, promovendo versões testadas antes do uso operacional.
+        </CardDescription>
+      </CardHeader>
+
+      <CardContent className="space-y-4">
+        {activeModel ? (
+          <div className="rounded-2xl border border-success-500/25 bg-success-500/10 p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <ModelGovernanceBadge model={activeModel} />
+              <Badge variant="default">{activeModel.modelVersion}</Badge>
+              {activeModel.architecture && <Badge variant="default">{activeModel.architecture}</Badge>}
+            </div>
+            <p className="mt-3 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+              Modelo ativo: {activeModel.modelVersion}
+            </p>
+            <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+              Promovido em {activeModel.promotedAt ? formatDate(activeModel.promotedAt) : 'data não disponível'} ·
+              validação {activeModel.validationStrategy ?? 'N/A'} ·
+              horizonte {activeModel.forecastHorizonCandles ?? 0} candle(s)
+            </p>
+          </div>
+        ) : (
+          <div className="rounded-2xl border p-4 text-sm" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
+            Ainda não há champion definido para este bot.
+          </div>
+        )}
+
+        {isLoading ? (
+          <div className="space-y-3">
+            <Skeleton className="h-24 rounded-2xl" />
+            <Skeleton className="h-24 rounded-2xl" />
+          </div>
+        ) : models?.length ? (
+          <div className="space-y-3">
+            {models.map((model) => (
+              <div
+                key={model.id}
+                className="rounded-2xl border p-4"
+                style={{ borderColor: model.isActive ? 'var(--success-500)' : 'var(--border-color)' }}
+              >
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <ModelGovernanceBadge model={model} />
+                      <Badge variant="default">{model.modelVersion}</Badge>
+                      {model.architecture && <Badge variant="default">{model.architecture}</Badge>}
+                      {model.isActive && <Badge variant="success">Ativo na instância</Badge>}
+                    </div>
+
+                    <div className="text-sm" style={{ color: 'var(--text-primary)' }}>
+                      {model.trainingSessionId ? `Treino ${model.trainingSessionId}` : 'Sem vínculo de sessão'}
+                    </div>
+                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                      Criado em {formatDate(model.createdAt)} · fingerprint {model.fingerprint.slice(0, 10)}...
+                    </div>
+                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                      Accuracy {typeof model.evaluation.accuracyPercent === 'number' ? formatPercent(model.evaluation.accuracyPercent) : 'N/A'} ·
+                      F1 {typeof model.evaluation.f1Score === 'number' ? formatPercent(model.evaluation.f1Score) : 'N/A'} ·
+                      best epoch {model.evaluation.bestEpoch ?? 'N/A'}
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    {!model.isActive && model.governanceRole !== 'archived' && (
+                      <Button
+                        size="sm"
+                        onClick={() => void onPromote(model.id)}
+                        isLoading={isPromoting}
+                      >
+                        Promover
+                      </Button>
+                    )}
+                    {!model.isActive && model.governanceRole !== 'archived' && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => void onArchive(model.id)}
+                        isLoading={isArchiving}
+                      >
+                        Arquivar
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-2xl border p-4 text-sm" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
+            Nenhum artefato de modelo foi salvo ainda para esta instância.
+          </div>
+        )}
+
+        <div className="rounded-2xl border p-4 text-xs" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
+          O champion alimenta o `modelUrl` ativo do bot. Novos modelos salvos entram como challenger, a menos que seja o primeiro modelo do bot.
+        </div>
       </CardContent>
     </Card>
   )
@@ -639,6 +945,7 @@ export function BotsPage() {
   const { data: workerStatus } = useBotWorkerStatus()
   const { data: botDetail, isLoading: isLoadingDetail } = useBotDetail(selectedBotId)
   const { data: botHistory, isLoading: isLoadingHistory } = useBotHistory(selectedBotId)
+  const { data: botModels, isLoading: isLoadingModels } = useBotModels(selectedBotId)
 
   const createBotMutation = useCreateBot()
   const updateBotMutation = useUpdateBot()
@@ -646,6 +953,8 @@ export function BotsPage() {
   const runBotCycleMutation = useRunBotCycle()
   const pauseBotMutation = usePauseBot()
   const resumeBotMutation = useResumeBot()
+  const promoteBotModelMutation = usePromoteBotModel()
+  const archiveBotModelMutation = useArchiveBotModel()
 
   useEffect(() => {
     if (!bots || bots.length === 0) {
@@ -750,6 +1059,8 @@ export function BotsPage() {
   const isDeleting = deleteBotMutation.isPending
   const isRunningCycle = runBotCycleMutation.isPending
   const isPausing = pauseBotMutation.isPending || resumeBotMutation.isPending
+  const isPromotingModel = promoteBotModelMutation.isPending
+  const isArchivingModel = archiveBotModelMutation.isPending
 
   return (
     <div className="space-y-6 pb-8">
@@ -766,7 +1077,12 @@ export function BotsPage() {
             <Plus className="h-4 w-4" />
             Criar bot
           </Button>
-          <Button variant="primary" onClick={() => selectedBotId && void runBotCycleMutation.mutateAsync(selectedBotId)} disabled={!selectedBotId} isLoading={isRunningCycle}>
+          <Button
+            variant="primary"
+            onClick={() => selectedBotId && void runBotCycleMutation.mutateAsync(selectedBotId)}
+            disabled={!selectedBotId || (botDetail ? !botDetail.modelReady : false)}
+            isLoading={isRunningCycle}
+          >
             <Play className="h-4 w-4" />
             Rodar ciclo agora
           </Button>
@@ -804,6 +1120,8 @@ export function BotsPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <BotStatusBadge bot={botDetail} />
                     <ActionBadge action={botDetail.recommendedAction} />
+                    <ModelReadinessBadge modelReady={botDetail.modelReady} />
+                    <PaperReadinessBadge readiness={botDetail.paperReadiness} />
                     <Badge variant={botDetail.isCustom ? 'primary' : 'default'}>{botDetail.isCustom ? 'Instância customizada' : 'Bot do sistema'}</Badge>
                   </div>
                 )}
@@ -819,7 +1137,40 @@ export function BotsPage() {
                 </div>
               ) : botDetail ? (
                 <>
-                  <div className="mb-6 grid gap-4 lg:grid-cols-4">
+                  {!botDetail.modelReady && botDetail.operationalBlockReason && (
+                    <div className="mb-6 rounded-2xl border border-warning-500/30 bg-warning-500/10 p-4 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                      {botDetail.operationalBlockReason}
+                    </div>
+                  )}
+
+                  {!botDetail.paperReadiness.readyForFullAuto && (
+                    <div className="mb-6 rounded-2xl border border-warning-500/30 bg-warning-500/10 p-4 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                      <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>
+                        O bot ainda está em validação paper.
+                      </p>
+                      <p className="mt-1">
+                        {botDetail.paperReadiness.evaluatedSignals}/{botDetail.paperReadiness.minimumEvaluatedSignals} sinais avaliados, acurácia em {formatPercent(botDetail.paperReadiness.accuracyPercent)} e drawdown observado de {formatPercent(botDetail.paperReadiness.maxObservedDrawdownPercent)}.
+                      </p>
+                      <ul className="mt-3 list-disc space-y-1 pl-5">
+                        {botDetail.paperReadiness.blockers.map((blocker) => (
+                          <li key={blocker}>{blocker}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {botDetail.paperReadiness.readyForFullAuto && (
+                    <div className="mb-6 rounded-2xl border border-success-500/30 bg-success-500/10 p-4 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                      <p className="font-semibold" style={{ color: 'var(--text-primary)' }}>
+                        Este bot já cumpriu os critérios mínimos de validação paper.
+                      </p>
+                      <p className="mt-1">
+                        Acurácia de {formatPercent(botDetail.paperReadiness.accuracyPercent)}, retorno médio de {formatPercent(botDetail.paperReadiness.averageStrategyReturnPercent)} e edge médio de {formatPercent(botDetail.paperReadiness.averageEdgePercent)}.
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="mb-6 grid gap-4 lg:grid-cols-3 xl:grid-cols-6">
                     <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
                       <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Template</p>
                       <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{botDetail.template?.name ?? botDetail.strategyType}</p>
@@ -839,6 +1190,36 @@ export function BotsPage() {
                       <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Pares permitidos</p>
                       <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{botDetail.effectiveAllowedPairs.length}</p>
                       <p className="text-xs" style={{ color: 'var(--text-muted)' }}>origem: {botDetail.allowedPairsSource === 'global' ? 'global' : 'instância'}</p>
+                    </div>
+                    <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Modelo ativo</p>
+                      <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{botDetail.modelReady ? 'Pronto para operar' : 'Pendente'}</p>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                        {botDetail.modelArchitecture ?? 'sem arquitetura'} · {botDetail.modelVersion}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Validação</p>
+                      <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{botDetail.validationStrategy ?? 'N/A'}</p>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>horizonte: {botDetail.forecastHorizonCandles ?? 0} candle(s)</p>
+                    </div>
+                    <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Paper readiness</p>
+                      <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>
+                        {botDetail.paperReadiness.readyForFullAuto ? 'Liberado' : 'Em validação'}
+                      </p>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                        {botDetail.paperReadiness.evaluatedSignals}/{botDetail.paperReadiness.minimumEvaluatedSignals} sinais avaliados
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Acurácia paper</p>
+                      <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>
+                        {formatPercent(botDetail.paperReadiness.accuracyPercent)}
+                      </p>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                        drawdown: {formatPercent(botDetail.paperReadiness.maxObservedDrawdownPercent)}
+                      </p>
                     </div>
                   </div>
 
@@ -1050,7 +1431,12 @@ export function BotsPage() {
                       <Power className="h-4 w-4" />
                       {botDetail.isPaused ? 'Retomar bot' : 'Pausar bot'}
                     </Button>
-                    <Button variant="secondary" onClick={() => selectedBotId && void runBotCycleMutation.mutateAsync(selectedBotId)} isLoading={isRunningCycle}>
+                    <Button
+                      variant="secondary"
+                      onClick={() => selectedBotId && void runBotCycleMutation.mutateAsync(selectedBotId)}
+                      disabled={!botDetail.modelReady}
+                      isLoading={isRunningCycle}
+                    >
                       <Play className="h-4 w-4" />
                       Rodar ciclo
                     </Button>
@@ -1076,6 +1462,28 @@ export function BotsPage() {
               )}
             </CardContent>
           </Card>
+
+          {botDetail && (
+            <BotModelsPanel
+              botName={botDetail.name}
+              models={botModels?.items}
+              isLoading={isLoadingModels}
+              isPromoting={isPromotingModel}
+              isArchiving={isArchivingModel}
+              onPromote={async (modelId) => {
+                await promoteBotModelMutation.mutateAsync({
+                  botId: botDetail.id,
+                  modelId,
+                })
+              }}
+              onArchive={async (modelId) => {
+                await archiveBotModelMutation.mutateAsync({
+                  botId: botDetail.id,
+                  modelId,
+                })
+              }}
+            />
+          )}
 
           <BotHistoryPanel history={botHistory} isLoading={isLoadingHistory} />
         </div>

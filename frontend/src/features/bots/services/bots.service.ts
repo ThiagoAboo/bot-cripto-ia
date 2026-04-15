@@ -3,6 +3,8 @@ import type {
   BotDetail,
   BotHistory,
   BotListItem,
+  BotModelArtifact,
+  BotModelCatalog,
   BotTemplateSummary,
   BotWorkerStatus,
   CreateBotPayload,
@@ -27,6 +29,10 @@ export const botsService = {
     return apiClient.getData(`/dashboard/bots/${botId}/history`)
   },
 
+  async getBotModels(botId: string): Promise<BotModelCatalog> {
+    return apiClient.getData(`/dashboard/bots/${botId}/models`)
+  },
+
   async getBotWorkerStatus(): Promise<BotWorkerStatus> {
     return apiClient.getData('/dashboard/bots/worker-status')
   },
@@ -45,6 +51,14 @@ export const botsService = {
 
   async runBotCycle(botId: string): Promise<BotCycleResult> {
     return apiClient.postData(`/dashboard/bots/${botId}/run`, {})
+  },
+
+  async promoteBotModel(botId: string, modelId: string, notes?: string): Promise<BotModelArtifact> {
+    return apiClient.postData(`/dashboard/bots/${botId}/models/${modelId}/promote`, notes ? { notes } : {})
+  },
+
+  async archiveBotModel(botId: string, modelId: string, notes?: string): Promise<BotModelArtifact> {
+    return apiClient.postData(`/dashboard/bots/${botId}/models/${modelId}/archive`, notes ? { notes } : {})
   },
 
   async pauseBot(botId: string): Promise<void> {

@@ -1,5 +1,7 @@
 import { apiClient } from '../../../shared/services/api.client'
 import type {
+  ConfigurationResetResult,
+  ConfigurationResetScope,
   Configurations,
   ExchangeApiKeys,
   FeesConfig,
@@ -51,5 +53,9 @@ export const configurationsService = {
 
   async runPairDiscoveryNow(): Promise<PairDiscoveryRunResponse> {
     return apiClient.postData('/configurations/pair-discovery/run', {})
+  },
+
+  async runConfigurationReset(scope: ConfigurationResetScope): Promise<ConfigurationResetResult> {
+    return apiClient.postData('/configurations/reset', { scope })
   },
 }

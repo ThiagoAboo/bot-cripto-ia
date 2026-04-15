@@ -102,7 +102,7 @@ export interface FeesConfig {
     configuration?: Configurations
   }
 
-  export interface PairDiscoveryRunResponse {
+export interface PairDiscoveryRunResponse {
     userId: string
     applied: boolean
     previewRequired: boolean
@@ -114,6 +114,32 @@ export interface FeesConfig {
       running: boolean
       lastCycleAt?: string | null
     }
+  }
+
+  export type ConfigurationResetScope =
+    | 'logs_traces'
+    | 'cash'
+    | 'transactions'
+    | 'trainings'
+    | 'paper'
+    | 'bots_runtime'
+    | 'all_except_configurations'
+    | 'configurations'
+    | 'all'
+
+  export interface ConfigurationResetResult {
+    scope: ConfigurationResetScope
+    label: string
+    summary: string
+    executedAt: string
+    deletedRecords: Record<string, number>
+    deletedFiles: Record<string, number>
+    preservedApiKeys: boolean
+    paperBalance?: {
+      currency: string
+      amount: number
+    }
+    configuration: Configurations
   }
   
   export interface AdvancedOptions {

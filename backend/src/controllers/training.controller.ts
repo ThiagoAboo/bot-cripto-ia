@@ -8,9 +8,11 @@ import {
   getAcceptedStrategyIdentifiers,
   getBotInstanceById,
   listBotTemplates,
+  materializeEditableBotForUser,
 } from '../services/bot-registry.service'
+import { registerBotModelArtifact } from '../services/bot-model-governance.service'
 import { runTrainingBacktest } from '../services/training-backtest.service'
-import { readTrainingModelArtifact, saveTrainingModelArtifact } from '../services/training-model.service'
+import { readTrainingModelArtifact, readTrainingModelArtifactJson, saveTrainingModelArtifact } from '../services/training-model.service'
 import { isPythonMlEngineEnabled, trainRealModelPackage } from '../services/python-ml-engine.service'
 import { assertTrainingUploadExists, parseTrainingUploadRequest, saveTrainingUpload, TrainingUploadError } from '../services/training-upload.service'
 import { emitTrainingStatus } from '../services/socket.service'
@@ -254,11 +256,12 @@ export async function createTrainingSession(req: AuthRequest, res: Response): Pr
       return res.status(409).json({ success: false, error: 'Já existe um treinamento em andamento para este bot' })
     }
 
-    const bot = await getBotInstanceById(userId, data.botId)
-    if (!bot) {
+    const materializedBot = await materializeEditableBotForUser(userId, data.botId)
+    if (!materializedBot) {
       endTrace('createTrainingSession', { userId, botId: data.botId, errorFlag: true })
       return res.status(404).json({ success: false, error: 'Bot nao encontrado' })
     }
+    const bot = materializedBot.bot
 
     const acceptedStrategyIds = getAcceptedStrategyIdentifiers(bot)
     if (!acceptedStrategyIds.has(data.strategyId)) {
@@ -271,7 +274,7 @@ export async function createTrainingSession(req: AuthRequest, res: Response): Pr
 
     const session = await prisma.trainingSession.create({
       data: {
-        botId: data.botId,
+        botId: bot.id,
         userId,
         status: 'pending',
         config: JSON.stringify(data),
@@ -284,13 +287,15 @@ export async function createTrainingSession(req: AuthRequest, res: Response): Pr
       event: 'training_session_created',
       userId,
       sessionId: session.id,
-      botId: data.botId,
+      botId: bot.id,
       configuration: data,
+      materializedBot: materializedBot.materialized,
     })
 
     trace('DEBUG', 'training', 'createTrainingSession', 'Sessão criada', 0, {
       sessionId: session.id,
       userId,
+      botId: bot.id,
     })
 
     emitTrainingStatus(userId, session.id, 'pending')
@@ -447,7 +452,16 @@ export async function pauseTrainingSession(req: AuthRequest, res: Response): Pro
   try {
     const { id } = req.params
     const userId = req.userId!
-    const session = await prisma.trainingSession.findFirst({ where: { id, userId } })
+    const session = await prisma.trainingSession.findFirst({
+      where: { id, userId },
+      include: {
+        bot: {
+          include: {
+            template: true,
+          },
+        },
+      },
+    })
 
     if (!session) {
       endTrace('pauseTrainingSession', { userId, errorFlag: true })
@@ -687,6 +701,7 @@ export async function saveTrainingModel(req: AuthRequest, res: Response): Promis
       enginePackage,
     })
     const modelUrl = artifact.modelUrl
+    const savedArtifact = await readTrainingModelArtifactJson(modelUrl)
 
     await prisma.trainingSession.update({
       where: { id },
@@ -708,6 +723,17 @@ export async function saveTrainingModel(req: AuthRequest, res: Response): Promis
       },
     })
 
+    const registeredModel = await registerBotModelArtifact({
+      userId,
+      botId: session.botId,
+      trainingSessionId: id,
+      artifact: savedArtifact,
+      modelUrl,
+      notes: isPythonMlEngineEnabled()
+        ? 'Modelo salvo a partir de treinamento real em engine Python.'
+        : 'Modelo salvo a partir do pipeline simulado do backend.',
+    })
+
     logger.info('[training] Modelo salvo para sessão de treinamento', {
       module: 'training',
       event: 'training_model_saved',
@@ -717,6 +743,8 @@ export async function saveTrainingModel(req: AuthRequest, res: Response): Promis
       modelUrl,
       modelVersion: config.modelVersion,
       artifactSize: artifact.size,
+      autoPromoted: registeredModel.autoPromoted,
+      governanceRole: registeredModel.artifact.governanceRole,
     })
 
     trace('DEBUG', 'training', 'saveTrainingModel', 'Modelo salvo', 0, {
@@ -725,7 +753,15 @@ export async function saveTrainingModel(req: AuthRequest, res: Response): Promis
       userId,
     })
     endTrace('saveTrainingModel', { userId, botId: session.botId })
-    return res.json({ success: true, data: { modelUrl } })
+    return res.json({
+      success: true,
+      data: {
+        modelUrl,
+        autoPromoted: registeredModel.autoPromoted,
+        governanceRole: registeredModel.artifact.governanceRole,
+        modelArtifactId: registeredModel.artifact.id,
+      },
+    })
   } catch (error) {
     logger.error('[training] Erro ao salvar modelo', {
       module: 'training',

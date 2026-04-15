@@ -31,6 +31,14 @@ export interface PairDiscoveryConfig {
   lastSyncSummary?: string
 }
 
+export interface StrategyConfiguration {
+  id: string
+  name: string
+  strategyType: string
+  isActive: boolean
+  parameters: Record<string, unknown>
+}
+
 export const DEFAULT_FEE_SETTINGS: FeeSettings = {
   useBnbForFees: true,
   discountUsdtPercent: 0.075,
@@ -56,6 +64,109 @@ export const DEFAULT_PAIR_DISCOVERY_CONFIG: PairDiscoveryConfig = {
   maxPairs: 20,
   excludedAssets: ['BNB', 'USDC'],
   managedPairs: [],
+}
+
+export const DEFAULT_ALLOWED_PAIRS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT']
+
+export function buildDefaultStrategiesConfig(): StrategyConfiguration[] {
+  return [
+    {
+      id: 'strategy_scalper',
+      name: 'Scalper V2',
+      strategyType: 'scalper',
+      isActive: true,
+      parameters: {
+        timeframe: '1m',
+        maxSpread: 0.1,
+        minVolume: 100000,
+        takeProfitTicks: 5,
+        stopLossTicks: 3,
+      },
+    },
+    {
+      id: 'strategy_momentum',
+      name: 'Momentum Trader',
+      strategyType: 'momentum',
+      isActive: true,
+      parameters: {
+        period: 14,
+        threshold: 2.5,
+        rsiPeriod: 14,
+        rsiOverbought: 70,
+        rsiOversold: 30,
+      },
+    },
+    {
+      id: 'strategy_trend',
+      name: 'Trend Follower',
+      strategyType: 'trend_follower',
+      isActive: true,
+      parameters: {
+        fastEma: 20,
+        slowEma: 50,
+        adxPeriod: 14,
+        adxThreshold: 25,
+      },
+    },
+    {
+      id: 'strategy_reversion',
+      name: 'Mean Reversion',
+      strategyType: 'mean_reversion',
+      isActive: true,
+      parameters: {
+        bbPeriod: 20,
+        bbStdDev: 2,
+        rsiPeriod: 14,
+        rsiLower: 30,
+        rsiUpper: 70,
+      },
+    },
+    {
+      id: 'strategy_arbitrage',
+      name: 'Arbitrage Hunter',
+      strategyType: 'arbitrage',
+      isActive: false,
+      parameters: {
+        minSpreadPercent: 0.5,
+        maxLatencyMs: 100,
+        minLiquidity: 50000,
+      },
+    },
+  ]
+}
+
+export function serializeDefaultStrategies(): string {
+  return JSON.stringify(buildDefaultStrategiesConfig())
+}
+
+export function buildDefaultConfigurationData(input?: {
+  userId?: string
+  exchange?: string
+  apiKey?: string
+  secretKey?: string
+}) {
+  return {
+    ...(input?.userId ? { userId: input.userId } : {}),
+    exchange: input?.exchange ?? 'binance',
+    apiKey: input?.apiKey ?? '',
+    secretKey: input?.secretKey ?? '',
+    stopLossPercent: 5.0,
+    takeProfitPercent: 10.0,
+    leverage: 1,
+    maxTradeAmount: 1000,
+    maxTradeAmountUnit: 'USDT',
+    allowedPairs: JSON.stringify(DEFAULT_ALLOWED_PAIRS),
+    useBnbForFees: DEFAULT_FEE_SETTINGS.useBnbForFees,
+    discountUsdtPercent: DEFAULT_FEE_SETTINGS.discountUsdtPercent,
+    discountBnbPercent: DEFAULT_FEE_SETTINGS.discountBnbPercent,
+    minBnbBalance: DEFAULT_FEE_SETTINGS.minBnbBalance,
+    reserveBnbForFeesEnabled: DEFAULT_FEE_SETTINGS.reserveBnbForFeesEnabled,
+    pairDiscovery: serializePairDiscoveryConfig(),
+    mode: 'spot',
+    orderType: 'market',
+    slippagePercent: 0.5,
+    strategies: serializeDefaultStrategies(),
+  }
 }
 
 function safeJsonParse<T>(value: string | null | undefined, fallback: T): T {

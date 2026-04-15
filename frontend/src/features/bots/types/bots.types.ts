@@ -21,6 +21,15 @@ export interface BotListItem {
   lastAnalysis?: string
   recommendedAction?: 'buy' | 'sell' | 'hold'
   confidence?: number
+  modelVersion?: string
+  modelUrl?: string
+  hasModel?: boolean
+  modelReady?: boolean
+  modelArchitecture?: string
+  validationStrategy?: string
+  forecastHorizonCandles?: number
+  operationalBlockReason?: string
+  paperReadiness?: BotPaperReadiness
 }
 
 export interface BotTemplateSummary {
@@ -54,6 +63,13 @@ export interface BotDetail {
   description?: string
   modelVersion: string
   modelUrl?: string
+  hasModel: boolean
+  modelReady: boolean
+  modelArchitecture?: string
+  validationStrategy?: string
+  forecastHorizonCandles?: number
+  operationalBlockReason?: string
+  paperReadiness: BotPaperReadiness
   createdAt: string
   updatedAt: string
   template?: {
@@ -71,6 +87,46 @@ export interface BotDetail {
   effectiveAllowedPairs: string[]
   allowedPairsSource: 'instance' | 'global'
   materializedFromTemplate?: boolean
+}
+
+export interface BotModelArtifact {
+  id: string
+  botId: string
+  trainingSessionId?: string
+  modelVersion: string
+  modelUrl: string
+  fingerprint: string
+  architecture?: string
+  validationStrategy?: string
+  forecastHorizonCandles?: number
+  governanceRole: 'champion' | 'challenger' | 'archived'
+  isActive: boolean
+  notes?: string
+  promotedAt?: string
+  archivedAt?: string
+  createdAt: string
+  updatedAt: string
+  evaluation: {
+    bestEpoch?: number
+    bestValLoss?: number
+    accuracyPercent?: number
+    f1Score?: number
+    precision?: number
+    recall?: number
+    logLoss?: number
+    walkForwardFolds?: number
+  }
+  reproducibility: {
+    configFingerprint?: string
+    metricsFingerprint?: string
+    datasetFingerprint?: string
+    featureFingerprint?: string
+  }
+}
+
+export interface BotModelCatalog {
+  botId: string
+  items: BotModelArtifact[]
 }
 
 export interface BotHistoryTransaction {
@@ -119,11 +175,80 @@ export interface BotHistoryTrainingSession {
   updatedAt: string
 }
 
+export interface BotHistoryDecision {
+  id: string
+  pair: string
+  action: 'buy' | 'sell' | 'hold'
+  confidence: number
+  reason: string
+  timeframe: string
+  executionMode: BotExecutionMode
+  executionStatus: 'skipped' | 'suggested' | 'submitted' | 'executed'
+  modelVersion?: string
+  modelUrl?: string
+  modelArchitecture?: string
+  horizonCandles: number
+  decisionPrice: number
+  requestedQuantity?: number
+  executedQuantity?: number
+  transactionId?: string
+  slippagePercent?: number
+  simulatedLatencyMs?: number
+  simulatedFillPercent?: number
+  createdAt: string
+  dueAt: string
+  evaluatedAt?: string
+  evaluationStatus: 'pending' | 'evaluated'
+  evaluationPrice?: number
+  marketReturnPercent?: number
+  strategyReturnPercent?: number
+  realizedEdgePercent?: number
+  actualLabel?: 'buy' | 'sell' | 'hold'
+  expectedLabel?: 'buy' | 'sell' | 'hold'
+  isCorrect?: boolean
+}
+
+export interface BotDecisionSummary {
+  total: number
+  pending: number
+  evaluated: number
+  correct: number
+  accuracyPercent: number
+  averageConfidence: number
+  averageMarketReturnPercent: number
+  averageStrategyReturnPercent: number
+  bestEdgePercent: number
+  worstEdgePercent: number
+}
+
+export interface BotPaperReadiness {
+  readyForFullAuto: boolean
+  evaluatedSignals: number
+  pendingSignals: number
+  minimumEvaluatedSignals: number
+  accuracyPercent: number
+  minimumAccuracyPercent: number
+  averageStrategyReturnPercent: number
+  minimumAverageStrategyReturnPercent: number
+  averageEdgePercent: number
+  minimumAverageEdgePercent: number
+  maxObservedDrawdownPercent: number
+  maximumDrawdownPercent: number
+  maxConsecutiveIncorrect: number
+  currentConsecutiveIncorrect: number
+  maximumConsecutiveIncorrect: number
+  lastEvaluatedAt?: string
+  blockers: string[]
+}
+
 export interface BotHistory {
   botId: string
   transactions: BotHistoryTransaction[]
   traces: BotHistoryTrace[]
   trainingSessions: BotHistoryTrainingSession[]
+  decisions: BotHistoryDecision[]
+  decisionSummary: BotDecisionSummary
+  paperReadiness: BotPaperReadiness
 }
 
 export interface BotWorkerStatus {

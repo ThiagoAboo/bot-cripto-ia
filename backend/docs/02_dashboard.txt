@@ -391,6 +391,23 @@ REGRAS:
   - `maxConcurrentTrades`
   - `maxExposurePerCoin`
   - `maxTotalExposure`
+- cada bot também acumula um placar de validação em `paper`, derivado das decisões já
+  avaliadas:
+  - `evaluatedSignals`
+  - `accuracyPercent`
+  - `averageStrategyReturnPercent`
+  - `averageEdgePercent`
+  - `maxObservedDrawdownPercent`
+  - `maxConsecutiveIncorrect`
+- o backend expõe esse resumo como `paperReadiness`, com `readyForFullAuto` e
+  `blockers`, para apoiar a decisão de quando liberar operação real
+- os critérios mínimos dessa validação são parametrizados por ambiente:
+  - `BOT_PAPER_MIN_EVALUATED_SIGNALS`
+  - `BOT_PAPER_MIN_ACCURACY_PERCENT`
+  - `BOT_PAPER_MIN_AVG_STRATEGY_RETURN_PERCENT`
+  - `BOT_PAPER_MIN_AVG_EDGE_PERCENT`
+  - `BOT_PAPER_MAX_CONSECUTIVE_INCORRECT`
+  - `BOT_PAPER_MAX_DRAWDOWN_PERCENT`
 - ainda antes da ordem, o capital planejado pode ser reduzido por volatilidade usando
   `ATR / preço` do par, evitando posição cheia em regimes mais agressivos
 - para novas compras, o runner também bloqueia entradas quando a correlação da

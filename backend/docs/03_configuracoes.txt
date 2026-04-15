@@ -264,6 +264,81 @@ Objetivo:
 - lastSyncAt/lastAppliedAt/lastSyncStatus/lastSyncSummary registram o último ciclo automático executado
 
 -------------------------------------------------------------------------------
+5. API: POST /api/configurations/reset
+-------------------------------------------------------------------------------
+
+Descrição: Executa limpezas seletivas para restaurar grupos de dados sem reinstalar o sistema
+
+HEADERS:
+  Authorization: Bearer {token}
+  Content-Type: application/json
+
+REQUEST BODY:
+{
+  "scope": "paper"
+}
+
+SCOPES SUPORTADOS:
+- `logs_traces`: remove logs e traces
+- `cash`: remove saldos e histórico de saldo
+- `transactions`: remove ordens e transações
+- `trainings`: remove sessões de treinamento e artefatos associados
+- `paper`: remove ordens, decisões, saldos e histórico de saldo; depois recria o capital inicial do paper
+- `bots_runtime`: limpa decisões avaliadas e reseta o estado operacional dos bots do usuário
+- `all_except_configurations`: remove todos os dados operacionais do usuário, mantendo a tabela `Configuration`
+- `configurations`: volta as configurações ao padrão inicial, preservando `exchange`, `apiKey` e `secretKey`
+- `all`: combina todas as limpezas, restaura configurações padrão e recria o paper inicial
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "scope": "paper",
+    "label": "Limpar paper",
+    "summary": "Limpar paper executado com sucesso. 28 registros afetados. Paper restaurado com 10000 USDT.",
+    "executedAt": "2026-04-14T14:00:00.000Z",
+    "deletedRecords": {
+      "logs": 0,
+      "traces": 0,
+      "balances": 3,
+      "balanceHistory": 12,
+      "transactions": 9,
+      "trainingSessions": 0,
+      "botDecisions": 4,
+      "botsRuntimeResets": 2,
+      "userBots": 0,
+      "configurations": 0
+    },
+    "deletedFiles": {
+      "modelFiles": 0,
+      "uploadFiles": 0,
+      "checkpointFiles": 0
+    },
+    "preservedApiKeys": false,
+    "paperBalance": {
+      "currency": "USDT",
+      "amount": 10000
+    },
+    "configuration": {
+      "...": "mesmo contrato do GET /api/configurations"
+    }
+  }
+}
+
+REGRAS FUNCIONAIS:
+- `configurations` e `all` preservam as chaves externas e a exchange selecionada
+- `trainings`, `all_except_configurations` e `all` também removem artefatos de disco:
+  - modelos salvos
+  - uploads CSV
+  - checkpoints
+- `paper` recria a carteira local usando:
+  - `PAPER_RESET_CURRENCY` (padrão `USDT`)
+  - `PAPER_RESET_INITIAL_CAPITAL` (padrão `10000`)
+- `all_except_configurations` remove bots materializados do usuário, mas mantém o catálogo global seedado (`BotTemplate` e bots globais)
+- `bots_runtime` é uma limpeza extra pertinente para zerar o placar de `paperReadiness` sem apagar modelos ou configurações
+- `transactions` é uma limpeza extra pertinente para reiniciar apenas o histórico operacional
+
+-------------------------------------------------------------------------------
 4.2 API: GET /api/social/latest
 -------------------------------------------------------------------------------
 

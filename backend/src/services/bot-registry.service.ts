@@ -65,6 +65,8 @@ export interface BotInstanceSummary {
   recommendedAction?: 'buy' | 'sell' | 'hold'
   confidence?: number
   lastAnalysis?: string
+  modelVersion: string
+  modelUrl?: string
 }
 
 function safeJsonParse<T>(value: string | null | undefined, fallback: T): T {
@@ -155,6 +157,8 @@ function normalizeBotInstance(bot: BotRecordWithTemplate): BotInstanceSummary {
     recommendedAction,
     confidence: bot.confidence ?? undefined,
     lastAnalysis: bot.lastAnalysis?.toISOString(),
+    modelVersion: bot.modelVersion,
+    modelUrl: bot.modelUrl ?? undefined,
   }
 }
 
@@ -256,4 +260,66 @@ export async function getBotInstanceById(userId: string, botId: string) {
       template: true,
     },
   })
+}
+
+export async function materializeEditableBotForUser(userId: string, botId: string) {
+  const sourceBot = await getBotInstanceById(userId, botId)
+  if (!sourceBot) {
+    return null
+  }
+
+  if (sourceBot.userId === userId) {
+    return {
+      bot: sourceBot,
+      materialized: false,
+    }
+  }
+
+  if (sourceBot.templateId) {
+    const existingCustomBot = await prisma.bot.findFirst({
+      where: {
+        userId,
+        templateId: sourceBot.templateId,
+      },
+      include: {
+        template: true,
+      },
+    })
+
+    if (existingCustomBot) {
+      return {
+        bot: existingCustomBot,
+        materialized: false,
+      }
+    }
+  }
+
+  const createdBot = await prisma.bot.create({
+    data: {
+      userId,
+      templateId: sourceBot.templateId,
+      name: sourceBot.name,
+      strategyType: sourceBot.strategyType,
+      description: sourceBot.description,
+      executionMode: sourceBot.executionMode,
+      isSystemManaged: false,
+      status: sourceBot.status,
+      isPaused: sourceBot.isPaused,
+      currentPair: sourceBot.currentPair,
+      lastAnalysis: sourceBot.lastAnalysis,
+      recommendedAction: sourceBot.recommendedAction,
+      confidence: sourceBot.confidence,
+      modelVersion: sourceBot.modelVersion,
+      modelUrl: sourceBot.modelUrl,
+      parameters: sourceBot.parameters,
+    },
+    include: {
+      template: true,
+    },
+  })
+
+  return {
+    bot: createdBot,
+    materialized: true,
+  }
 }

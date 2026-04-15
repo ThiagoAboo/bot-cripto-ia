@@ -17,6 +17,11 @@ import {
   mapBinanceOrderStatusToLocalStatus,
   prepareSpotOrderRequest,
 } from './binance.service'
+import {
+  evaluatePendingBotDecisions,
+  recordBotDecision,
+  resolveBotOperationalReadiness,
+} from './bot-decision.service'
 import { getCurrencyRateToBrl } from './market-valuation.service'
 import { recordBalanceHistorySnapshot } from './portfolio.service'
 import { emitDashboardUpdate } from './socket.service'
@@ -114,6 +119,9 @@ const DEFAULT_MIN_ATR_POSITION_FACTOR = 0.35
 const DEFAULT_CORRELATION_THRESHOLD = 0.85
 const DEFAULT_CORRELATION_LOOKBACK_CANDLES = 48
 const QUANTITY_EPSILON = 1e-8
+const DEFAULT_PAPER_SLIPPAGE_PERCENT = Math.max(0, Number(process.env.BOT_PAPER_SLIPPAGE_PERCENT || 0.12))
+const DEFAULT_PAPER_LATENCY_MS = Math.max(0, Number(process.env.BOT_PAPER_LATENCY_MS || 350))
+const DEFAULT_PAPER_MIN_FILL_PERCENT = clampPaperFillPercent(Number(process.env.BOT_PAPER_MIN_FILL_PERCENT || 0.88))
 
 let workerInterval: NodeJS.Timeout | null = null
 let isCycleRunning = false
@@ -145,6 +153,45 @@ function safeJsonParse<T>(value: string | null | undefined, fallback: T): T {
 
 function roundQuantity(value: number): number {
   return Number(value.toFixed(8))
+}
+
+function clampPaperFillPercent(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0.88
+  }
+
+  return clampNumber(value, 0.5, 1)
+}
+
+function buildPaperSimulation(params: {
+  action: 'buy' | 'sell'
+  confidence: number
+  requestedQuantity: number
+  referencePrice: number
+}) {
+  const uncertaintyFactor = clampNumber((100 - params.confidence) / 100, 0, 1)
+  const slippagePercent = clampNumber(
+    DEFAULT_PAPER_SLIPPAGE_PERCENT + (uncertaintyFactor * 0.18),
+    DEFAULT_PAPER_SLIPPAGE_PERCENT,
+    0.6,
+  )
+  const simulatedFillPercent = clampNumber(1 - (uncertaintyFactor * 0.22), DEFAULT_PAPER_MIN_FILL_PERCENT, 1)
+  const executedQuantity = roundQuantity(params.requestedQuantity * simulatedFillPercent)
+  const safeExecutedQuantity = executedQuantity > QUANTITY_EPSILON
+    ? executedQuantity
+    : roundQuantity(params.requestedQuantity)
+  const priceFactor = params.action === 'buy'
+    ? 1 + (slippagePercent / 100)
+    : Math.max(1e-6, 1 - (slippagePercent / 100))
+
+  return {
+    requestedQuantity: roundQuantity(params.requestedQuantity),
+    executedQuantity: safeExecutedQuantity,
+    executionPrice: Number((params.referencePrice * priceFactor).toFixed(8)),
+    slippagePercent: Number(slippagePercent.toFixed(4)),
+    simulatedLatencyMs: Math.round(DEFAULT_PAPER_LATENCY_MS + (uncertaintyFactor * 400)),
+    simulatedFillPercent: Number(simulatedFillPercent.toFixed(4)),
+  }
 }
 
 function safeNumber(value: unknown, fallback: number): number {
@@ -1002,6 +1049,36 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
       return null
     }
 
+    const executionMode = ((bot.executionMode || 'paper') as BotExecutionMode)
+    const modelReadiness = await resolveBotOperationalReadiness(bot.modelUrl)
+    if (!modelReadiness.modelReady) {
+      const result: BotCycleResult = {
+        botId: bot.id,
+        botName: bot.name,
+        generatedAt: new Date().toISOString(),
+        analysis,
+        execution: {
+          mode: executionMode,
+          status: 'skipped',
+          reason: modelReadiness.operationalBlockReason ?? 'Bot sem modelo executável para operação contínua',
+          pair: analysis.bestOpportunity?.pair,
+          action: analysis.bestOpportunity?.action,
+        },
+      }
+
+      logger.warn('[bot] Operação automática bloqueada por ausência de modelo executável', {
+        module: 'bot',
+        event: 'bot_cycle_model_not_ready',
+        userId,
+        botId: bot.id,
+        botName: bot.name,
+        modelUrl: bot.modelUrl,
+      })
+
+      endTrace('runBotCycle', { userId, botId, currentPair: analysis.bestOpportunity?.pair, recommendedAction: analysis.bestOpportunity?.action, confidence: analysis.bestOpportunity?.confidence })
+      return result
+    }
+
     const templateParameters = safeJsonParse<Record<string, unknown>>(bot.template?.defaultParameters, {})
     const instanceParameters = safeJsonParse<Record<string, unknown>>(bot.parameters, {})
     const parameters = {
@@ -1031,11 +1108,90 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
     const minimumConfidence = typeof parameters.minConfidence === 'number'
       ? parameters.minConfidence
       : DEFAULT_MIN_CONFIDENCE
-    const executionMode = ((bot.executionMode || 'paper') as BotExecutionMode)
     const selectedOpportunity = riskDecision.overrideOpportunity ?? analysis.bestOpportunity
     const isRiskOverride = Boolean(riskDecision.overrideOpportunity)
+    const decisionTimestamp = new Date()
+    const persistDecision = async (input: {
+      executionStatus: BotCycleExecution['status']
+      reason: string
+      requestedQuantity?: number
+      executedQuantity?: number
+      transactionId?: string
+      slippagePercent?: number
+      simulatedLatencyMs?: number
+      simulatedFillPercent?: number
+      decisionPrice?: number
+      pair?: string
+      action?: 'buy' | 'sell' | 'hold'
+      confidence?: number
+      createdAt?: Date
+    }) => {
+      const pair = input.pair ?? selectedOpportunity?.pair
+      const action = input.action ?? selectedOpportunity?.action
+      const decisionPrice = input.decisionPrice ?? selectedOpportunity?.price
+      const confidence = input.confidence ?? selectedOpportunity?.confidence
+
+      if (
+        !pair
+        || !action
+        || typeof decisionPrice !== 'number'
+        || !Number.isFinite(decisionPrice)
+        || decisionPrice <= QUANTITY_EPSILON
+        || typeof confidence !== 'number'
+        || !Number.isFinite(confidence)
+      ) {
+        return
+      }
+
+      const safeDecisionPrice = decisionPrice
+      const safeConfidence = confidence
+
+      try {
+        await recordBotDecision({
+          userId,
+          botId: bot.id,
+          pair,
+          action,
+          confidence: safeConfidence,
+          reason: input.reason,
+          timeframe,
+          executionMode,
+          executionStatus: input.executionStatus,
+          decisionPrice: safeDecisionPrice,
+          requestedQuantity: input.requestedQuantity,
+          executedQuantity: input.executedQuantity,
+          transactionId: input.transactionId,
+          slippagePercent: input.slippagePercent,
+          simulatedLatencyMs: input.simulatedLatencyMs,
+          simulatedFillPercent: input.simulatedFillPercent,
+          modelVersion: modelReadiness.modelVersion,
+          modelUrl: modelReadiness.modelUrl,
+          modelArchitecture: modelReadiness.modelArchitecture,
+          horizonCandles: modelReadiness.forecastHorizonCandles ?? 5,
+          buyThresholdPercent: modelReadiness.buyThresholdPercent ?? 0.3,
+          sellThresholdPercent: modelReadiness.sellThresholdPercent ?? -0.3,
+          createdAt: input.createdAt ?? decisionTimestamp,
+        })
+      } catch (decisionError) {
+        logger.warn('[bot] Falha ao persistir decisão do bot', {
+          module: 'bot',
+          event: 'bot_decision_record_failed',
+          userId,
+          botId: bot.id,
+          pair,
+          action,
+          error: decisionError,
+          skipPersistence: true,
+        })
+      }
+    }
 
     if (riskDecision.skipReason) {
+      await persistDecision({
+        executionStatus: 'skipped',
+        reason: riskDecision.skipReason,
+      })
+
       const result: BotCycleResult = {
         botId: bot.id,
         botName: bot.name,
@@ -1062,6 +1218,12 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
     }
 
     if (!selectedOpportunity || selectedOpportunity.action === 'hold') {
+      await persistDecision({
+        executionStatus: 'skipped',
+        reason: 'Nenhuma oportunidade forte o suficiente para execução neste ciclo',
+        action: selectedOpportunity?.action ?? 'hold',
+      })
+
       const result: BotCycleResult = {
         botId: bot.id,
         botName: bot.name,
@@ -1087,6 +1249,12 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
     }
 
     if (!isRiskOverride && selectedOpportunity.confidence < minimumConfidence) {
+      const reason = `Confiança ${selectedOpportunity.confidence}% abaixo do mínimo configurado (${minimumConfidence}%)`
+      await persistDecision({
+        executionStatus: 'skipped',
+        reason,
+      })
+
       const result: BotCycleResult = {
         botId: bot.id,
         botName: bot.name,
@@ -1095,7 +1263,7 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
         execution: {
           mode: executionMode,
           status: 'skipped',
-          reason: `Confiança ${selectedOpportunity.confidence}% abaixo do mínimo configurado (${minimumConfidence}%)`,
+          reason,
           pair: selectedOpportunity.pair,
           action: selectedOpportunity.action,
         },
@@ -1106,6 +1274,12 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
     }
 
     if (!isRiskOverride && await isInCooldown(userId, bot.id, selectedOpportunity.pair, selectedOpportunity.action)) {
+      const reason = 'Cooldown ativo para evitar repetição da mesma ordem no mesmo par'
+      await persistDecision({
+        executionStatus: 'skipped',
+        reason,
+      })
+
       const result: BotCycleResult = {
         botId: bot.id,
         botName: bot.name,
@@ -1114,7 +1288,7 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
         execution: {
           mode: executionMode,
           status: 'skipped',
-          reason: 'Cooldown ativo para evitar repetição da mesma ordem no mesmo par',
+          reason,
           pair: selectedOpportunity.pair,
           action: selectedOpportunity.action,
         },
@@ -1128,18 +1302,24 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
     if (executionMode === 'full_auto') {
       exchangeCredentials = await getUserExchangeCredentials(userId)
       if (!exchangeCredentials) {
+        const reason = 'Credenciais da Binance não configuradas para modo full_auto'
+        await persistDecision({
+          executionStatus: 'skipped',
+          reason,
+        })
+
         const result: BotCycleResult = {
           botId: bot.id,
           botName: bot.name,
           generatedAt: new Date().toISOString(),
           analysis,
-          execution: {
-            mode: executionMode,
-            status: 'skipped',
-            reason: 'Credenciais da Binance não configuradas para modo full_auto',
-            pair: selectedOpportunity.pair,
-            action: selectedOpportunity.action,
-          },
+        execution: {
+          mode: executionMode,
+          status: 'skipped',
+          reason,
+          pair: selectedOpportunity.pair,
+          action: selectedOpportunity.action,
+        },
         }
 
         endTrace('runBotCycle', { userId, botId })
@@ -1170,18 +1350,25 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
       })
 
       if (openExchangeOrder) {
+        const reason = `Ainda existe uma ordem ${openExchangeOrder.status === 'partially_filled' ? 'parcialmente executada' : 'pendente'} em ${openExchangeOrder.pair}; o bot vai aguardar a reconciliação antes de abrir nova posição`
+        await persistDecision({
+          executionStatus: 'skipped',
+          reason,
+          requestedQuantity: openExchangeOrder.requestedQuantity || openExchangeOrder.quantity || undefined,
+        })
+
         const result: BotCycleResult = {
           botId: bot.id,
           botName: bot.name,
           generatedAt: new Date().toISOString(),
           analysis,
-          execution: {
-            mode: executionMode,
-            status: 'skipped',
-            reason: `Ainda existe uma ordem ${openExchangeOrder.status === 'partially_filled' ? 'parcialmente executada' : 'pendente'} em ${openExchangeOrder.pair}; o bot vai aguardar a reconciliação antes de abrir nova posição`,
-            pair: openExchangeOrder.pair,
-            action: selectedOpportunity.action,
-            quantity: openExchangeOrder.requestedQuantity || openExchangeOrder.quantity || undefined,
+        execution: {
+          mode: executionMode,
+          status: 'skipped',
+          reason,
+          pair: openExchangeOrder.pair,
+          action: selectedOpportunity.action,
+          quantity: openExchangeOrder.requestedQuantity || openExchangeOrder.quantity || undefined,
           },
         }
 
@@ -1206,6 +1393,11 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
     })
 
     if (!tradePlan.shouldExecute || !tradePlan.quantity) {
+      await persistDecision({
+        executionStatus: 'skipped',
+        reason: tradePlan.reason,
+      })
+
       const result: BotCycleResult = {
         botId: bot.id,
         botName: bot.name,
@@ -1236,6 +1428,12 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
       })
 
       if (portfolioRiskReason) {
+        await persistDecision({
+          executionStatus: 'skipped',
+          reason: portfolioRiskReason,
+          requestedQuantity: tradePlan.quantity,
+        })
+
         const result: BotCycleResult = {
           botId: bot.id,
           botName: bot.name,
@@ -1257,6 +1455,12 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
     }
 
     if (executionMode === 'semi_auto') {
+      await persistDecision({
+        executionStatus: 'suggested',
+        reason: isRiskOverride ? selectedOpportunity.reason : tradePlan.reason,
+        requestedQuantity: tradePlan.quantity,
+      })
+
       logger.info('[bot] Sinal gerado para revisão manual', {
         module: 'bot',
         event: 'bot_signal_suggested',
@@ -1293,6 +1497,7 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
     let executionReason = executionMode === 'full_auto'
       ? 'Executado automaticamente em modo full_auto na Binance'
       : 'Executado automaticamente em modo paper'
+    let paperSimulation: ReturnType<typeof buildPaperSimulation> | null = null
 
     if (executionMode === 'full_auto' && exchangeCredentials) {
       const preparedOrder = await prepareSpotOrderRequest({
@@ -1303,18 +1508,25 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
       })
 
       if (!preparedOrder.isValid || !preparedOrder.quantity) {
+        const reason = preparedOrder.rejectionReason ?? 'A ordem não atendeu aos filtros da Binance'
+        await persistDecision({
+          executionStatus: 'skipped',
+          reason,
+          requestedQuantity: tradePlan.quantity,
+        })
+
         const result: BotCycleResult = {
           botId: bot.id,
           botName: bot.name,
           generatedAt: new Date().toISOString(),
           analysis,
-          execution: {
-            mode: executionMode,
-            status: 'skipped',
-            reason: preparedOrder.rejectionReason ?? 'A ordem não atendeu aos filtros da Binance',
-            pair: selectedOpportunity.pair,
-            action: selectedOpportunity.action,
-          },
+        execution: {
+          mode: executionMode,
+          status: 'skipped',
+          reason,
+          pair: selectedOpportunity.pair,
+          action: selectedOpportunity.action,
+        },
         }
 
         logger.warn('[bot] Ordem bloqueada pelos filtros da Binance', {
@@ -1443,21 +1655,44 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
         executionReason = `${executionReason} · ${preparedOrder.adjustments.join(' · ')}`
       }
     } else {
+      paperSimulation = buildPaperSimulation({
+        action: selectedOpportunity.action,
+        confidence: selectedOpportunity.confidence,
+        requestedQuantity: tradePlan.quantity,
+        referencePrice: selectedOpportunity.price,
+      })
+
       transaction = await executeOrderForUser({
         userId,
         pair: selectedOpportunity.pair,
         type: selectedOpportunity.action,
-        quantity: tradePlan.quantity,
+        quantity: paperSimulation.executedQuantity,
+        requestedQuantity: paperSimulation.requestedQuantity,
         orderType: 'market',
-        price: selectedOpportunity.price,
+        price: paperSimulation.executionPrice,
         origin: 'bot',
         botId: bot.id,
       })
 
       if (isRiskOverride) {
         executionReason = `${selectedOpportunity.reason} · ordem executada em modo paper`
+      } else {
+        executionReason = `${executionReason} · slippage ${paperSimulation.slippagePercent.toFixed(2)}% · fill ${Math.round(paperSimulation.simulatedFillPercent * 100)}%`
       }
     }
+
+    await persistDecision({
+      executionStatus,
+      reason: executionReason,
+      requestedQuantity: transaction.requestedQuantity ?? transaction.quantity,
+      executedQuantity: transaction.quantity,
+      transactionId: transaction.id,
+      slippagePercent: paperSimulation?.slippagePercent,
+      simulatedLatencyMs: paperSimulation?.simulatedLatencyMs,
+      simulatedFillPercent: paperSimulation?.simulatedFillPercent,
+      decisionPrice: transaction.price,
+      createdAt: transaction.date,
+    })
 
     logger.info('[bot] Ordem automatizada executada pelo ciclo do bot', {
       module: 'bot',
@@ -1580,6 +1815,14 @@ async function runWorkerCycleSafely(): Promise<void> {
   try {
     await processOpenExchangeOrdersCycle()
     await processBotQueueCycle()
+    await evaluatePendingBotDecisions().catch((evaluationError) => {
+      logger.warn('[bot] Falha ao avaliar decisões pendentes do worker', {
+        module: 'bot',
+        event: 'bot_worker_decision_evaluation_failed',
+        error: evaluationError,
+        skipPersistence: true,
+      })
+    })
   } finally {
     isCycleRunning = false
   }

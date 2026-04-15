@@ -22,7 +22,7 @@ interface SaveTrainingModelArtifactInput {
   enginePackage?: PythonEnginePackage
 }
 
-interface TrainingModelArtifact {
+export interface TrainingModelArtifact {
   artifactType: 'bot-crypto-ia-training-model'
   formatVersion: 4
   fingerprint: string
@@ -210,4 +210,9 @@ export async function readTrainingModelArtifact(modelUrl: string): Promise<{
     filename,
     buffer,
   }
+}
+
+export async function readTrainingModelArtifactJson(modelUrl: string): Promise<TrainingModelArtifact> {
+  const { buffer } = await readTrainingModelArtifact(modelUrl)
+  return JSON.parse(buffer.toString('utf-8')) as TrainingModelArtifact
 }

@@ -2,6 +2,7 @@ require('ts-node/register/transpile-only')
 
 process.env.NODE_ENV = 'test'
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret'
+process.env.TRAINING_ML_ENGINE_PROVIDER = 'simulated'
 process.env.TRAINING_MODEL_STORAGE_DIR = process.env.TRAINING_MODEL_STORAGE_DIR || require('node:path').join(__dirname, '.tmp-models')
 process.env.TRAINING_UPLOAD_STORAGE_DIR = process.env.TRAINING_UPLOAD_STORAGE_DIR || require('node:path').join(__dirname, '.tmp-uploads')
 process.env.TRAINING_CHECKPOINT_STORAGE_DIR = process.env.TRAINING_CHECKPOINT_STORAGE_DIR || require('node:path').join(__dirname, '.tmp-checkpoints')
@@ -28,6 +29,7 @@ const externalHttpService = require('../src/services/external-http.service')
 const pairDiscoveryService = require('../src/services/pair-discovery.service')
 const pairDiscoveryRunnerService = require('../src/services/pair-discovery-runner.service')
 const botRunnerService = require('../src/services/bot-runner.service')
+const botDecisionService = require('../src/services/bot-decision.service')
 const trainingDataService = require('../src/services/training-data.service')
 const trainingSessionService = require('../src/services/training-session.service')
 const transactionsController = require('../src/controllers/transactions.controller')
@@ -236,6 +238,20 @@ describe('API contract tests', () => {
 
   beforeEach(() => {
     silenceObservability()
+    stub(prisma.botDecision, 'findMany', async () => [])
+    stub(botDecisionService, 'resolveBotOperationalReadiness', async (modelUrl) => ({
+      hasModel: Boolean(modelUrl),
+      modelReady: true,
+      modelVersion: 'test-model',
+      modelUrl: modelUrl ?? null,
+      modelArchitecture: 'random_forest',
+      validationStrategy: 'walk_forward',
+      forecastHorizonCandles: 5,
+      buyThresholdPercent: 0.3,
+      sellThresholdPercent: -0.3,
+      hasEnginePackage: true,
+      operationalBlockReason: undefined,
+    }))
   })
 
   afterEach(async () => {
@@ -484,6 +500,151 @@ describe('API contract tests', () => {
     assert.equal(body.data.configuration.botParameters.pairDiscovery.lastSyncStatus, 'applied')
   })
 
+  it('POST /api/configurations/reset with scope configurations restores defaults and preserves API keys', async () => {
+    stubAuthenticatedUser()
+
+    let persistedConfiguration = buildPersistedConfiguration({
+      exchange: 'binance',
+      apiKey: 'preserved-api-key',
+      secretKey: 'preserved-secret-key',
+      allowedPairs: JSON.stringify(['DOGE/USDT']),
+      stopLossPercent: 2,
+      pairDiscovery: JSON.stringify({
+        autoDiscoveryEnabled: true,
+        autoAddToAllowedPairs: true,
+        autoRemoveFromAllowedPairs: true,
+        reviewRequired: false,
+        autoSyncIntervalMinutes: 15,
+        sources: {
+          reddit: true,
+          rss: true,
+          x: true,
+          telegram: true,
+        },
+        minSocialScore: 90,
+        minMentions: 40,
+        maxPairs: 10,
+        excludedAssets: ['BNB'],
+        managedPairs: ['DOGE/USDT'],
+      }),
+    })
+
+    stub(prisma, '$transaction', async (callback) => {
+      const fakeTx = {
+        configuration: {
+          findUnique: async () => ({
+            exchange: persistedConfiguration.exchange,
+            apiKey: persistedConfiguration.apiKey,
+            secretKey: persistedConfiguration.secretKey,
+          }),
+          upsert: async ({ update, create }) => {
+            persistedConfiguration = {
+              ...persistedConfiguration,
+              ...(update || create),
+            }
+
+            return persistedConfiguration
+          },
+        },
+        trainingSession: {
+          findMany: async () => [],
+        },
+        bot: {
+          findMany: async () => [],
+        },
+      }
+
+      return callback(fakeTx)
+    })
+    stub(prisma.configuration, 'findUnique', async () => persistedConfiguration)
+
+    const { response, body } = await requestJson('/api/configurations/reset', {
+      method: 'POST',
+      headers: {
+        ...authHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ scope: 'configurations' }),
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(body.success, true)
+    assert.equal(body.data.scope, 'configurations')
+    assert.equal(body.data.preservedApiKeys, true)
+    assert.equal(body.data.configuration.exchangeApiKeys.apiKey, 'preserved-api-key')
+    assert.equal(body.data.configuration.exchangeApiKeys.secretKey, 'preserved-secret-key')
+    assert.deepEqual(body.data.configuration.botParameters.allowedPairs, ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'])
+    assert.equal(body.data.configuration.botParameters.pairDiscovery.autoDiscoveryEnabled, false)
+    assert.equal(body.data.deletedRecords.configurations, 1)
+  })
+
+  it('POST /api/configurations/reset with scope paper recreates the initial paper wallet', async () => {
+    stubAuthenticatedUser()
+    stub(portfolioService, 'recordBalanceHistorySnapshot', async () => ({ created: true, totalBrl: 10000 }))
+
+    let paperBalancePayload = null
+    stub(prisma, '$transaction', async (callback) => {
+      const fakeTx = {
+        configuration: {
+          findUnique: async () => ({
+            exchange: 'binance',
+            apiKey: 'paper-api-key',
+            secretKey: 'paper-secret-key',
+          }),
+        },
+        trainingSession: {
+          findMany: async () => [],
+        },
+        bot: {
+          findMany: async () => [],
+          updateMany: async () => ({ count: 2 }),
+        },
+        botDecision: {
+          deleteMany: async () => ({ count: 6 }),
+        },
+        transaction: {
+          deleteMany: async () => ({ count: 11 }),
+        },
+        balance: {
+          deleteMany: async () => ({ count: 3 }),
+          upsert: async (payload) => {
+            paperBalancePayload = payload
+            return payload
+          },
+        },
+        balanceHistory: {
+          deleteMany: async () => ({ count: 7 }),
+        },
+      }
+
+      return callback(fakeTx)
+    })
+    stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
+      apiKey: 'paper-api-key',
+      secretKey: 'paper-secret-key',
+    }))
+
+    const { response, body } = await requestJson('/api/configurations/reset', {
+      method: 'POST',
+      headers: {
+        ...authHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ scope: 'paper' }),
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(body.success, true)
+    assert.equal(body.data.scope, 'paper')
+    assert.equal(body.data.paperBalance.currency, 'USDT')
+    assert.equal(body.data.paperBalance.amount, 10000)
+    assert.equal(body.data.deletedRecords.transactions, 11)
+    assert.equal(body.data.deletedRecords.botDecisions, 6)
+    assert.equal(body.data.deletedRecords.botsRuntimeResets, 2)
+    assert.equal(paperBalancePayload.create.currency, 'USDT')
+    assert.equal(paperBalancePayload.create.available, 10000)
+  })
+
   it('GET /api/dashboard/bots-status returns bot instances enriched with template metadata', async () => {
     stubAuthenticatedUser()
     stub(prisma.bot, 'findMany', async () => [
@@ -546,6 +707,34 @@ describe('API contract tests', () => {
         recommendedAction: 'buy',
         confidence: 88,
         lastAnalysis: '2026-04-11T13:00:00.000Z',
+        modelVersion: 'v1.0.0',
+        hasModel: false,
+        modelReady: true,
+        modelArchitecture: 'random_forest',
+        validationStrategy: 'walk_forward',
+        forecastHorizonCandles: 5,
+        paperReadiness: {
+          readyForFullAuto: false,
+          evaluatedSignals: 0,
+          pendingSignals: 0,
+          minimumEvaluatedSignals: 30,
+          accuracyPercent: 0,
+          minimumAccuracyPercent: 55,
+          averageStrategyReturnPercent: 0,
+          minimumAverageStrategyReturnPercent: 0.15,
+          averageEdgePercent: 0,
+          minimumAverageEdgePercent: 0,
+          maxObservedDrawdownPercent: 0,
+          maximumDrawdownPercent: 12,
+          maxConsecutiveIncorrect: 0,
+          currentConsecutiveIncorrect: 0,
+          maximumConsecutiveIncorrect: 5,
+          blockers: [
+            'Avalie pelo menos 30 sinais em paper antes de liberar o bot.',
+            'A acurácia online está em 0% e precisa atingir 55%.',
+            'O retorno médio da estratégia (0%) ainda está abaixo do mínimo de 0.15%.',
+          ],
+        },
       },
       ])
     })
@@ -640,6 +829,8 @@ describe('API contract tests', () => {
       assert.deepEqual(body.data.effectiveAllowedPairs, ['ETH/USDT', 'SOL/USDT'])
       assert.equal(body.data.effectiveParameters.timeframe, '4h')
       assert.equal(body.data.effectiveParameters.maxPositionSize, 250)
+      assert.equal(body.data.paperReadiness.readyForFullAuto, false)
+      assert.equal(body.data.paperReadiness.minimumEvaluatedSignals, 30)
     })
 
     it('POST /api/dashboard/bots creates a custom bot instance from a template', async () => {
@@ -717,6 +908,52 @@ describe('API contract tests', () => {
       assert.equal(body.data.id, 'bot-created-1')
       assert.equal(body.data.isCustom, true)
       assert.deepEqual(body.data.effectiveAllowedPairs, ['BTC/USDT', 'ETH/USDT'])
+    })
+
+    it('POST /api/dashboard/bots blocks going online when there is no operational model', async () => {
+      stubAuthenticatedUser()
+      stub(botDecisionService, 'resolveBotOperationalReadiness', async () => ({
+        hasModel: false,
+        modelReady: false,
+        modelVersion: undefined,
+        modelUrl: null,
+        modelArchitecture: undefined,
+        validationStrategy: undefined,
+        forecastHorizonCandles: undefined,
+        buyThresholdPercent: undefined,
+        sellThresholdPercent: undefined,
+        hasEnginePackage: false,
+        operationalBlockReason: 'Associe um modelo treinado e salvo antes de colocar este bot em operação contínua.',
+      }))
+      stub(prisma.botTemplate, 'findFirst', async () => ({
+        id: 'template_rsi',
+        slug: 'rsi-specialist',
+        name: 'RSI Specialist',
+        strategyType: 'mean_reversion',
+        indicatorType: 'RSI',
+        specialization: 'rsi_reversion',
+        description: 'Especialista em RSI',
+        defaultParameters: JSON.stringify({ timeframe: '1h' }),
+      }))
+
+      const { response, body } = await requestJson('/api/dashboard/bots', {
+        method: 'POST',
+        headers: {
+          ...authHeaders(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          templateId: 'template_rsi',
+          name: 'Meu RSI Bot',
+          executionMode: 'paper',
+          status: 'online',
+          parameters: {},
+        }),
+      })
+
+      assert.equal(response.status, 400)
+      assert.equal(body.success, false)
+      assert.match(body.error, /modelo treinado/i)
     })
 
     it('PUT /api/dashboard/bots/:id materializes a shared bot into a user-owned instance before updating it', async () => {
@@ -864,7 +1101,7 @@ describe('API contract tests', () => {
       assert.equal(body.data.effectiveParameters.maxPositionSize, 320)
     })
 
-    it('GET /api/dashboard/bots/:id/history returns transactions, traces and training sessions for the bot', async () => {
+    it('GET /api/dashboard/bots/:id/history returns transactions, decisions, traces and training sessions for the bot', async () => {
       stubAuthenticatedUser()
       stub(prisma.bot, 'findFirst', async () => ({
         id: 'bot-history-1',
@@ -937,6 +1174,40 @@ describe('API contract tests', () => {
           updatedAt: new Date('2026-04-12T10:00:00.000Z'),
         },
       ])
+      stub(prisma.botDecision, 'findMany', async () => [
+        {
+          id: 'decision-1',
+          pair: 'BTC/USDT',
+          action: 'buy',
+          confidence: 78,
+          reason: 'Sinal confirmado pelo modelo',
+          timeframe: '1h',
+          executionMode: 'paper',
+          executionStatus: 'executed',
+          modelVersion: 'v1.0.0',
+          modelUrl: '/models/rsi-alpha.json',
+          modelArchitecture: 'random_forest',
+          horizonCandles: 5,
+          decisionPrice: 100000,
+          requestedQuantity: 0.01,
+          executedQuantity: 0.0092,
+          transactionId: 'tx-bot-1',
+          slippagePercent: 0.18,
+          simulatedLatencyMs: 420,
+          simulatedFillPercent: 0.92,
+          createdAt: new Date('2026-04-13T09:00:00.000Z'),
+          dueAt: new Date('2026-04-13T14:00:00.000Z'),
+          evaluatedAt: new Date('2026-04-13T14:00:00.000Z'),
+          evaluationStatus: 'evaluated',
+          evaluationPrice: 101200,
+          marketReturnPercent: 1.2,
+          strategyReturnPercent: 1.2,
+          realizedEdgePercent: 0,
+          actualLabel: 'buy',
+          expectedLabel: 'buy',
+          isCorrect: true,
+        },
+      ])
 
       const { response, body } = await requestJson('/api/dashboard/bots/bot-history-1/history', {
         headers: authHeaders(),
@@ -945,8 +1216,13 @@ describe('API contract tests', () => {
       assert.equal(response.status, 200)
       assert.equal(body.success, true)
       assert.equal(body.data.transactions.length, 1)
+      assert.equal(body.data.decisions.length, 1)
       assert.equal(body.data.traces.length, 1)
       assert.equal(body.data.trainingSessions.length, 1)
+      assert.equal(body.data.decisionSummary.accuracyPercent, 100)
+      assert.equal(body.data.paperReadiness.readyForFullAuto, false)
+      assert.equal(body.data.paperReadiness.evaluatedSignals, 1)
+      assert.equal(body.data.decisions[0].executionStatus, 'executed')
       assert.equal(body.data.traces[0].functionName, 'runBotCycle')
     })
 

@@ -1,6 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { configurationsService } from '../services/configurations.service'
-import type { Configurations, ExchangeApiKeys, FeesConfig, PairDiscoveryConfig } from '../types/configurations.types'
+import type {
+  ConfigurationResetScope,
+  Configurations,
+  ExchangeApiKeys,
+  FeesConfig,
+  PairDiscoveryConfig,
+} from '../types/configurations.types'
 import toast from 'react-hot-toast'
 
 export const CONFIGURATIONS_QUERY_KEYS = {
@@ -130,6 +136,21 @@ export function useRunPairDiscoveryNow() {
     },
     onError: (error: Error) => {
       toast.error(`Erro ao executar curadoria automática: ${error.message}`)
+    },
+  })
+}
+
+export function useRunConfigurationReset() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (scope: ConfigurationResetScope) => configurationsService.runConfigurationReset(scope),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries()
+      toast.success(result.summary)
+    },
+    onError: (error: Error) => {
+      toast.error(`Erro ao executar limpeza: ${error.message}`)
     },
   })
 }

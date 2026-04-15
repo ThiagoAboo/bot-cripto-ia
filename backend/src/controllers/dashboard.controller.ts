@@ -4,8 +4,10 @@ import { z } from 'zod'
 import { prisma } from '../config/database'
 import { AuthRequest } from '../middleware/auth.middleware'
 import { analyzeBotInstance } from '../services/bot-analysis.service'
-import { getBotInstanceById, listBotInstances, listBotTemplates } from '../services/bot-registry.service'
+import { buildBotDecisionSummary, buildBotPaperReadiness, loadBotPaperReadiness, resolveBotOperationalReadiness } from '../services/bot-decision.service'
+import { getBotInstanceById, listBotInstances, listBotTemplates, materializeEditableBotForUser } from '../services/bot-registry.service'
 import { isBotWorkerRunning, runBotCycle } from '../services/bot-runner.service'
+import { archiveBotModelArtifact, listBotModelArtifacts, promoteBotModelArtifact } from '../services/bot-model-governance.service'
 import { getCurrencyRateToBrl } from '../services/market-valuation.service'
 import { recordBalanceHistorySnapshotValue } from '../services/portfolio.service'
 import { emitDashboardUpdate } from '../services/socket.service'
@@ -57,6 +59,11 @@ const botHistoryQuerySchema = z.object({
   transactionsLimit: z.coerce.number().int().positive().max(50).default(10),
   tracesLimit: z.coerce.number().int().positive().max(50).default(20),
   sessionsLimit: z.coerce.number().int().positive().max(20).default(5),
+  decisionsLimit: z.coerce.number().int().positive().max(100).default(30),
+})
+
+const botModelActionSchema = z.object({
+  notes: z.string().trim().max(300).optional(),
 })
 
 async function getBalancesWithRates(balances: Array<{ currency: string; available: number }>): Promise<{ rateMap: Record<string, number>; usdtBrlRate: number }> {
@@ -118,7 +125,7 @@ function sanitizeParametersPatch(
   return nextParameters
 }
 
-function mapBotDetail(bot: {
+interface BotDetailSource {
   id: string
   userId: string | null
   templateId: string | null
@@ -148,7 +155,9 @@ function mapBotDetail(bot: {
     description: string | null
     defaultParameters: string
   } | null
-}, configurationAllowedPairs: string[]) {
+}
+
+async function mapBotDetail(bot: BotDetailSource, configurationAllowedPairs: string[], userId: string) {
   const templateParameters = safeJsonParse<Record<string, unknown>>(bot.template?.defaultParameters, {})
   const instanceParameters = safeJsonParse<Record<string, unknown>>(bot.parameters, {})
   const instanceAllowedPairs = normalizePairs(instanceParameters.allowedPairs)
@@ -158,6 +167,8 @@ function mapBotDetail(bot: {
     ...instanceParameters,
     allowedPairs: effectiveAllowedPairs,
   }
+  const readiness = await resolveBotOperationalReadiness(bot.modelUrl)
+  const paperReadiness = await loadBotPaperReadiness(userId, bot.id)
 
   return {
     id: bot.id,
@@ -180,6 +191,13 @@ function mapBotDetail(bot: {
     description: bot.description ?? bot.template?.description ?? undefined,
     modelVersion: bot.modelVersion,
     modelUrl: bot.modelUrl ?? undefined,
+    hasModel: readiness.hasModel,
+    modelReady: readiness.modelReady,
+    modelArchitecture: readiness.modelArchitecture,
+    validationStrategy: readiness.validationStrategy,
+    forecastHorizonCandles: readiness.forecastHorizonCandles,
+    operationalBlockReason: readiness.operationalBlockReason,
+    paperReadiness,
     createdAt: bot.createdAt.toISOString(),
     updatedAt: bot.updatedAt.toISOString(),
     template: bot.template
@@ -201,66 +219,20 @@ function mapBotDetail(bot: {
   }
 }
 
-async function materializeEditableBotForUser(userId: string, botId: string) {
-  const sourceBot = await getBotInstanceById(userId, botId)
-  if (!sourceBot) {
+async function ensureBotCanGoOnline(bot: {
+  modelUrl: string | null
+  name: string
+}, status: 'online' | 'offline') {
+  if (status !== 'online') {
     return null
   }
 
-  if (sourceBot.userId === userId) {
-    return {
-      bot: sourceBot,
-      materialized: false,
-    }
+  const readiness = await resolveBotOperationalReadiness(bot.modelUrl)
+  if (!readiness.modelReady) {
+    return readiness.operationalBlockReason ?? `O bot ${bot.name} ainda não possui um modelo pronto para operação.`
   }
 
-  if (sourceBot.templateId) {
-    const existingCustomBot = await prisma.bot.findFirst({
-      where: {
-        userId,
-        templateId: sourceBot.templateId,
-      },
-      include: {
-        template: true,
-      },
-    })
-
-    if (existingCustomBot) {
-      return {
-        bot: existingCustomBot,
-        materialized: false,
-      }
-    }
-  }
-
-  const createdBot = await prisma.bot.create({
-    data: {
-      userId,
-      templateId: sourceBot.templateId,
-      name: sourceBot.name,
-      strategyType: sourceBot.strategyType,
-      description: sourceBot.description,
-      executionMode: sourceBot.executionMode,
-      isSystemManaged: false,
-      status: sourceBot.status,
-      isPaused: sourceBot.isPaused,
-      currentPair: sourceBot.currentPair,
-      lastAnalysis: sourceBot.lastAnalysis,
-      recommendedAction: sourceBot.recommendedAction,
-      confidence: sourceBot.confidence,
-      modelVersion: sourceBot.modelVersion,
-      modelUrl: sourceBot.modelUrl,
-      parameters: sourceBot.parameters,
-    },
-    include: {
-      template: true,
-    },
-  })
-
-  return {
-    bot: createdBot,
-    materialized: true,
-  }
+  return null
 }
 
 export async function getTotalBalance(req: AuthRequest, res: Response): Promise<Response> {
@@ -474,28 +446,44 @@ export async function getBotsStatus(req: AuthRequest, res: Response): Promise<Re
   startTrace(req.userId!, 'getBotsStatus', 'dashboard')
 
   try {
-    const bots = await listBotInstances(req.userId!)
+    const userId = req.userId!
+    const bots = await listBotInstances(userId)
+    const result = await Promise.all(bots.map(async (bot) => {
+      const [readiness, paperReadiness] = await Promise.all([
+        resolveBotOperationalReadiness(bot.modelUrl),
+        loadBotPaperReadiness(userId, bot.id),
+      ])
 
-    const result = bots.map((bot) => ({
-      id: bot.id,
-      userId: bot.userId,
-      name: bot.name,
-      strategy: bot.strategyType,
-      strategyId: bot.strategyId,
-      templateId: bot.templateId,
-      templateSlug: bot.templateSlug,
-      templateName: bot.templateName,
-      indicatorType: bot.indicatorType,
-      specialization: bot.specialization,
-      executionMode: bot.executionMode,
-      isSystemManaged: bot.isSystemManaged,
-      description: bot.description,
-      currentPair: bot.currentPair,
-      status: bot.status,
-      isPaused: bot.isPaused,
-      recommendedAction: bot.recommendedAction,
-      confidence: bot.confidence,
-      lastAnalysis: bot.lastAnalysis,
+      return {
+        id: bot.id,
+        userId: bot.userId,
+        name: bot.name,
+        strategy: bot.strategyType,
+        strategyId: bot.strategyId,
+        templateId: bot.templateId,
+        templateSlug: bot.templateSlug,
+        templateName: bot.templateName,
+        indicatorType: bot.indicatorType,
+        specialization: bot.specialization,
+        executionMode: bot.executionMode,
+        isSystemManaged: bot.isSystemManaged,
+        description: bot.description,
+        currentPair: bot.currentPair,
+        status: bot.status,
+        isPaused: bot.isPaused,
+        recommendedAction: bot.recommendedAction,
+        confidence: bot.confidence,
+        lastAnalysis: bot.lastAnalysis,
+        modelVersion: bot.modelVersion,
+        modelUrl: bot.modelUrl,
+        hasModel: readiness.hasModel,
+        modelReady: readiness.modelReady,
+        modelArchitecture: readiness.modelArchitecture,
+        validationStrategy: readiness.validationStrategy,
+        forecastHorizonCandles: readiness.forecastHorizonCandles,
+        operationalBlockReason: readiness.operationalBlockReason,
+        paperReadiness,
+      }
     }))
 
     endTrace('getBotsStatus', { userId: req.userId })
@@ -558,7 +546,7 @@ export async function getBotDetail(req: AuthRequest, res: Response): Promise<Res
     endTrace('getBotDetail', { userId, botId: id })
     return res.json({
       success: true,
-      data: mapBotDetail(bot, configurationAllowedPairs),
+      data: await mapBotDetail(bot, configurationAllowedPairs, userId),
     })
   } catch (error) {
     logger.error('[dashboard] Erro ao buscar detalhe do bot', {
@@ -595,8 +583,8 @@ export async function getBotHistory(req: AuthRequest, res: Response): Promise<Re
       return res.status(404).json({ success: false, error: 'Bot não encontrado' })
     }
 
-    const { transactionsLimit, tracesLimit, sessionsLimit } = validation.data
-    const [transactions, traces, trainingSessions] = await Promise.all([
+    const { transactionsLimit, tracesLimit, sessionsLimit, decisionsLimit } = validation.data
+    const [transactions, traces, trainingSessions, decisions] = await Promise.all([
       prisma.transaction.findMany({
         where: { userId, botId: bot.id },
         orderBy: { date: 'desc' },
@@ -620,6 +608,43 @@ export async function getBotHistory(req: AuthRequest, res: Response): Promise<Re
           bestValLoss: true,
           createdAt: true,
           updatedAt: true,
+        },
+      }),
+      prisma.botDecision.findMany({
+        where: { userId, botId: bot.id },
+        orderBy: { createdAt: 'desc' },
+        take: decisionsLimit,
+        select: {
+          id: true,
+          pair: true,
+          action: true,
+          confidence: true,
+          reason: true,
+          timeframe: true,
+          executionMode: true,
+          executionStatus: true,
+          modelVersion: true,
+          modelUrl: true,
+          modelArchitecture: true,
+          horizonCandles: true,
+          decisionPrice: true,
+          requestedQuantity: true,
+          executedQuantity: true,
+          transactionId: true,
+          slippagePercent: true,
+          simulatedLatencyMs: true,
+          simulatedFillPercent: true,
+          createdAt: true,
+          dueAt: true,
+          evaluatedAt: true,
+          evaluationStatus: true,
+          evaluationPrice: true,
+          marketReturnPercent: true,
+          strategyReturnPercent: true,
+          realizedEdgePercent: true,
+          actualLabel: true,
+          expectedLabel: true,
+          isCorrect: true,
         },
       }),
     ])
@@ -672,6 +697,40 @@ export async function getBotHistory(req: AuthRequest, res: Response): Promise<Re
           createdAt: session.createdAt.toISOString(),
           updatedAt: session.updatedAt.toISOString(),
         })),
+        decisions: decisions.map((decision) => ({
+          id: decision.id,
+          pair: decision.pair,
+          action: decision.action,
+          confidence: decision.confidence,
+          reason: decision.reason,
+          timeframe: decision.timeframe,
+          executionMode: decision.executionMode,
+          executionStatus: decision.executionStatus,
+          modelVersion: decision.modelVersion ?? undefined,
+          modelUrl: decision.modelUrl ?? undefined,
+          modelArchitecture: decision.modelArchitecture ?? undefined,
+          horizonCandles: decision.horizonCandles,
+          decisionPrice: decision.decisionPrice,
+          requestedQuantity: decision.requestedQuantity ?? undefined,
+          executedQuantity: decision.executedQuantity ?? undefined,
+          transactionId: decision.transactionId ?? undefined,
+          slippagePercent: decision.slippagePercent ?? undefined,
+          simulatedLatencyMs: decision.simulatedLatencyMs ?? undefined,
+          simulatedFillPercent: decision.simulatedFillPercent ?? undefined,
+          createdAt: decision.createdAt.toISOString(),
+          dueAt: decision.dueAt.toISOString(),
+          evaluatedAt: decision.evaluatedAt?.toISOString(),
+          evaluationStatus: decision.evaluationStatus,
+          evaluationPrice: decision.evaluationPrice ?? undefined,
+          marketReturnPercent: decision.marketReturnPercent ?? undefined,
+          strategyReturnPercent: decision.strategyReturnPercent ?? undefined,
+          realizedEdgePercent: decision.realizedEdgePercent ?? undefined,
+          actualLabel: decision.actualLabel ?? undefined,
+          expectedLabel: decision.expectedLabel ?? undefined,
+          isCorrect: decision.isCorrect ?? undefined,
+        })),
+        decisionSummary: buildBotDecisionSummary(decisions),
+        paperReadiness: buildBotPaperReadiness(decisions),
       },
     })
   } catch (error) {
@@ -684,6 +743,148 @@ export async function getBotHistory(req: AuthRequest, res: Response): Promise<Re
     })
 
     endTrace('getBotHistory', { userId: req.userId, botId: req.params.id, errorFlag: true })
+    return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
+  }
+}
+
+export async function getBotModels(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'getBotModels', 'dashboard')
+
+  try {
+    const userId = req.userId!
+    const { id } = req.params
+    const bot = await getBotInstanceById(userId, id)
+
+    if (!bot) {
+      endTrace('getBotModels', { userId, botId: id, errorFlag: true })
+      return res.status(404).json({ success: false, error: 'Bot não encontrado' })
+    }
+
+    const items = await listBotModelArtifacts(userId, bot.id)
+
+    endTrace('getBotModels', { userId, botId: bot.id })
+    return res.json({
+      success: true,
+      data: {
+        botId: bot.id,
+        items,
+      },
+    })
+  } catch (error) {
+    logger.error('[dashboard] Erro ao buscar catálogo de modelos do bot', {
+      module: 'dashboard',
+      event: 'dashboard_bot_models_error',
+      userId: req.userId,
+      botId: req.params.id,
+      error,
+    })
+
+    endTrace('getBotModels', { userId: req.userId, botId: req.params.id, errorFlag: true })
+    return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
+  }
+}
+
+export async function promoteBotModel(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'promoteBotModel', 'dashboard')
+
+  try {
+    const validation = botModelActionSchema.safeParse(req.body ?? {})
+    if (!validation.success) {
+      endTrace('promoteBotModel', { userId: req.userId, botId: req.params.id, errorFlag: true })
+      return res.status(400).json({
+        success: false,
+        error: validation.error.errors.map((entry) => entry.message).join(', '),
+      })
+    }
+
+    const userId = req.userId!
+    const promoted = await promoteBotModelArtifact({
+      userId,
+      botId: req.params.id,
+      artifactId: req.params.modelId,
+      notes: validation.data.notes,
+    })
+
+    if (!promoted) {
+      endTrace('promoteBotModel', { userId, botId: req.params.id, errorFlag: true })
+      return res.status(404).json({ success: false, error: 'Modelo não encontrado para este bot' })
+    }
+
+    emitDashboardUpdate(userId, {
+      scope: 'bots',
+      reason: 'bot_model_promoted',
+      botId: req.params.id,
+      updatedAt: new Date().toISOString(),
+    })
+
+    endTrace('promoteBotModel', { userId, botId: req.params.id })
+    return res.json({ success: true, data: promoted })
+  } catch (error) {
+    logger.error('[dashboard] Erro ao promover modelo do bot', {
+      module: 'dashboard',
+      event: 'dashboard_bot_model_promote_error',
+      userId: req.userId,
+      botId: req.params.id,
+      modelId: req.params.modelId,
+      error,
+    })
+
+    endTrace('promoteBotModel', { userId: req.userId, botId: req.params.id, errorFlag: true })
+    return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
+  }
+}
+
+export async function archiveBotModel(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'archiveBotModel', 'dashboard')
+
+  try {
+    const validation = botModelActionSchema.safeParse(req.body ?? {})
+    if (!validation.success) {
+      endTrace('archiveBotModel', { userId: req.userId, botId: req.params.id, errorFlag: true })
+      return res.status(400).json({
+        success: false,
+        error: validation.error.errors.map((entry) => entry.message).join(', '),
+      })
+    }
+
+    const userId = req.userId!
+    const archived = await archiveBotModelArtifact({
+      userId,
+      botId: req.params.id,
+      artifactId: req.params.modelId,
+      notes: validation.data.notes,
+    })
+
+    if (!archived) {
+      endTrace('archiveBotModel', { userId, botId: req.params.id, errorFlag: true })
+      return res.status(404).json({ success: false, error: 'Modelo não encontrado para este bot' })
+    }
+
+    emitDashboardUpdate(userId, {
+      scope: 'bots',
+      reason: 'bot_model_archived',
+      botId: req.params.id,
+      updatedAt: new Date().toISOString(),
+    })
+
+    endTrace('archiveBotModel', { userId, botId: req.params.id })
+    return res.json({ success: true, data: archived })
+  } catch (error) {
+    logger.error('[dashboard] Erro ao arquivar modelo do bot', {
+      module: 'dashboard',
+      event: 'dashboard_bot_model_archive_error',
+      userId: req.userId,
+      botId: req.params.id,
+      modelId: req.params.modelId,
+      error,
+    })
+
+    if (error instanceof Error) {
+      endTrace('archiveBotModel', { userId: req.userId, botId: req.params.id, errorFlag: true })
+      return res.status(400).json({ success: false, error: error.message })
+    }
+
+    endTrace('archiveBotModel', { userId: req.userId, botId: req.params.id, errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }
@@ -713,6 +914,12 @@ export async function createBot(req: AuthRequest, res: Response): Promise<Respon
     if (!template) {
       endTrace('createBot', { userId, errorFlag: true })
       return res.status(404).json({ success: false, error: 'Template de bot não encontrado' })
+    }
+
+    const onlineGuardError = await ensureBotCanGoOnline({ modelUrl: null, name: payload.name }, payload.status)
+    if (onlineGuardError) {
+      endTrace('createBot', { userId, errorFlag: true })
+      return res.status(400).json({ success: false, error: onlineGuardError })
     }
 
     const createdBot = await prisma.bot.create({
@@ -752,7 +959,7 @@ export async function createBot(req: AuthRequest, res: Response): Promise<Respon
     endTrace('createBot', { userId, botId: createdBot.id })
     return res.status(201).json({
       success: true,
-      data: mapBotDetail(createdBot, configurationAllowedPairs),
+      data: await mapBotDetail(createdBot, configurationAllowedPairs, userId),
     })
   } catch (error) {
     logger.error('[dashboard] Erro ao criar bot customizado', {
@@ -791,6 +998,13 @@ export async function updateBot(req: AuthRequest, res: Response): Promise<Respon
 
     const currentParameters = safeJsonParse<Record<string, unknown>>(materializedBot.bot.parameters, {})
     const nextParameters = sanitizeParametersPatch(validation.data.parameters, currentParameters)
+    const nextStatus = validation.data.status ?? materializedBot.bot.status as 'online' | 'offline'
+    const onlineGuardError = await ensureBotCanGoOnline(materializedBot.bot, nextStatus)
+    if (validation.data.status === 'online' && onlineGuardError) {
+      endTrace('updateBot', { userId, botId: id, errorFlag: true })
+      return res.status(400).json({ success: false, error: onlineGuardError })
+    }
+
     const updatedBot = await prisma.bot.update({
       where: { id: materializedBot.bot.id },
       data: {
@@ -826,7 +1040,7 @@ export async function updateBot(req: AuthRequest, res: Response): Promise<Respon
     return res.json({
       success: true,
       data: {
-        ...mapBotDetail(updatedBot, configurationAllowedPairs),
+        ...(await mapBotDetail(updatedBot, configurationAllowedPairs, userId)),
         materializedFromTemplate: materializedBot.materialized,
       },
     })

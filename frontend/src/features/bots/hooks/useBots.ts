@@ -6,6 +6,7 @@ export const BOTS_QUERY_KEYS = {
   list: ['bots', 'list'],
   detail: (botId: string) => ['bots', 'detail', botId],
   history: (botId: string) => ['bots', 'history', botId],
+  models: (botId: string) => ['bots', 'models', botId],
   templates: ['bots', 'templates'],
   workerStatus: ['bots', 'worker-status'],
 }
@@ -20,6 +21,7 @@ function invalidateBotSurfaces(queryClient: ReturnType<typeof useQueryClient>, b
   if (botId) {
     void queryClient.invalidateQueries({ queryKey: BOTS_QUERY_KEYS.detail(botId) })
     void queryClient.invalidateQueries({ queryKey: BOTS_QUERY_KEYS.history(botId) })
+    void queryClient.invalidateQueries({ queryKey: BOTS_QUERY_KEYS.models(botId) })
   }
 }
 
@@ -55,6 +57,16 @@ export function useBotHistory(botId?: string) {
     enabled: Boolean(botId),
     queryKey: BOTS_QUERY_KEYS.history(botId ?? 'none'),
     queryFn: () => botsService.getBotHistory(botId!),
+    refetchInterval: 15000,
+    staleTime: 5000,
+  })
+}
+
+export function useBotModels(botId?: string) {
+  return useQuery({
+    enabled: Boolean(botId),
+    queryKey: BOTS_QUERY_KEYS.models(botId ?? 'none'),
+    queryFn: () => botsService.getBotModels(botId!),
     refetchInterval: 15000,
     staleTime: 5000,
   })
@@ -137,6 +149,38 @@ export function useRunBotCycle() {
     },
     onError: () => {
       toast.error('Erro ao executar ciclo do bot')
+    },
+  })
+}
+
+export function usePromoteBotModel() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ botId, modelId, notes }: { botId: string; modelId: string; notes?: string }) =>
+      botsService.promoteBotModel(botId, modelId, notes),
+    onSuccess: (result) => {
+      invalidateBotSurfaces(queryClient, result.botId)
+      toast.success('Modelo promovido como champion')
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Erro ao promover modelo')
+    },
+  })
+}
+
+export function useArchiveBotModel() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ botId, modelId, notes }: { botId: string; modelId: string; notes?: string }) =>
+      botsService.archiveBotModel(botId, modelId, notes),
+    onSuccess: (result) => {
+      invalidateBotSurfaces(queryClient, result.botId)
+      toast.success('Modelo arquivado com sucesso')
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Erro ao arquivar modelo')
     },
   })
 }

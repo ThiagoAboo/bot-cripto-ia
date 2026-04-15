@@ -6,7 +6,7 @@ import { AuthRequest } from '../middleware/auth.middleware'
 import { logger } from '../utils/logger'
 import { getAvailablePairs, testBinanceConnection } from '../services/binance.service'
 import {
-  DEFAULT_FEE_SETTINGS,
+  buildDefaultConfigurationData,
   normalizeFeeSettings,
   normalizePairDiscoveryConfig,
   parsePairDiscoveryConfig,
@@ -15,6 +15,7 @@ import {
 import { ExternalApiError } from '../services/external-http.service'
 import { generatePairDiscoveryPreview, getLatestSocialSignals } from '../services/pair-discovery.service'
 import { getPairDiscoveryRunnerStatus, runPairDiscoveryForUser } from '../services/pair-discovery-runner.service'
+import { executeConfigurationReset, type ConfigurationResetScope } from '../services/configuration-reset.service'
 import { endTrace, startTrace, trace } from '../utils/tracer'
 
 const feesSchema = z.object({
@@ -108,6 +109,20 @@ const pairDiscoveryPreviewSchema = z.object({
 
 const pairDiscoveryApplySchema = pairDiscoveryPreviewSchema.extend({
   force: z.boolean().optional(),
+})
+
+const configurationResetSchema = z.object({
+  scope: z.enum([
+    'logs_traces',
+    'cash',
+    'transactions',
+    'trainings',
+    'paper',
+    'bots_runtime',
+    'all_except_configurations',
+    'configurations',
+    'all',
+  ] satisfies [ConfigurationResetScope, ...ConfigurationResetScope[]]),
 })
 
 type ConfigurationPayload = z.infer<typeof configurationsSchema>
@@ -231,73 +246,6 @@ function buildConfigurationResponse(config: {
   }
 }
 
-function buildDefaultStrategies(): string {
-  return JSON.stringify([
-    {
-      id: 'strategy_scalper',
-      name: 'Scalper V2',
-      strategyType: 'scalper',
-      isActive: true,
-      parameters: {
-        timeframe: '1m',
-        maxSpread: 0.1,
-        minVolume: 100000,
-        takeProfitTicks: 5,
-        stopLossTicks: 3,
-      },
-    },
-    {
-      id: 'strategy_momentum',
-      name: 'Momentum Trader',
-      strategyType: 'momentum',
-      isActive: true,
-      parameters: {
-        period: 14,
-        threshold: 2.5,
-        rsiPeriod: 14,
-        rsiOverbought: 70,
-        rsiOversold: 30,
-      },
-    },
-    {
-      id: 'strategy_trend',
-      name: 'Trend Follower',
-      strategyType: 'trend_follower',
-      isActive: true,
-      parameters: {
-        fastEma: 20,
-        slowEma: 50,
-        adxPeriod: 14,
-        adxThreshold: 25,
-      },
-    },
-    {
-      id: 'strategy_reversion',
-      name: 'Mean Reversion',
-      strategyType: 'mean_reversion',
-      isActive: true,
-      parameters: {
-        bbPeriod: 20,
-        bbStdDev: 2,
-        rsiPeriod: 14,
-        rsiLower: 30,
-        rsiUpper: 70,
-      },
-    },
-    {
-      id: 'strategy_arbitrage',
-      name: 'Arbitrage Hunter',
-      strategyType: 'arbitrage',
-      isActive: false,
-      parameters: {
-        minSpreadPercent: 0.5,
-        maxLatencyMs: 100,
-        minLiquidity: 50000,
-      },
-    },
-  ])
-}
-
 async function findOrCreateConfiguration(userId: string) {
   let config = await prisma.configuration.findUnique({
     where: { userId },
@@ -307,29 +255,10 @@ async function findOrCreateConfiguration(userId: string) {
     return config
   }
 
-  const defaultStrategies = buildDefaultStrategies()
   config = await prisma.configuration.create({
     data: {
       userId,
-      exchange: 'binance',
-      apiKey: '',
-      secretKey: '',
-      stopLossPercent: 5.0,
-      takeProfitPercent: 10.0,
-      leverage: 1,
-      maxTradeAmount: 1000,
-      maxTradeAmountUnit: 'USDT',
-      allowedPairs: JSON.stringify(['BTC/USDT', 'ETH/USDT', 'SOL/USDT']),
-      useBnbForFees: DEFAULT_FEE_SETTINGS.useBnbForFees,
-      discountUsdtPercent: DEFAULT_FEE_SETTINGS.discountUsdtPercent,
-      discountBnbPercent: DEFAULT_FEE_SETTINGS.discountBnbPercent,
-      minBnbBalance: DEFAULT_FEE_SETTINGS.minBnbBalance,
-      reserveBnbForFeesEnabled: DEFAULT_FEE_SETTINGS.reserveBnbForFeesEnabled,
-      pairDiscovery: serializePairDiscoveryConfig(),
-      mode: 'spot',
-      orderType: 'market',
-      slippagePercent: 0.5,
-      strategies: defaultStrategies,
+      ...buildDefaultConfigurationData(),
     },
   })
 
@@ -725,6 +654,55 @@ export async function runPairDiscoveryNow(req: AuthRequest, res: Response): Prom
 
     endTrace('runPairDiscoveryNow', { userId: req.userId, errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro ao executar descoberta automática' })
+  }
+}
+
+export async function runConfigurationReset(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'runConfigurationReset', 'configurations')
+
+  try {
+    const validation = configurationResetSchema.safeParse(req.body ?? {})
+    if (!validation.success) {
+      endTrace('runConfigurationReset', { userId: req.userId, errorFlag: true })
+      return res.status(400).json({
+        success: false,
+        error: validation.error.errors.map((entry) => entry.message).join(', '),
+      })
+    }
+
+    const userId = req.userId!
+    const result = await executeConfigurationReset(userId, validation.data.scope)
+    const refreshedConfig = await findOrCreateConfiguration(userId)
+
+    logger.warn('[configurations] Operação de reset executada', {
+      module: 'configurations',
+      event: 'configuration_reset_executed',
+      userId,
+      scope: validation.data.scope,
+      deletedRecords: result.deletedRecords,
+      deletedFiles: result.deletedFiles,
+      preservedApiKeys: result.preservedApiKeys,
+      paperBalance: result.paperBalance,
+    })
+
+    endTrace('runConfigurationReset', { userId })
+    return res.json({
+      success: true,
+      data: {
+        ...result,
+        configuration: buildConfigurationResponse(refreshedConfig),
+      },
+    })
+  } catch (error) {
+    logger.error('[configurations] Erro ao executar reset de configuração', {
+      module: 'configurations',
+      event: 'configuration_reset_error',
+      userId: req.userId,
+      error,
+    })
+
+    endTrace('runConfigurationReset', { userId: req.userId, errorFlag: true })
+    return res.status(500).json({ success: false, error: 'Erro ao executar limpeza solicitada' })
   }
 }
 
