@@ -155,11 +155,11 @@ export async function registerBotModelArtifact(input: {
       evaluationSummary: JSON.stringify({
         bestEpoch: input.artifact.summary.bestEpoch,
         bestValLoss: input.artifact.summary.bestValLoss,
-        accuracyPercent: input.artifact.evaluation.summary?.accuracyPercent,
-        f1Score: input.artifact.evaluation.summary?.f1Score,
-        precision: input.artifact.evaluation.summary?.precision,
-        recall: input.artifact.evaluation.summary?.recall,
-        logLoss: input.artifact.evaluation.summary?.logLoss,
+        accuracyPercent: input.artifact.evaluation.bestAccuracy,
+        f1Score: input.artifact.evaluation.bestF1Score,
+        precision: undefined,
+        recall: undefined,
+        logLoss: input.artifact.evaluation.logLoss,
         walkForwardFolds: input.artifact.evaluation.walkForwardFolds,
       }),
       reproducibilitySummary: JSON.stringify({
@@ -187,11 +187,11 @@ export async function registerBotModelArtifact(input: {
       evaluationSummary: JSON.stringify({
         bestEpoch: input.artifact.summary.bestEpoch,
         bestValLoss: input.artifact.summary.bestValLoss,
-        accuracyPercent: input.artifact.evaluation.summary?.accuracyPercent,
-        f1Score: input.artifact.evaluation.summary?.f1Score,
-        precision: input.artifact.evaluation.summary?.precision,
-        recall: input.artifact.evaluation.summary?.recall,
-        logLoss: input.artifact.evaluation.summary?.logLoss,
+        accuracyPercent: input.artifact.evaluation.bestAccuracy,
+        f1Score: input.artifact.evaluation.bestF1Score,
+        precision: undefined,
+        recall: undefined,
+        logLoss: input.artifact.evaluation.logLoss,
         walkForwardFolds: input.artifact.evaluation.walkForwardFolds,
       }),
       reproducibilitySummary: JSON.stringify({

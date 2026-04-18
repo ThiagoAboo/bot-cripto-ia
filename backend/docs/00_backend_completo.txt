@@ -545,9 +545,17 @@ BINANCE_SECRET_KEY=
 # Instalar dependências
 npm install
 
-# Configurar banco de dados
-npx prisma migrate dev --name init
-npx prisma generate
+# Gerar Prisma Client
+npm run prisma:generate
+
+# Aplicar migrations versionadas em desenvolvimento
+npm run prisma:migrate:dev -- --name baseline
+
+# Verificar status das migrations
+npm run prisma:migrate:status
+
+# Deploy de migrations em produção
+npm run prisma:deploy
 
 # Executar seed (cria usuário admin e dados iniciais)
 npm run seed
@@ -560,6 +568,26 @@ npm run build
 
 # Rodar em produção
 npm start
+
+10.1.1 HEALTHCHECKS OPERACIONAIS
+-------------------------------------------------------------------------------
+
+Endpoints disponíveis:
+- `GET /health/live`
+  Retorna liveness do processo Node.js
+- `GET /health/ready`
+  Retorna readiness operacional com:
+  - banco de dados
+  - bot worker
+  - training worker
+  - runner de pair discovery
+  - Binance user stream
+- `GET /health`
+  Alias para o readiness check
+
+Uso recomendado:
+- balanceadores e orquestradores devem usar `/health/ready`
+- probes simples de processo podem usar `/health/live`
 
 10.2 CREDENCIAIS DE TESTE
 -------------------------------------------------------------------------------

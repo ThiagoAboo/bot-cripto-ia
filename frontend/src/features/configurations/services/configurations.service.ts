@@ -1,5 +1,7 @@
 import { apiClient } from '../../../shared/services/api.client'
 import type {
+  ConfigurationBackupRestoreResult,
+  ConfigurationBackupSnapshot,
   ConfigurationResetResult,
   ConfigurationResetScope,
   Configurations,
@@ -53,6 +55,20 @@ export const configurationsService = {
 
   async runPairDiscoveryNow(): Promise<PairDiscoveryRunResponse> {
     return apiClient.postData('/configurations/pair-discovery/run', {})
+  },
+
+  async exportConfigurationBackup(): Promise<ConfigurationBackupSnapshot> {
+    return apiClient.getData('/configurations/backup/export')
+  },
+
+  async restoreConfigurationBackup(
+    snapshot: ConfigurationBackupSnapshot,
+    preserveCurrentApiKeys: boolean,
+  ): Promise<ConfigurationBackupRestoreResult> {
+    return apiClient.postData('/configurations/backup/restore', {
+      snapshot,
+      preserveCurrentApiKeys,
+    })
   },
 
   async runConfigurationReset(scope: ConfigurationResetScope): Promise<ConfigurationResetResult> {

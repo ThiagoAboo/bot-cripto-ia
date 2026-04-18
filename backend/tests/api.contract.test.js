@@ -28,8 +28,10 @@ const binanceUserStreamService = require('../src/services/binance-user-stream.se
 const externalHttpService = require('../src/services/external-http.service')
 const pairDiscoveryService = require('../src/services/pair-discovery.service')
 const pairDiscoveryRunnerService = require('../src/services/pair-discovery-runner.service')
+const configurationBackupService = require('../src/services/configuration-backup.service')
 const botRunnerService = require('../src/services/bot-runner.service')
 const botDecisionService = require('../src/services/bot-decision.service')
+const trainingWorkerService = require('../src/services/training-worker.service')
 const trainingDataService = require('../src/services/training-data.service')
 const trainingSessionService = require('../src/services/training-session.service')
 const transactionsController = require('../src/controllers/transactions.controller')
@@ -303,6 +305,63 @@ describe('API contract tests', () => {
     })
   })
 
+  it('GET /health/live returns liveness without depending on external services', async () => {
+    const { response, body } = await requestJson('/health/live')
+
+    assert.equal(response.status, 200)
+    assert.equal(body.status, 'ok')
+    assert.equal(typeof body.timestamp, 'string')
+    assert.equal(typeof body.uptimeSeconds, 'number')
+  })
+
+  it('GET /health/ready returns readiness details for database and runtime services', async () => {
+    stub(prisma, '$queryRawUnsafe', async () => [{ '?column?': 1 }])
+    stub(botRunnerService, 'isBotWorkerRunning', () => true)
+    stub(trainingWorkerService, 'isTrainingWorkerRunning', () => true)
+    stub(pairDiscoveryRunnerService, 'getPairDiscoveryRunnerStatus', () => ({
+      running: true,
+      lastCycleAt: '2026-04-14T21:00:00.000Z',
+    }))
+    stub(binanceUserStreamService, 'getBinanceUserStreamStatus', () => ({
+      running: true,
+      activeUsers: 2,
+    }))
+
+    const { response, body } = await requestJson('/health/ready')
+
+    assert.equal(response.status, 200)
+    assert.equal(body.status, 'ok')
+    assert.equal(body.checks.database.status, 'up')
+    assert.equal(body.checks.botWorker.status, 'disabled')
+    assert.equal(body.checks.trainingWorker.status, 'disabled')
+    assert.equal(body.checks.pairDiscoveryRunner.status, 'disabled')
+    assert.equal(body.checks.binanceUserStream.status, 'disabled')
+    assert.equal(body.checks.binanceUserStream.details.activeUsers, 2)
+  })
+
+  it('GET /health returns degraded readiness when the database check fails', async () => {
+    stub(prisma, '$queryRawUnsafe', async () => {
+      throw new Error('database unavailable')
+    })
+    stub(botRunnerService, 'isBotWorkerRunning', () => true)
+    stub(trainingWorkerService, 'isTrainingWorkerRunning', () => true)
+    stub(pairDiscoveryRunnerService, 'getPairDiscoveryRunnerStatus', () => ({
+      running: true,
+      lastCycleAt: null,
+    }))
+    stub(binanceUserStreamService, 'getBinanceUserStreamStatus', () => ({
+      running: false,
+      activeUsers: 0,
+    }))
+
+    const { response, body } = await requestJson('/health')
+
+    assert.equal(response.status, 503)
+    assert.equal(body.status, 'degraded')
+    assert.equal(body.checks.database.status, 'down')
+    assert.equal(body.checks.database.details.error, 'database unavailable')
+  })
+
   it('GET /api/dashboard/total-balance returns the expected balance summary contract', async () => {
     stubAuthenticatedUser()
     stub(prisma.balance, 'findMany', async () => [
@@ -387,6 +446,139 @@ describe('API contract tests', () => {
     assert.equal(body.data.botParameters.fees.reserveBnbForFeesEnabled, true)
     assert.equal(body.data.botParameters.pairDiscovery.autoDiscoveryEnabled, true)
     assert.deepEqual(body.data.botParameters.pairDiscovery.excludedAssets, ['BNB', 'USDC'])
+  })
+
+  it('GET /api/configurations/backup/export returns the operational backup snapshot contract', async () => {
+    stubAuthenticatedUser()
+    stub(configurationBackupService, 'exportConfigurationBackup', async () => ({
+      snapshotType: 'bot-crypto-ia-user-backup',
+      formatVersion: 1,
+      exportedAt: '2026-04-15T11:00:00.000Z',
+      userProfile: {
+        sourceUserId: 'user-old-1',
+        name: 'Administrador Teste',
+        preferences: '{}',
+        lastLogin: null,
+      },
+      configuration: buildPersistedConfiguration(),
+      summary: {
+        recordCounts: {
+          balances: 2,
+          transactions: 4,
+        },
+        fileCounts: {
+          modelFiles: 1,
+          uploadFiles: 1,
+          checkpointFiles: 1,
+        },
+      },
+      data: {
+        balances: [],
+        balanceHistory: [],
+        bots: [],
+        transactions: [],
+        trainingSessions: [],
+        botModelArtifacts: [],
+        botDecisions: [],
+        logs: [],
+        traces: [],
+      },
+      files: {
+        modelFiles: [],
+        uploadFiles: [],
+        checkpointFiles: [],
+      },
+    }))
+
+    const { response, body } = await requestJson('/api/configurations/backup/export', {
+      headers: authHeaders(),
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(body.success, true)
+    assert.equal(body.data.snapshotType, 'bot-crypto-ia-user-backup')
+    assert.equal(body.data.formatVersion, 1)
+    assert.equal(body.data.userProfile.sourceUserId, 'user-old-1')
+    assert.equal(body.data.summary.recordCounts.balances, 2)
+    assert.equal(body.data.summary.fileCounts.modelFiles, 1)
+  })
+
+  it('POST /api/configurations/backup/restore restores the snapshot and returns the refreshed configuration', async () => {
+    stubAuthenticatedUser()
+    stub(configurationBackupService, 'restoreConfigurationBackup', async (_userId, snapshot, options) => {
+      assert.equal(snapshot.snapshotType, 'bot-crypto-ia-user-backup')
+      assert.equal(options.preserveCurrentApiKeys, true)
+
+      return {
+        restoredAt: '2026-04-15T11:30:00.000Z',
+        summary: 'Backup restaurado com sucesso.',
+        restoredRecords: {
+          balances: 2,
+          bots: 1,
+        },
+        restoredFiles: {
+          modelFiles: 1,
+          uploadFiles: 1,
+          checkpointFiles: 1,
+        },
+        preservedApiKeys: true,
+      }
+    })
+    stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
+      apiKey: 'preserved-key',
+      secretKey: 'preserved-secret',
+    }))
+
+    const { response, body } = await requestJson('/api/configurations/backup/restore', {
+      method: 'POST',
+      headers: {
+        ...authHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        snapshot: {
+          snapshotType: 'bot-crypto-ia-user-backup',
+          formatVersion: 1,
+          exportedAt: '2026-04-15T11:00:00.000Z',
+          userProfile: {
+            sourceUserId: 'user-old-1',
+            name: 'Administrador Teste',
+            preferences: '{}',
+            lastLogin: null,
+          },
+          summary: {
+            recordCounts: {},
+            fileCounts: {},
+          },
+          data: {
+            balances: [],
+            balanceHistory: [],
+            bots: [],
+            transactions: [],
+            trainingSessions: [],
+            botModelArtifacts: [],
+            botDecisions: [],
+            logs: [],
+            traces: [],
+          },
+          files: {
+            modelFiles: [],
+            uploadFiles: [],
+            checkpointFiles: [],
+          },
+        },
+        preserveCurrentApiKeys: true,
+      }),
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(body.success, true)
+    assert.equal(body.data.summary, 'Backup restaurado com sucesso.')
+    assert.equal(body.data.preservedApiKeys, true)
+    assert.equal(body.data.restoredRecords.balances, 2)
+    assert.equal(body.data.restoredFiles.modelFiles, 1)
+    assert.equal(body.data.configuration.exchangeApiKeys.apiKey, 'preserved-key')
+    assert.equal(body.data.configuration.exchangeApiKeys.secretKey, 'preserved-secret')
   })
 
   it('GET /api/social/latest returns normalized social signals for the authenticated user', async () => {
@@ -1101,7 +1293,7 @@ describe('API contract tests', () => {
       assert.equal(body.data.effectiveParameters.maxPositionSize, 320)
     })
 
-    it('GET /api/dashboard/bots/:id/history returns transactions, decisions, traces and training sessions for the bot', async () => {
+  it('GET /api/dashboard/bots/:id/history returns transactions, decisions, traces and training sessions for the bot', async () => {
       stubAuthenticatedUser()
       stub(prisma.bot, 'findFirst', async () => ({
         id: 'bot-history-1',
@@ -1224,6 +1416,266 @@ describe('API contract tests', () => {
       assert.equal(body.data.paperReadiness.evaluatedSignals, 1)
       assert.equal(body.data.decisions[0].executionStatus, 'executed')
       assert.equal(body.data.traces[0].functionName, 'runBotCycle')
+    })
+
+    it('GET /api/dashboard/bots/:id/models returns the governance catalog for the selected bot', async () => {
+      stubAuthenticatedUser()
+      stub(prisma.bot, 'findFirst', async () => ({
+        id: 'bot-model-1',
+        userId: TEST_USER.id,
+        templateId: 'template_rsi',
+        name: 'RSI Alpha',
+        strategyType: 'mean_reversion',
+        description: 'Bot com catálogo de modelos',
+        executionMode: 'paper',
+        isSystemManaged: false,
+        status: 'online',
+        isPaused: false,
+        currentPair: 'BTC/USDT',
+        lastAnalysis: null,
+        recommendedAction: null,
+        confidence: null,
+        modelVersion: 'v1.0.0',
+        modelUrl: '/models/rsi-alpha-v1.json',
+        parameters: '{}',
+        createdAt: new Date('2026-04-13T10:00:00.000Z'),
+        updatedAt: new Date('2026-04-13T10:00:00.000Z'),
+        template: null,
+      }))
+      stub(prisma.botModelArtifact, 'findMany', async () => [
+        {
+          id: 'artifact-1',
+          botId: 'bot-model-1',
+          trainingSessionId: 'session-1',
+          modelVersion: 'v1.0.0',
+          modelUrl: '/models/rsi-alpha-v1.json',
+          fingerprint: 'fp-1',
+          architecture: 'random_forest',
+          validationStrategy: 'walk_forward',
+          forecastHorizonCandles: 5,
+          governanceRole: 'champion',
+          isActive: true,
+          notes: 'Modelo atual em paper.',
+          promotedAt: new Date('2026-04-13T11:00:00.000Z'),
+          archivedAt: null,
+          evaluationSummary: JSON.stringify({
+            accuracyPercent: 63,
+            f1Score: 0.61,
+            logLoss: 0.33,
+            walkForwardFolds: 5,
+          }),
+          reproducibilitySummary: JSON.stringify({
+            configFingerprint: 'cfg-1',
+            datasetFingerprint: 'data-1',
+          }),
+          createdAt: new Date('2026-04-13T10:00:00.000Z'),
+          updatedAt: new Date('2026-04-13T11:00:00.000Z'),
+        },
+        {
+          id: 'artifact-2',
+          botId: 'bot-model-1',
+          trainingSessionId: 'session-2',
+          modelVersion: 'v2.0.0',
+          modelUrl: '/models/rsi-alpha-v2.json',
+          fingerprint: 'fp-2',
+          architecture: 'xgboost',
+          validationStrategy: 'walk_forward',
+          forecastHorizonCandles: 5,
+          governanceRole: 'challenger',
+          isActive: false,
+          notes: 'Modelo candidato.',
+          promotedAt: null,
+          archivedAt: null,
+          evaluationSummary: JSON.stringify({
+            accuracyPercent: 66,
+            f1Score: 0.64,
+            logLoss: 0.28,
+            walkForwardFolds: 5,
+          }),
+          reproducibilitySummary: JSON.stringify({
+            configFingerprint: 'cfg-2',
+            datasetFingerprint: 'data-2',
+          }),
+          createdAt: new Date('2026-04-14T08:00:00.000Z'),
+          updatedAt: new Date('2026-04-14T08:00:00.000Z'),
+        },
+      ])
+
+      const { response, body } = await requestJson('/api/dashboard/bots/bot-model-1/models', {
+        headers: authHeaders(),
+      })
+
+      assert.equal(response.status, 200)
+      assert.equal(body.success, true)
+      assert.equal(body.data.botId, 'bot-model-1')
+      assert.equal(body.data.items.length, 2)
+      assert.equal(body.data.items[0].governanceRole, 'champion')
+      assert.equal(body.data.items[1].governanceRole, 'challenger')
+      assert.equal(body.data.items[0].evaluation.accuracyPercent, 63)
+    })
+
+    it('POST /api/dashboard/bots/:id/models/:modelId/promote activates the selected challenger', async () => {
+      stubAuthenticatedUser()
+
+      let updateManyPayload = null
+      let updatedArtifactPayload = null
+      let updatedBotPayload = null
+
+      stub(prisma.botModelArtifact, 'findFirst', async () => ({
+        id: 'artifact-2',
+        userId: TEST_USER.id,
+        botId: 'bot-model-1',
+        modelVersion: 'v2.0.0',
+        modelUrl: '/models/rsi-alpha-v2.json',
+        fingerprint: 'fp-2',
+        architecture: 'xgboost',
+        validationStrategy: 'walk_forward',
+        forecastHorizonCandles: 5,
+        governanceRole: 'challenger',
+        isActive: false,
+        notes: 'Modelo candidato.',
+        promotedAt: null,
+        archivedAt: null,
+        evaluationSummary: '{}',
+        reproducibilitySummary: '{}',
+        createdAt: new Date('2026-04-14T08:00:00.000Z'),
+        updatedAt: new Date('2026-04-14T08:00:00.000Z'),
+      }))
+      stub(prisma, '$transaction', async (callback) => {
+        const fakeTx = {
+          botModelArtifact: {
+            updateMany: async (payload) => {
+              updateManyPayload = payload
+              return { count: 1 }
+            },
+            update: async ({ where, data }) => {
+              updatedArtifactPayload = { where, data }
+              return {
+                id: where.id,
+                botId: 'bot-model-1',
+                trainingSessionId: 'session-2',
+                modelVersion: 'v2.0.0',
+                modelUrl: '/models/rsi-alpha-v2.json',
+                fingerprint: 'fp-2',
+                architecture: 'xgboost',
+                validationStrategy: 'walk_forward',
+                forecastHorizonCandles: 5,
+                governanceRole: data.governanceRole,
+                isActive: data.isActive,
+                notes: data.notes,
+                promotedAt: data.promotedAt,
+                archivedAt: data.archivedAt,
+                evaluationSummary: JSON.stringify({ accuracyPercent: 66 }),
+                reproducibilitySummary: JSON.stringify({ configFingerprint: 'cfg-2' }),
+                createdAt: new Date('2026-04-14T08:00:00.000Z'),
+                updatedAt: new Date('2026-04-14T09:00:00.000Z'),
+              }
+            },
+          },
+          bot: {
+            update: async (payload) => {
+              updatedBotPayload = payload
+              return {
+                id: payload.where.id,
+                ...payload.data,
+              }
+            },
+          },
+        }
+
+        return callback(fakeTx)
+      })
+
+      const { response, body } = await requestJson('/api/dashboard/bots/bot-model-1/models/artifact-2/promote', {
+        method: 'POST',
+        headers: {
+          ...authHeaders(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          notes: 'Promovido após validar o paper.',
+        }),
+      })
+
+      assert.equal(response.status, 200)
+      assert.equal(body.success, true)
+      assert.equal(body.data.id, 'artifact-2')
+      assert.equal(body.data.governanceRole, 'champion')
+      assert.equal(body.data.isActive, true)
+      assert.equal(updateManyPayload.where.botId, 'bot-model-1')
+      assert.equal(updatedArtifactPayload.where.id, 'artifact-2')
+      assert.equal(updatedBotPayload.where.id, 'bot-model-1')
+      assert.equal(updatedBotPayload.data.modelVersion, 'v2.0.0')
+      assert.equal(updatedBotPayload.data.modelUrl, '/models/rsi-alpha-v2.json')
+    })
+
+    it('POST /api/dashboard/bots/:id/models/:modelId/archive archives an inactive challenger', async () => {
+      stubAuthenticatedUser()
+
+      let updatedArtifactPayload = null
+
+      stub(prisma.botModelArtifact, 'findFirst', async () => ({
+        id: 'artifact-2',
+        userId: TEST_USER.id,
+        botId: 'bot-model-1',
+        modelVersion: 'v2.0.0',
+        modelUrl: '/models/rsi-alpha-v2.json',
+        fingerprint: 'fp-2',
+        architecture: 'xgboost',
+        validationStrategy: 'walk_forward',
+        forecastHorizonCandles: 5,
+        governanceRole: 'challenger',
+        isActive: false,
+        notes: 'Modelo candidato.',
+        promotedAt: null,
+        archivedAt: null,
+        evaluationSummary: '{}',
+        reproducibilitySummary: '{}',
+        createdAt: new Date('2026-04-14T08:00:00.000Z'),
+        updatedAt: new Date('2026-04-14T08:00:00.000Z'),
+      }))
+      stub(prisma.botModelArtifact, 'update', async ({ where, data }) => {
+        updatedArtifactPayload = { where, data }
+        return {
+          id: where.id,
+          botId: 'bot-model-1',
+          trainingSessionId: 'session-2',
+          modelVersion: 'v2.0.0',
+          modelUrl: '/models/rsi-alpha-v2.json',
+          fingerprint: 'fp-2',
+          architecture: 'xgboost',
+          validationStrategy: 'walk_forward',
+          forecastHorizonCandles: 5,
+          governanceRole: data.governanceRole,
+          isActive: data.isActive,
+          notes: data.notes,
+          promotedAt: null,
+          archivedAt: data.archivedAt,
+          evaluationSummary: JSON.stringify({ accuracyPercent: 66 }),
+          reproducibilitySummary: JSON.stringify({ configFingerprint: 'cfg-2' }),
+          createdAt: new Date('2026-04-14T08:00:00.000Z'),
+          updatedAt: new Date('2026-04-14T09:00:00.000Z'),
+        }
+      })
+
+      const { response, body } = await requestJson('/api/dashboard/bots/bot-model-1/models/artifact-2/archive', {
+        method: 'POST',
+        headers: {
+          ...authHeaders(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          notes: 'Arquivado por regressão no paper.',
+        }),
+      })
+
+      assert.equal(response.status, 200)
+      assert.equal(body.success, true)
+      assert.equal(body.data.id, 'artifact-2')
+      assert.equal(body.data.governanceRole, 'archived')
+      assert.equal(body.data.isActive, false)
+      assert.equal(updatedArtifactPayload.where.id, 'artifact-2')
+      assert.equal(updatedArtifactPayload.data.notes, 'Arquivado por regressão no paper.')
     })
 
     it('GET /api/dashboard/bots/:id/analysis returns a specialist-driven market reading for the selected bot', async () => {
@@ -3689,6 +4141,7 @@ describe('API contract tests', () => {
 
     let updatedSessionPayload = null
     let updatedBotPayload = null
+    let upsertPayload = null
 
     stub(prisma.trainingSession, 'findFirst', async () => ({
       id: 'session-1',
@@ -3713,6 +4166,33 @@ describe('API contract tests', () => {
       updatedBotPayload = { where, data }
       return { id: where.id, ...data }
     })
+    stub(prisma.botModelArtifact, 'findFirst', async () => null)
+    stub(prisma.botModelArtifact, 'upsert', async (payload) => {
+      upsertPayload = payload
+      const created = payload.create
+
+      return {
+        id: 'artifact-1',
+        userId: created.userId,
+        botId: created.botId,
+        trainingSessionId: created.trainingSessionId,
+        modelVersion: created.modelVersion,
+        modelUrl: created.modelUrl,
+        fingerprint: created.fingerprint,
+        architecture: created.architecture ?? null,
+        validationStrategy: created.validationStrategy ?? null,
+        forecastHorizonCandles: created.forecastHorizonCandles ?? null,
+        governanceRole: created.governanceRole,
+        isActive: created.isActive,
+        notes: created.notes ?? null,
+        promotedAt: created.promotedAt ?? null,
+        archivedAt: created.archivedAt ?? null,
+        evaluationSummary: created.evaluationSummary,
+        reproducibilitySummary: created.reproducibilitySummary,
+        createdAt: new Date('2026-04-13T12:00:00.000Z'),
+        updatedAt: new Date('2026-04-13T12:00:00.000Z'),
+      }
+    })
 
     const { response, body } = await requestJson('/api/training/sessions/session-1/save', {
       method: 'POST',
@@ -3722,8 +4202,14 @@ describe('API contract tests', () => {
     assert.equal(response.status, 200)
     assert.equal(body.success, true)
     assert.match(body.data.modelUrl, /^\/models\/model_session-1_v2.1.0\.h5$/)
+    assert.equal(body.data.autoPromoted, true)
+    assert.equal(body.data.governanceRole, 'champion')
+    assert.equal(body.data.modelArtifactId, 'artifact-1')
     assert.equal(updatedSessionPayload.data.modelUrl, body.data.modelUrl)
     assert.equal(updatedBotPayload.data.modelVersion, 'v2.1.0')
+    assert.equal(upsertPayload.where.botId_modelUrl.botId, 'bot1')
+    assert.equal(upsertPayload.create.governanceRole, 'champion')
+    assert.equal(upsertPayload.create.isActive, true)
 
     const artifactFile = path.join(process.env.TRAINING_MODEL_STORAGE_DIR, path.basename(body.data.modelUrl))
     const artifactContent = JSON.parse(await fs.readFile(artifactFile, 'utf-8'))

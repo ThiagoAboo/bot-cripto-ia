@@ -423,10 +423,126 @@ REGRAS:
   - a confianca estiver abaixo do limite
   - houver cooldown recente para o mesmo par/acao
   - o circuit breaker estiver ativo
-  - a ordem nao atender aos filtros da Binance
+- a ordem nao atender aos filtros da Binance
 
 -------------------------------------------------------------------------------
-4.3 API: GET /api/dashboard/bots/worker-status
+4.3 API: GET /api/dashboard/bots/{id}/models
+-------------------------------------------------------------------------------
+
+Descrição: Lista o catálogo de modelos salvos para a instância do bot, incluindo
+o modelo ativo (`champion`) e os candidatos (`challenger`).
+
+HEADERS:
+  Authorization: Bearer {token}
+
+PATH PARAMS:
+  id: string (ID do bot)
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "botId": "bot1",
+    "items": [
+      {
+        "id": "artifact_1",
+        "modelVersion": "v1.0.0",
+        "modelUrl": "/models/model_bot1_v1.0.0.h5",
+        "governanceRole": "champion",
+        "isActive": true,
+        "architecture": "random_forest",
+        "validationStrategy": "walk_forward",
+        "forecastHorizonCandles": 5,
+        "evaluation": {
+          "accuracyPercent": 63.0,
+          "f1Score": 0.61,
+          "logLoss": 0.33,
+          "walkForwardFolds": 5
+        },
+        "reproducibility": {
+          "configFingerprint": "cfg_abc123",
+          "datasetFingerprint": "data_abc123"
+        }
+      }
+    ]
+  }
+}
+
+REGRAS:
+- o modelo `champion` corresponde ao `modelUrl` operacional do bot
+- novos modelos salvos entram como `challenger`, exceto quando forem o primeiro
+  artefato do bot
+- modelos arquivados continuam no histórico, mas deixam de ser elegíveis para uso
+  operacional
+
+-------------------------------------------------------------------------------
+4.4 API: POST /api/dashboard/bots/{id}/models/{modelId}/promote
+-------------------------------------------------------------------------------
+
+Descrição: Promove um `challenger` para `champion`, atualizando o `modelUrl`
+ativo do bot.
+
+HEADERS:
+  Authorization: Bearer {token}
+
+PATH PARAMS:
+  id: string (ID do bot)
+  modelId: string (ID do artefato salvo)
+
+BODY:
+{
+  "notes": "Promovido após validar o paper"
+}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "id": "artifact_2",
+    "governanceRole": "champion",
+    "isActive": true
+  }
+}
+
+REGRAS:
+- rebaixa o antigo `champion` para `challenger`
+- atualiza `Bot.modelVersion` e `Bot.modelUrl`
+- emite atualização de dashboard para refletir a troca do modelo ativo
+
+-------------------------------------------------------------------------------
+4.5 API: POST /api/dashboard/bots/{id}/models/{modelId}/archive
+-------------------------------------------------------------------------------
+
+Descrição: Arquiva um artefato não ativo do bot.
+
+HEADERS:
+  Authorization: Bearer {token}
+
+PATH PARAMS:
+  id: string (ID do bot)
+  modelId: string (ID do artefato salvo)
+
+BODY:
+{
+  "notes": "Arquivado por regressão no paper"
+}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "id": "artifact_2",
+    "governanceRole": "archived",
+    "isActive": false
+  }
+}
+
+REGRAS:
+- não permite arquivar o `champion` ativo
+- mantém o artefato no histórico para rastreabilidade
+
+-------------------------------------------------------------------------------
+4.6 API: GET /api/dashboard/bots/worker-status
 -------------------------------------------------------------------------------
 
 Descrição: Retorna o estado do worker interno responsavel por percorrer os bots

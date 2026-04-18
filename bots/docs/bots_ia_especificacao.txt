@@ -873,6 +873,26 @@ Implementação operacional atual:
 - a análise do bot deve usar esse artefato salvo quando `modelUrl` existir; sem modelo salvo,
   o runtime pode cair para o especialista heurístico correspondente
 
+10.3.1 GOVERNANÇA DE MODELOS POR BOT
+
+Cada instância de bot deve manter um catálogo versionado de artefatos treinados:
+- `champion`: modelo ativo operacional
+- `challenger`: candidato salvo aguardando promoção
+- `archived`: versão mantida apenas para rastreabilidade
+
+Regras operacionais:
+- o primeiro artefato salvo para um bot entra automaticamente como `champion`
+- novos artefatos entram como `challenger`
+- promover um `challenger` troca o `modelUrl` ativo do bot
+- arquivar só é permitido para modelos não ativos
+- o histórico precisa preservar fingerprints, estratégia de validação e resumo de
+  reprodutibilidade
+
+Objetivo:
+- permitir promoção controlada após alguns dias em `paper`
+- comparar versões do modelo sem perder rastreabilidade
+- suportar futura política `champion/challenger` automática
+
 10.4 MÉTRICAS DE AVALIAÇÃO
 
 Após o treinamento, o modelo é avaliado com:

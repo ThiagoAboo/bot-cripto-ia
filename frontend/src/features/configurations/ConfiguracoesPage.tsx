@@ -7,6 +7,7 @@ import { FeesCard } from './components/FeesCard'
 import { PairDiscoveryCard } from './components/PairDiscoveryCard'
 import { AdvancedOptionsCard } from './components/AdvancedOptionsCard'
 import { StrategiesConfigCard } from './components/StrategiesConfigCard'
+import { BackupOperationsCard } from './components/BackupOperationsCard'
 import { ResetOperationsCard } from './components/ResetOperationsCard'
 import { Button } from '../../shared/components/ui/Button'
 import { Skeleton } from '../../shared/components/ui/Skeleton'
@@ -227,6 +228,16 @@ export default function ConfiguracoesPage() {
               strategies: value,
             })
           }
+        />
+      </div>
+
+      <div className="mt-6">
+        <BackupOperationsCard
+          onRestoreCompleted={(result) => {
+            setLocalConfig(JSON.parse(JSON.stringify(result.configuration)))
+            setHasChanges(false)
+            refetch()
+          }}
         />
       </div>
 

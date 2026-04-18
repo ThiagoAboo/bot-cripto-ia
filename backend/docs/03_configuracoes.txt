@@ -258,6 +258,128 @@ Estrutura prevista dentro de botParameters.pairDiscovery:
 Objetivo:
 - Permitir inclusão automatizada de novas moedas fortes na lista allowedPairs
 - Permitir remoção automatizada de moedas que percam tração, quando habilitado
+
+-------------------------------------------------------------------------------
+4.2 API: GET /api/configurations/backup/export
+-------------------------------------------------------------------------------
+
+Descrição: Exporta um snapshot operacional completo do usuário autenticado
+
+HEADERS:
+  Authorization: Bearer {token}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "snapshotType": "bot-crypto-ia-user-backup",
+    "formatVersion": 1,
+    "exportedAt": "2026-04-15T11:00:00.000Z",
+    "userProfile": {
+      "sourceUserId": "user_xpto",
+      "name": "Administrador",
+      "preferences": "{}",
+      "lastLogin": null
+    },
+    "summary": {
+      "recordCounts": {
+        "balances": 2,
+        "transactions": 25,
+        "trainingSessions": 4,
+        "botDecisions": 120
+      },
+      "fileCounts": {
+        "modelFiles": 3,
+        "uploadFiles": 1,
+        "checkpointFiles": 2
+      }
+    },
+    "data": {
+      "...": "snapshot completo dos registros do usuário"
+    },
+    "files": {
+      "...": "arquivos serializados em base64"
+    }
+  }
+}
+
+TABELAS ENVOLVIDAS:
+- User (nome/preferências)
+- Configuration
+- Balance
+- BalanceHistory
+- Bot
+- Transaction
+- TrainingSession
+- BotModelArtifact
+- BotDecision
+- Log
+- Trace
+
+ARQUIVOS ENVOLVIDOS:
+- storage/models/*
+- storage/uploads/*
+- storage/checkpoints/*
+
+OBJETIVO:
+- Permitir restauração fiel do ambiente do usuário
+- Gerar snapshot transportável entre máquinas/instâncias
+- Preservar treinamento, paper, histórico e artefatos
+
+-------------------------------------------------------------------------------
+4.3 API: POST /api/configurations/backup/restore
+-------------------------------------------------------------------------------
+
+Descrição: Restaura um snapshot operacional completo para o usuário autenticado
+
+HEADERS:
+  Authorization: Bearer {token}
+  Content-Type: application/json
+
+REQUEST BODY:
+{
+  "snapshot": {
+    "snapshotType": "bot-crypto-ia-user-backup",
+    "formatVersion": 1,
+    "...": "conteúdo exportado anteriormente"
+  },
+  "preserveCurrentApiKeys": true
+}
+
+RESPONSE (200 - Sucesso):
+{
+  "success": true,
+  "data": {
+    "restoredAt": "2026-04-15T11:30:00.000Z",
+    "summary": "Backup restaurado com sucesso. 57 registros recriados. 5 arquivos restaurados. As chaves externas atuais foram preservadas.",
+    "restoredRecords": {
+      "balances": 2,
+      "transactions": 25,
+      "trainingSessions": 4
+    },
+    "restoredFiles": {
+      "modelFiles": 3,
+      "uploadFiles": 1,
+      "checkpointFiles": 2
+    },
+    "preservedApiKeys": true,
+    "configuration": {
+      "...": "configuração já refrescada no contrato do frontend"
+    }
+  }
+}
+
+REGRAS FUNCIONAIS:
+- A restauração limpa os dados atuais do usuário antes de recriar o snapshot
+- As chaves externas atuais podem ser preservadas com preserveCurrentApiKeys = true
+- IDs internos são remapeados para evitar colisão entre ambientes
+- Referências entre bots, sessões, decisões, transações e artefatos são reescritas
+- Arquivos de treino, upload e checkpoint são restaurados junto com os registros
+- templateId dos bots é resolvido preferencialmente por BotTemplate.slug
+
+OBSERVAÇÃO OPERACIONAL:
+- O backend aceita payload JSON maior para suportar snapshots com artefatos serializados
+- O frontend deve preferir esse fluxo para backup antes de resets destrutivos
 - Manter governança via reviewRequired, limites e lista de exclusão
 - managedPairs identifica quais pares foram adicionados pela curadoria automática e podem ser removidos depois sem afetar pares manuais
 - autoSyncIntervalMinutes define a frequência mínima da curadoria automática em minutos

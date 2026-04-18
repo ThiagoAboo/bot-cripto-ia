@@ -127,7 +127,7 @@ export interface PairDiscoveryRunResponse {
     | 'configurations'
     | 'all'
 
-  export interface ConfigurationResetResult {
+export interface ConfigurationResetResult {
     scope: ConfigurationResetScope
     label: string
     summary: string
@@ -139,6 +139,32 @@ export interface PairDiscoveryRunResponse {
       currency: string
       amount: number
     }
+    configuration: Configurations
+  }
+
+  export interface ConfigurationBackupSnapshot {
+    snapshotType: string
+    formatVersion: number
+    exportedAt: string
+    userProfile: {
+      sourceUserId: string
+      name: string
+      preferences: string
+      lastLogin: string | null
+    }
+    summary: {
+      recordCounts: Record<string, number>
+      fileCounts: Record<string, number>
+    }
+    [key: string]: unknown
+  }
+
+  export interface ConfigurationBackupRestoreResult {
+    restoredAt: string
+    summary: string
+    restoredRecords: Record<string, number>
+    restoredFiles: Record<string, number>
+    preservedApiKeys: boolean
     configuration: Configurations
   }
   

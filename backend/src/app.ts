@@ -22,6 +22,7 @@ import { startTrainingWorker, stopTrainingWorker } from './services/training-wor
 import { logger } from './utils/logger'
 
 import * as authController from './controllers/auth.controller'
+import * as healthController from './controllers/health.controller'
 import * as dashboardController from './controllers/dashboard.controller'
 import * as configurationsController from './controllers/configurations.controller'
 import * as trainingController from './controllers/training.controller'
@@ -64,8 +65,8 @@ app.use(cors({
   origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
   credentials: true,
 }))
-app.use(express.json())
-app.use(express.urlencoded({ extended: true }))
+app.use(express.json({ limit: '50mb' }))
+app.use(express.urlencoded({ extended: true, limit: '50mb' }))
 
 const limiter = rateLimit({
   windowMs: 60 * 1000,
@@ -245,9 +246,9 @@ io.on('connection', (socket) => {
   })
 })
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() })
-})
+app.get('/health', healthController.getReadiness)
+app.get('/health/live', healthController.getLiveness)
+app.get('/health/ready', healthController.getReadiness)
 
 app.post('/api/auth/login', authController.login)
 app.post('/api/auth/register', authController.register)
@@ -283,6 +284,8 @@ app.get('/api/dashboard/performance', authMiddleware, dashboardController.getPer
 
 app.get('/api/configurations', authMiddleware, configurationsController.getConfigurations)
 app.put('/api/configurations', authMiddleware, configurationsController.putConfigurations)
+app.get('/api/configurations/backup/export', authMiddleware, configurationsController.exportConfigurationBackupSnapshot)
+app.post('/api/configurations/backup/restore', authMiddleware, configurationsController.restoreConfigurationBackupSnapshot)
 app.post('/api/configurations/reset', authMiddleware, configurationsController.runConfigurationReset)
 app.post('/api/configurations/test-connection', authMiddleware, configurationsController.testConnection)
 app.post('/api/configurations/test', authMiddleware, configurationsController.testConnection)
@@ -362,6 +365,8 @@ function logServerStartup(port: number | string): void {
       'GET /api/dashboard/*',
       'GET /api/configurations',
       'PUT /api/configurations',
+      'GET /api/configurations/backup/export',
+      'POST /api/configurations/backup/restore',
       'GET /api/training/*',
       'POST /api/training/sessions',
       'GET /api/orders',

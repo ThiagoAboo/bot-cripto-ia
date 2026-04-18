@@ -1,8 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { configurationsService } from '../services/configurations.service'
 import type {
+  ConfigurationBackupSnapshot,
   ConfigurationResetScope,
   Configurations,
+  ConfigurationBackupRestoreResult,
   ExchangeApiKeys,
   FeesConfig,
   PairDiscoveryConfig,
@@ -151,6 +153,36 @@ export function useRunConfigurationReset() {
     },
     onError: (error: Error) => {
       toast.error(`Erro ao executar limpeza: ${error.message}`)
+    },
+  })
+}
+
+export function useExportConfigurationBackup() {
+  return useMutation({
+    mutationFn: (): Promise<ConfigurationBackupSnapshot> => configurationsService.exportConfigurationBackup(),
+    onError: (error: Error) => {
+      toast.error(`Erro ao exportar backup: ${error.message}`)
+    },
+  })
+}
+
+export function useRestoreConfigurationBackup() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (payload: {
+      snapshot: ConfigurationBackupSnapshot
+      preserveCurrentApiKeys: boolean
+    }): Promise<ConfigurationBackupRestoreResult> => configurationsService.restoreConfigurationBackup(
+      payload.snapshot,
+      payload.preserveCurrentApiKeys,
+    ),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries()
+      toast.success(result.summary)
+    },
+    onError: (error: Error) => {
+      toast.error(`Erro ao restaurar backup: ${error.message}`)
     },
   })
 }

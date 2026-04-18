@@ -5,11 +5,14 @@ const {
   botDetailMock,
   botHistoryMock,
   botListMock,
+  botModelsMock,
   botTemplatesMock,
+  archiveBotModelMutateAsync,
   createBotMutateAsync,
   deleteBotMutateAsync,
   invalidateQueries,
   pauseBotMutateAsync,
+  promoteBotModelMutateAsync,
   resumeBotMutateAsync,
   runBotCycleMutateAsync,
   updateBotMutateAsync,
@@ -59,6 +62,64 @@ const {
     defaultParameters: { timeframe: '1h' },
     source: 'template',
   }],
+  botModelsMock: {
+    botId: 'bot-1',
+    items: [
+      {
+        id: 'model-1',
+        botId: 'bot-1',
+        trainingSessionId: 'session-1',
+        modelVersion: 'v1',
+        modelUrl: '/models/rsi-alpha-v1.json',
+        fingerprint: 'fingerprint-1',
+        architecture: 'random_forest',
+        validationStrategy: 'walk_forward',
+        forecastHorizonCandles: 5,
+        governanceRole: 'champion',
+        isActive: true,
+        notes: 'Modelo em produção paper.',
+        promotedAt: '2026-04-13T12:00:00.000Z',
+        createdAt: '2026-04-13T12:00:00.000Z',
+        updatedAt: '2026-04-13T12:00:00.000Z',
+        evaluation: {
+          accuracyPercent: 63,
+          f1Score: 0.61,
+          logLoss: 0.33,
+          walkForwardFolds: 5,
+        },
+        reproducibility: {
+          configFingerprint: 'cfg-1',
+          metricsFingerprint: 'met-1',
+        },
+      },
+      {
+        id: 'model-2',
+        botId: 'bot-1',
+        trainingSessionId: 'session-2',
+        modelVersion: 'v2',
+        modelUrl: '/models/rsi-alpha-v2.json',
+        fingerprint: 'fingerprint-2',
+        architecture: 'xgboost',
+        validationStrategy: 'walk_forward',
+        forecastHorizonCandles: 5,
+        governanceRole: 'challenger',
+        isActive: false,
+        notes: 'Candidato mais recente.',
+        createdAt: '2026-04-14T08:00:00.000Z',
+        updatedAt: '2026-04-14T08:00:00.000Z',
+        evaluation: {
+          accuracyPercent: 66,
+          f1Score: 0.64,
+          logLoss: 0.29,
+          walkForwardFolds: 5,
+        },
+        reproducibility: {
+          configFingerprint: 'cfg-2',
+          metricsFingerprint: 'met-2',
+        },
+      },
+    ],
+  },
   botDetailMock: {
     id: 'bot-1',
     name: 'RSI Alpha',
@@ -161,10 +222,12 @@ const {
       blockers: [],
     },
   },
+  archiveBotModelMutateAsync: vi.fn(),
   createBotMutateAsync: vi.fn(),
   deleteBotMutateAsync: vi.fn(),
   invalidateQueries: vi.fn(),
   pauseBotMutateAsync: vi.fn(),
+  promoteBotModelMutateAsync: vi.fn(),
   resumeBotMutateAsync: vi.fn(),
   runBotCycleMutateAsync: vi.fn(),
   updateBotMutateAsync: vi.fn(),
@@ -205,6 +268,7 @@ vi.mock('./hooks/useBots', () => ({
     list: ['bots', 'list'],
     detail: (botId: string) => ['bots', 'detail', botId],
     history: (botId: string) => ['bots', 'history', botId],
+    models: (botId: string) => ['bots', 'models', botId],
     templates: ['bots', 'templates'],
     workerStatus: ['bots', 'worker-status'],
   },
@@ -225,6 +289,10 @@ vi.mock('./hooks/useBots', () => ({
   }),
   useBotHistory: () => ({
     data: botHistoryMock,
+    isLoading: false,
+  }),
+  useBotModels: () => ({
+    data: botModelsMock,
     isLoading: false,
   }),
   useCreateBot: () => ({
@@ -251,19 +319,31 @@ vi.mock('./hooks/useBots', () => ({
     mutateAsync: resumeBotMutateAsync,
     isPending: false,
   }),
+  usePromoteBotModel: () => ({
+    mutateAsync: promoteBotModelMutateAsync,
+    isPending: false,
+  }),
+  useArchiveBotModel: () => ({
+    mutateAsync: archiveBotModelMutateAsync,
+    isPending: false,
+  }),
 }))
 
 import BotsPage from './BotsPage'
 
 describe('BotsPage', () => {
   beforeEach(() => {
+    archiveBotModelMutateAsync.mockReset()
     createBotMutateAsync.mockReset()
     deleteBotMutateAsync.mockReset()
     invalidateQueries.mockReset()
     pauseBotMutateAsync.mockReset()
+    promoteBotModelMutateAsync.mockReset()
     resumeBotMutateAsync.mockReset()
     runBotCycleMutateAsync.mockReset()
     updateBotMutateAsync.mockReset()
+    archiveBotModelMutateAsync.mockResolvedValue({ id: 'model-2' })
+    promoteBotModelMutateAsync.mockResolvedValue({ id: 'model-2' })
     updateBotMutateAsync.mockResolvedValue({ id: 'bot-1' })
   })
 
@@ -294,6 +374,32 @@ describe('BotsPage', () => {
             stopLossPercent: 2,
           }),
         }),
+      })
+    })
+  })
+
+  it('renders model governance and triggers promote/archive actions', async () => {
+    render(<BotsPage />)
+
+    expect(await screen.findByText('Governança de Modelos')).toBeInTheDocument()
+    expect(screen.getAllByText('Champion').length).toBeGreaterThan(0)
+    expect(screen.getByText('Challenger')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Promover' }))
+
+    await waitFor(() => {
+      expect(promoteBotModelMutateAsync).toHaveBeenCalledWith({
+        botId: 'bot-1',
+        modelId: 'model-2',
+      })
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Arquivar' }))
+
+    await waitFor(() => {
+      expect(archiveBotModelMutateAsync).toHaveBeenCalledWith({
+        botId: 'bot-1',
+        modelId: 'model-2',
       })
     })
   })

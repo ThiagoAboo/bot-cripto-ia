@@ -356,13 +356,17 @@ RESPONSE (200 - Sucesso):
 {
   "success": true,
   "data": {
-    "modelUrl": "/models/session_123_final.h5"
+    "modelUrl": "/models/session_123_final.h5",
+    "autoPromoted": true,
+    "governanceRole": "champion",
+    "modelArtifactId": "artifact_123"
   }
 }
 
 TABELAS ENVOLVIDAS:
 - TrainingSession (atualização)
 - Bot (atualização)
+- BotModelArtifact (criação/atualização)
 
 CAMPOS ATUALIZADOS:
 
@@ -374,6 +378,20 @@ Bot:
 - modelVersion
 - modelUrl
 - updatedAt
+
+BotModelArtifact:
+- modelVersion
+- modelUrl
+- governanceRole (`champion` / `challenger` / `archived`)
+- isActive
+- evaluationSummary
+- reproducibilitySummary
+
+REGRAS:
+- se for o primeiro modelo salvo para o bot, o artefato entra como `champion`
+  automaticamente (`autoPromoted = true`)
+- se o bot já possuir `champion`, o novo artefato entra como `challenger`
+- o runtime dos bots deve usar o `champion` ativo como referência operacional
 
 -------------------------------------------------------------------------------
 10. API: GET /api/training/sessions/{id}/download
@@ -444,6 +462,34 @@ bestValLoss         | Float     | Não   | Melhor loss de validação
 modelUrl            | String    | Não   | URL do modelo salvo
 createdAt           | DateTime  | Sim   | Data de criação
 updatedAt           | DateTime  | Sim   | Data de atualização
+
+-------------------------------------------------------------------------------
+13. MODELO DE DADOS - BotModelArtifact
+-------------------------------------------------------------------------------
+
+TABELA: BotModelArtifact
+
+CAMPO                   | TIPO      | OBRIG | DESCRIÇÃO
+------------------------|-----------|-------|----------------------------------
+id                      | String    | Sim   | UUID/CUID do artefato
+userId                  | String    | Sim   | FK para User
+botId                   | String    | Sim   | FK para Bot
+trainingSessionId       | String    | Não   | FK opcional para TrainingSession
+modelVersion            | String    | Sim   | Versão do modelo salvo
+modelUrl                | String    | Sim   | URL do artefato salvo
+fingerprint             | String    | Sim   | Hash/fingerprint do conteúdo
+architecture            | String    | Não   | Arquitetura treinada
+validationStrategy      | String    | Não   | Estratégia de validação usada
+forecastHorizonCandles  | Int       | Não   | Horizonte da rotulagem
+governanceRole          | String    | Sim   | champion/challenger/archived
+isActive                | Boolean   | Sim   | Indica o artefato operacional
+notes                   | String    | Não   | Observações de governança
+evaluationSummary       | String    | Sim   | JSON resumindo métricas do modelo
+reproducibilitySummary  | String    | Sim   | JSON com fingerprints de reprodução
+promotedAt              | DateTime  | Não   | Quando virou champion
+archivedAt              | DateTime  | Não   | Quando foi arquivado
+createdAt               | DateTime  | Sim   | Data de criação
+updatedAt               | DateTime  | Sim   | Data de atualização
 
 EXEMPLO DE REGISTRO:
 

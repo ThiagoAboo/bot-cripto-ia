@@ -16,6 +16,11 @@ import { ExternalApiError } from '../services/external-http.service'
 import { generatePairDiscoveryPreview, getLatestSocialSignals } from '../services/pair-discovery.service'
 import { getPairDiscoveryRunnerStatus, runPairDiscoveryForUser } from '../services/pair-discovery-runner.service'
 import { executeConfigurationReset, type ConfigurationResetScope } from '../services/configuration-reset.service'
+import {
+  ConfigurationBackupError,
+  exportConfigurationBackup,
+  restoreConfigurationBackup,
+} from '../services/configuration-backup.service'
 import { endTrace, startTrace, trace } from '../utils/tracer'
 
 const feesSchema = z.object({
@@ -123,6 +128,11 @@ const configurationResetSchema = z.object({
     'configurations',
     'all',
   ] satisfies [ConfigurationResetScope, ...ConfigurationResetScope[]]),
+})
+
+const configurationBackupRestoreSchema = z.object({
+  snapshot: z.unknown(),
+  preserveCurrentApiKeys: z.boolean().optional(),
 })
 
 type ConfigurationPayload = z.infer<typeof configurationsSchema>
@@ -703,6 +713,98 @@ export async function runConfigurationReset(req: AuthRequest, res: Response): Pr
 
     endTrace('runConfigurationReset', { userId: req.userId, errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro ao executar limpeza solicitada' })
+  }
+}
+
+export async function exportConfigurationBackupSnapshot(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'exportConfigurationBackupSnapshot', 'configurations')
+
+  try {
+    const snapshot = await exportConfigurationBackup(req.userId!)
+
+    logger.info('[configurations] Snapshot de backup exportado', {
+      module: 'configurations',
+      event: 'configuration_backup_exported',
+      userId: req.userId,
+      recordCounts: snapshot.summary.recordCounts,
+      fileCounts: snapshot.summary.fileCounts,
+      formatVersion: snapshot.formatVersion,
+    })
+
+    endTrace('exportConfigurationBackupSnapshot', { userId: req.userId })
+    return res.json({
+      success: true,
+      data: snapshot,
+    })
+  } catch (error) {
+    logger.error('[configurations] Erro ao exportar snapshot de backup', {
+      module: 'configurations',
+      event: 'configuration_backup_export_error',
+      userId: req.userId,
+      error,
+    })
+
+    endTrace('exportConfigurationBackupSnapshot', { userId: req.userId, errorFlag: true })
+
+    if (error instanceof ConfigurationBackupError) {
+      return res.status(error.statusCode).json({ success: false, error: error.message })
+    }
+
+    return res.status(500).json({ success: false, error: 'Erro ao exportar snapshot de backup' })
+  }
+}
+
+export async function restoreConfigurationBackupSnapshot(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'restoreConfigurationBackupSnapshot', 'configurations')
+
+  try {
+    const validation = configurationBackupRestoreSchema.safeParse(req.body ?? {})
+    if (!validation.success) {
+      endTrace('restoreConfigurationBackupSnapshot', { userId: req.userId, errorFlag: true })
+      return res.status(400).json({
+        success: false,
+        error: validation.error.errors.map((entry) => entry.message).join(', '),
+      })
+    }
+
+    const userId = req.userId!
+    const result = await restoreConfigurationBackup(userId, validation.data.snapshot, {
+      preserveCurrentApiKeys: validation.data.preserveCurrentApiKeys ?? true,
+    })
+    const refreshedConfig = await findOrCreateConfiguration(userId)
+
+    logger.warn('[configurations] Snapshot de backup restaurado', {
+      module: 'configurations',
+      event: 'configuration_backup_restored',
+      userId,
+      restoredRecords: result.restoredRecords,
+      restoredFiles: result.restoredFiles,
+      preservedApiKeys: result.preservedApiKeys,
+    })
+
+    endTrace('restoreConfigurationBackupSnapshot', { userId })
+    return res.json({
+      success: true,
+      data: {
+        ...result,
+        configuration: buildConfigurationResponse(refreshedConfig),
+      },
+    })
+  } catch (error) {
+    logger.error('[configurations] Erro ao restaurar snapshot de backup', {
+      module: 'configurations',
+      event: 'configuration_backup_restore_error',
+      userId: req.userId,
+      error,
+    })
+
+    endTrace('restoreConfigurationBackupSnapshot', { userId: req.userId, errorFlag: true })
+
+    if (error instanceof ConfigurationBackupError) {
+      return res.status(error.statusCode).json({ success: false, error: error.message })
+    }
+
+    return res.status(500).json({ success: false, error: 'Erro ao restaurar snapshot de backup' })
   }
 }
 
