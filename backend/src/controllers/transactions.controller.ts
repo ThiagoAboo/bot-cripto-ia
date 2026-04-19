@@ -602,7 +602,7 @@ async function syncExchangeBalancesAndSnapshots(userId: string): Promise<void> {
   await syncExternalBalances(userId, balances)
   await recordBalanceHistorySnapshot(userId, balances.map((balance) => ({
     currency: balance.currency,
-    available: balance.available,
+    total: balance.total,
   }))).catch((snapshotError) => {
     logger.warn('[transactions] Falha ao registrar snapshot após sincronização de ordem real', {
       module: 'transactions',
@@ -1473,7 +1473,7 @@ export async function getBalance(req: AuthRequest, res: Response): Promise<Respo
       await syncExternalBalances(userId, balances)
       await recordBalanceHistorySnapshot(userId, balances.map((balance) => ({
         currency: balance.currency,
-        available: balance.available,
+        total: balance.total,
       }))).catch((snapshotError) => {
         logger.warn('[transactions] Falha ao registrar snapshot após sincronização externa', {
           module: 'transactions',

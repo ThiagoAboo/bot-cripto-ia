@@ -136,7 +136,7 @@ VALIDAÇÕES:
 |--------------------------|----------------------------------------------|
 | stopLossPercent          | 0 < valor ≤ 50                               |
 | takeProfitPercent        | 0 < valor ≤ 100                              |
-| leverage                 | 1 ≤ valor ≤ 125                              |
+| leverage                 | valor fixo = 1 no runtime spot atual         |
 | maxTradeAmount           | > 0                                          |
 | discountUsdtPercent      | 0 ≤ valor ≤ 1                                |
 | discountBnbPercent       | 0 ≤ valor ≤ 1                                |
@@ -448,7 +448,7 @@ RESPONSE (200 - Sucesso):
 }
 
 REGRAS FUNCIONAIS:
-- `configurations` e `all` preservam as chaves externas e a exchange selecionada
+- `configurations` e `all` preservam as chaves externas e a exchange suportada (`binance`)
 - `trainings`, `all_except_configurations` e `all` também removem artefatos de disco:
   - modelos salvos
   - uploads CSV
@@ -610,19 +610,19 @@ CAMPO                    | TIPO    | OBRIG | DESCRIÇÃO
 -------------------------|---------|-------|----------------------------------
 id                       | String  | Sim   | UUID - Chave primária
 userId                   | String  | Sim   | FK para User (unique)
-exchange                 | String  | Sim   | binance/kucoin/bybit
+exchange                 | String  | Sim   | binance
 apiKey                   | String  | Sim   | Chave da API (criptografada)
 secretKey                | String  | Sim   | Chave secreta (criptografada)
 stopLossPercent          | Float   | Sim   | Stop-loss percentual
 takeProfitPercent        | Float   | Sim   | Take-profit percentual
-leverage                 | Int     | Sim   | Alavancagem (1-125)
+leverage                 | Int     | Sim   | Alavancagem fixa em 1 no runtime spot atual
 maxTradeAmount           | Float   | Sim   | Valor máximo por trade
 maxTradeAmountUnit       | String  | Sim   | USDT ou percent
 allowedPairs             | String  | Sim   | JSON array
 discountUsdtPercent      | Float   | Sim   | Desconto USDT
 discountBnbPercent       | Float   | Sim   | Desconto BNB
 minBnbBalance            | Float   | Sim   | Saldo mínimo BNB
-mode                     | String  | Sim   | spot/futures
+mode                     | String  | Sim   | spot
 orderType                | String  | Sim   | market/limit
 slippagePercent          | Float   | Sim   | Slippage percentual
 strategies               | String  | Sim   | JSON array
@@ -632,6 +632,9 @@ updatedAt                | DateTime| Sim   | Data atualização
 OBSERVAÇÃO DE EVOLUÇÃO:
 - pairDiscovery pode evoluir para campo persistido dedicado
 - fees e allowedPairs já existem persistidos; pairDiscovery representa a política futura de curadoria automática
+- o runtime atual é `spot-only` e `binance-only`; valores legados diferentes de
+  `spot`, `binance` ou `leverage = 1` devem ser normalizados na leitura e
+  rejeitados em novas gravações
 
 EXEMPLO DE REGISTRO:
 

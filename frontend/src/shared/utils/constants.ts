@@ -43,8 +43,6 @@ export const TECHNICAL_INDICATORS = [
 // Exchanges suportadas
 export const SUPPORTED_EXCHANGES = [
   { value: 'binance', label: 'Binance' },
-  { value: 'kucoin', label: 'KuCoin' },
-  { value: 'bybit', label: 'Bybit' },
 ] as const
 
 // Status dos bots

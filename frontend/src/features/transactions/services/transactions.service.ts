@@ -66,6 +66,14 @@ export const transactionsService = {
     await apiClient.delete(`/orders/${orderId}/cancel`)
   },
 
+  async reconcileOrder(orderId: string): Promise<Transaction> {
+    return apiClient.postData(`/orders/${orderId}/reconcile`)
+  },
+
+  async reconcileOpenOrders(): Promise<Transaction[]> {
+    return apiClient.postData('/orders/reconcile')
+  },
+
   async getBalance(): Promise<AvailableBalance[]> {
     return apiClient.getData('/balance')
   },

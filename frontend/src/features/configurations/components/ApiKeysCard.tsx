@@ -3,7 +3,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '../../../shared/compon
 import { Button } from '../../../shared/components/ui/Button'
 import { Input } from '../../../shared/components/ui/Input'
 import { Label } from '../../../shared/components/ui/Label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../shared/components/ui/Select'
 import { Eye, EyeOff, Key, Lock, Server } from 'lucide-react'
 import type { ExchangeApiKeys } from '../types/configurations.types'
 
@@ -17,16 +16,6 @@ interface ApiKeysCardProps {
 export function ApiKeysCard({ data, onChange, onTestConnection, isTesting }: ApiKeysCardProps) {
   const [showApiKey, setShowApiKey] = useState(false)
   const [showSecretKey, setShowSecretKey] = useState(false)
-
-  const exchanges = [
-    { value: 'binance', label: 'Binance' },
-    { value: 'kucoin', label: 'KuCoin' },
-    { value: 'bybit', label: 'Bybit' },
-  ]
-
-  const handleExchangeChange = (value: string) => {
-    onChange({ ...data, exchange: value as ExchangeApiKeys['exchange'] })
-  }
 
   const handleApiKeyChange = (value: string) => {
     onChange({ ...data, apiKey: value })
@@ -48,21 +37,13 @@ export function ApiKeysCard({ data, onChange, onTestConnection, isTesting }: Api
       <CardContent className="space-y-4">
         <div className="space-y-2">
           <Label htmlFor="exchange">Exchange</Label>
-          <Select value={data.exchange} onValueChange={handleExchangeChange}>
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Selecione a exchange" />
-            </SelectTrigger>
-            <SelectContent>
-              {exchanges.map((ex) => (
-                <SelectItem key={ex.value} value={ex.value}>
-                  <div className="flex items-center gap-2">
-                    <Server className="w-4 h-4" />
-                    {ex.label}
-                  </div>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <div className="flex h-10 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm text-foreground">
+            <Server className="h-4 w-4 text-primary-500" />
+            <span>Binance</span>
+          </div>
+          <p className="text-xs text-gray-500">
+            A integração operacional atual está homologada apenas para Binance.
+          </p>
         </div>
 
         <div className="space-y-2">

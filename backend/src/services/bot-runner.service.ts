@@ -22,6 +22,10 @@ import {
   recordBotDecision,
   resolveBotOperationalReadiness,
 } from './bot-decision.service'
+import {
+  autoPromoteRecommendedBotModel,
+  resolveBotFullAutoEligibility,
+} from './bot-governance-policy.service'
 import { getCurrencyRateToBrl } from './market-valuation.service'
 import { recordBalanceHistorySnapshot } from './portfolio.service'
 import { emitDashboardUpdate } from './socket.service'
@@ -400,6 +404,7 @@ async function getPortfolioTotalBrl(userId: string): Promise<number> {
     select: {
       currency: true,
       available: true,
+      total: true,
     },
   })
 
@@ -410,7 +415,10 @@ async function getPortfolioTotalBrl(userId: string): Promise<number> {
   const rateEntries = await Promise.all(
     balances.map(async (balance) => {
       const rate = await getCurrencyRateToBrl(balance.currency).catch(() => 0)
-      return rate * balance.available
+      const quantity = typeof balance.total === 'number'
+        ? balance.total
+        : balance.available
+      return rate * quantity
     }),
   )
 
@@ -1043,6 +1051,28 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
       return result
     }
 
+    const autoPromotion = await autoPromoteRecommendedBotModel({
+      userId,
+      botId: bot.id,
+      currentBotModelUrl: bot.modelUrl,
+    })
+
+    if (autoPromotion.applied && autoPromotion.artifact) {
+      bot.modelUrl = autoPromotion.artifact.modelUrl
+      bot.modelVersion = autoPromotion.artifact.modelVersion
+
+      logger.info('[bot] Challenger promovido automaticamente para champion antes do ciclo', {
+        module: 'bot',
+        event: 'bot_cycle_auto_model_promotion_applied',
+        userId,
+        botId: bot.id,
+        promotedArtifactId: autoPromotion.artifact.id,
+        promotedModelVersion: autoPromotion.artifact.modelVersion,
+        promotedModelUrl: autoPromotion.artifact.modelUrl,
+        recommendationReason: autoPromotion.recommendation?.reason,
+      })
+    }
+
     const analysis = await analyzeBotInstance(userId, botId)
     if (!analysis) {
       endTrace('runBotCycle', { userId, botId, errorFlag: true })
@@ -1296,6 +1326,49 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
 
       endTrace('runBotCycle', { userId, botId })
       return result
+    }
+
+    if (executionMode === 'full_auto' && selectedOpportunity.action === 'buy') {
+      const fullAutoEligibility = await resolveBotFullAutoEligibility({
+        userId,
+        botId: bot.id,
+        currentBotModelUrl: bot.modelUrl,
+      })
+
+      if (!fullAutoEligibility.eligible) {
+        const reason = fullAutoEligibility.blockers[0]
+          ?? 'O champion atual ainda não atende aos critérios mínimos para abrir novas posições em full_auto.'
+        await persistDecision({
+          executionStatus: 'skipped',
+          reason,
+        })
+
+        const result: BotCycleResult = {
+          botId: bot.id,
+          botName: bot.name,
+          generatedAt: new Date().toISOString(),
+          analysis,
+          execution: {
+            mode: executionMode,
+            status: 'skipped',
+            reason,
+            pair: selectedOpportunity.pair,
+            action: selectedOpportunity.action,
+          },
+        }
+
+        logger.warn('[bot] Compra bloqueada por governança do modelo em full_auto', {
+          module: 'bot',
+          event: 'bot_cycle_full_auto_governance_blocked',
+          userId,
+          botId: bot.id,
+          modelUrl: bot.modelUrl,
+          blocker: reason,
+        })
+
+        endTrace('runBotCycle', { userId, botId, currentPair: selectedOpportunity.pair, recommendedAction: selectedOpportunity.action, confidence: selectedOpportunity.confidence })
+        return result
+      }
     }
 
     let exchangeCredentials: Awaited<ReturnType<typeof getUserExchangeCredentials>> = null
@@ -1625,7 +1698,7 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
       await syncExternalBalances(userId, liveBalancesAfter)
       await recordBalanceHistorySnapshot(userId, liveBalancesAfter.map((balance) => ({
         currency: balance.currency,
-        available: balance.available,
+        total: balance.total,
       }))).catch((snapshotError) => {
         logger.warn('[bot] Falha ao registrar snapshot após ordem real do bot', {
           module: 'bot',

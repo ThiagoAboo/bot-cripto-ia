@@ -22,7 +22,7 @@ export const botParametersSchema = z.object({
   riskManagement: z.object({
     stopLossPercent: z.number().min(0.1, 'Stop-loss mínimo é 0.1%').max(50, 'Stop-loss máximo é 50%'),
     takeProfitPercent: z.number().min(0.1, 'Take-profit mínimo é 0.1%').max(100, 'Take-profit máximo é 100%'),
-    leverage: z.number().min(1, 'Alavancagem mínima é 1x').max(125, 'Alavancagem máxima é 125x'),
+    leverage: z.literal(1),
     maxTradeAmount: z.number().positive('Valor máximo deve ser positivo'),
     maxTradeAmountUnit: z.enum(['USDT', 'percent']),
   }),
@@ -50,7 +50,7 @@ export const botParametersSchema = z.object({
     excludedAssets: z.array(z.string()),
   }),
   advanced: z.object({
-    mode: z.enum(['spot', 'futures']),
+    mode: z.literal('spot'),
     orderType: z.enum(['market', 'limit']),
     slippagePercent: z.number().min(0).max(5),
   }),
@@ -58,7 +58,7 @@ export const botParametersSchema = z.object({
 
 // Schema para validação de API keys
 export const apiKeysSchema = z.object({
-  exchange: z.enum(['binance', 'kucoin', 'bybit']),
+  exchange: z.literal('binance'),
   apiKey: z.string().min(10, 'API Key inválida'),
   secretKey: z.string().min(10, 'Secret Key inválida'),
 })

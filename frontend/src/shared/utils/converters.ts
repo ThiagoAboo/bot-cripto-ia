@@ -1,3 +1,13 @@
+import { apiClient } from '../services/api.client'
+
+interface ExchangeRateResponse {
+  from: string
+  to: string
+  rate: number
+  pctChange?: number
+  lastUpdate?: string
+}
+
 // Cache de taxas de câmbio
 const rateCache = new Map<string, { rate: number; timestamp: number }>()
 const CACHE_DURATION = 60000 // 1 minuto
@@ -29,26 +39,18 @@ export async function convertCurrency(
 
 // Buscar taxa de câmbio da API
 async function fetchExchangeRate(from: string, to: string): Promise<number> {
-  const mockRates: Record<string, number> = {
-    'USDT-BRL': 5.85,
-    'USDT-EUR': 0.92,
-    'USDT-BTC': 0.000016,
-    'USDT-ETH': 0.00027,
-    'BRL-USDT': 0.171,
-    'EUR-USDT': 1.087,
-    'BTC-USDT': 62500,
-    'ETH-USDT': 3450,
+  const source = from.trim().toUpperCase()
+  const target = to.trim().toUpperCase()
+  const params = new URLSearchParams({
+    from: source,
+    to: target,
+  })
+  const response = await apiClient.getData<ExchangeRateResponse>(`/exchange/rate?${params.toString()}`)
+  if (!Number.isFinite(response.rate) || response.rate <= 0) {
+    throw new Error(`Cotação inválida retornada para ${source}/${target}`)
   }
 
-  const key = `${from}-${to}`
-  const rate = mockRates[key]
-
-  if (!rate) {
-    console.warn(`Taxa não encontrada para ${key}, usando 1:1`)
-    return 1
-  }
-
-  return rate
+  return response.rate
 }
 
 // Converter USDT para BRL

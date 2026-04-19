@@ -36,6 +36,8 @@ CAMPOS UTILIZADOS:
 Balance:
 - currency
 - available
+- reserved
+- total
 
 Transaction:
 - profitBrl
@@ -46,8 +48,13 @@ Transaction:
 CÁLCULOS:
 
 1. totalBrl:
-   SELECT SUM(b.available * taxa_conversao) FROM Balance b
+   SELECT SUM(b.total * taxa_conversao) FROM Balance b
    WHERE taxa_conversao = cotacao USDT->BRL
+
+   Observação:
+   - `total = available + reserved`
+   - saldo reservado em ordens pendentes continua pertencendo à carteira e deve
+     compor a valorização do patrimônio
 
 2. dailyProfitBrl:
    SELECT SUM(profitBrl) FROM Transaction 
@@ -123,6 +130,8 @@ CAMPOS UTILIZADOS:
 Balance:
 - currency
 - available
+- reserved
+- total
 
 Transaction:
 - pair (extrair moeda base)
@@ -134,7 +143,7 @@ Transaction:
 CÁLCULOS POR MOEDA:
 
 1. balanceBrl:
-   balance.available * cotacao USDT->BRL
+   balance.total * cotacao USDT->BRL
 
 2. dailyProfitBrl:
    SELECT SUM(profitBrl) FROM Transaction 
@@ -430,7 +439,8 @@ REGRAS:
 -------------------------------------------------------------------------------
 
 Descrição: Lista o catálogo de modelos salvos para a instância do bot, incluindo
-o modelo ativo (`champion`) e os candidatos (`challenger`).
+o modelo ativo (`champion`), os candidatos (`challenger`) e o resumo formal de
+governança usado para liberar `full_auto`.
 
 HEADERS:
   Authorization: Bearer {token}
@@ -459,12 +469,55 @@ RESPONSE (200 - Sucesso):
           "logLoss": 0.33,
           "walkForwardFolds": 5
         },
+        "decisionSummary": {
+          "evaluated": 42,
+          "pending": 2,
+          "accuracyPercent": 62.5,
+          "averageStrategyReturnPercent": 0.31,
+          "averageConfidence": 71.0
+        },
+        "paperReadiness": {
+          "readyForFullAuto": true,
+          "evaluatedSignals": 42,
+          "minimumEvaluatedSignals": 30,
+          "accuracyPercent": 62.5,
+          "averageStrategyReturnPercent": 0.31,
+          "averageEdgePercent": 0.09,
+          "blockers": []
+        },
+        "operationalReadiness": {
+          "modelReady": true,
+          "hasEnginePackage": true
+        },
         "reproducibility": {
           "configFingerprint": "cfg_abc123",
           "datasetFingerprint": "data_abc123"
         }
       }
-    ]
+    ],
+    "governance": {
+      "evaluatedAt": "2026-04-19T12:00:00.000Z",
+      "championArtifactId": "artifact_1",
+      "championModelVersion": "v1.0.0",
+      "fullAutoEligibility": {
+        "eligible": true,
+        "blockers": [],
+        "botModelSynchronized": true
+      },
+      "recommendedPromotion": {
+        "artifactId": "artifact_2",
+        "modelVersion": "v2.0.0",
+        "reason": "accuracy +3.50 pp · retorno medio +0.0800% · edge medio +0.0400%"
+      },
+      "policy": {
+        "modelDecisionWindow": 60,
+        "minimumAccuracyGainPercent": 1,
+        "minimumAverageStrategyReturnGainPercent": 0.05,
+        "minimumAverageEdgeGainPercent": 0,
+        "maximumDrawdownDeltaPercent": 2,
+        "autoPromotionEnabled": false
+      }
+    }
   }
 }
 
@@ -474,6 +527,14 @@ REGRAS:
   artefato do bot
 - modelos arquivados continuam no histórico, mas deixam de ser elegíveis para uso
   operacional
+- a resposta passa a trazer um resumo de governança por artefato, com
+  `decisionSummary`, `paperReadiness` e `operationalReadiness`
+- `governance.fullAutoEligibility` resume se o champion atual pode abrir novas
+  posições em `full_auto`
+- `governance.recommendedPromotion` aparece quando um challenger supera o champion
+  pelos critérios parametrizados em ambiente
+- quando `governance.policy.autoPromotionEnabled = true`, o runner pode aplicar
+  automaticamente a `recommendedPromotion` antes da análise do ciclo do bot
 
 -------------------------------------------------------------------------------
 4.4 API: POST /api/dashboard/bots/{id}/models/{modelId}/promote
@@ -618,6 +679,13 @@ CAMPOS ATUALIZADOS:
 -------------------------------------------------------------------------------
 
 Descrição: Retorna dados para o gráfico de performance
+
+COMPORTAMENTO OPERACIONAL:
+- antes de consultar a série, o backend tenta registrar um snapshot atual do usuário
+- se o último snapshot tiver o mesmo valor, ele ainda pode ser renovado quando estiver
+  envelhecido demais para manter o gráfico recente utilizável
+- no runtime atual, snapshots com mesmo `totalBrl` podem ser recriados após cerca de
+  1 hora sem novas amostras
 
 HEADERS:
   Authorization: Bearer {token}

@@ -8,11 +8,24 @@ import { AvailableBalance } from './components/AvailableBalance'
 import { ManualOrderForm } from './components/ManualOrderForm'
 import { TransactionFilters } from './components/TransactionFilters'
 import { TransactionsTable } from './components/TransactionsTable'
-import { TRANSACTIONS_QUERY_KEYS, useBalance, useExchangeRate, useTransactions } from './hooks/useTransactions'
+import {
+  TRANSACTIONS_QUERY_KEYS,
+  useBalance,
+  useCancelOrder,
+  useExchangeRate,
+  useReconcileOrder,
+  useReconcileOrders,
+  useTransactions,
+} from './hooks/useTransactions'
 import { transactionsService } from './services/transactions.service'
 import { Skeleton } from '../../shared/components/ui/Skeleton'
 import { formatDate } from '../../shared/utils/formatters'
-import type { OrderFilters } from './types/transactions.types'
+import type { OrderFilters, Transaction } from './types/transactions.types'
+
+type PendingOrderAction = {
+  orderId: string
+  type: 'reconcile' | 'cancel'
+} | null
 
 export default function TransacoesPage() {
   const queryClient = useQueryClient()
@@ -20,10 +33,14 @@ export default function TransacoesPage() {
   const [displayCurrency, setDisplayCurrency] = useState('BRL')
   const [selectedPair, setSelectedPair] = useState('BTC/USDT')
   const [isExporting, setIsExporting] = useState(false)
+  const [pendingOrderAction, setPendingOrderAction] = useState<PendingOrderAction>(null)
   const [filters, setFilters] = useState<OrderFilters>({
     page: 1,
     limit: 20,
   })
+  const reconcileOrderMutation = useReconcileOrder()
+  const reconcileOrdersMutation = useReconcileOrders()
+  const cancelOrderMutation = useCancelOrder()
 
   const {
     data: transactionsData,
@@ -131,6 +148,42 @@ export default function TransacoesPage() {
     }
   }
 
+  const handleReconcileOrder = async (orderId: string) => {
+    setPendingOrderAction({ orderId, type: 'reconcile' })
+
+    try {
+      await reconcileOrderMutation.mutateAsync(orderId)
+    } finally {
+      setPendingOrderAction((current) => (
+        current?.orderId === orderId && current.type === 'reconcile' ? null : current
+      ))
+    }
+  }
+
+  const handleCancelOrder = async (transaction: Transaction) => {
+    const confirmationMessage = transaction.externalOrderId
+      ? `Cancelar a ordem ${transaction.pair} na Binance e reconciliar o status local?`
+      : `Cancelar a ordem ${transaction.pair}?`
+
+    if (!window.confirm(confirmationMessage)) {
+      return
+    }
+
+    setPendingOrderAction({ orderId: transaction.id, type: 'cancel' })
+
+    try {
+      await cancelOrderMutation.mutateAsync(transaction.id)
+    } finally {
+      setPendingOrderAction((current) => (
+        current?.orderId === transaction.id && current.type === 'cancel' ? null : current
+      ))
+    }
+  }
+
+  const handleReconcileAll = async () => {
+    await reconcileOrdersMutation.mutateAsync()
+  }
+
   if (!balance) {
     return (
       <div className="space-y-6">
@@ -182,6 +235,11 @@ export default function TransacoesPage() {
               displayCurrency={displayCurrency}
               onExport={handleExport}
               isExporting={isExporting}
+              onReconcileOrder={handleReconcileOrder}
+              onCancelOrder={handleCancelOrder}
+              onReconcileAll={handleReconcileAll}
+              pendingOrderAction={pendingOrderAction}
+              isReconcilingAll={reconcileOrdersMutation.isPending}
             />
           </div>
         </div>

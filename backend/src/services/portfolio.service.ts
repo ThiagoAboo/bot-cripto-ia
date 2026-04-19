@@ -3,10 +3,12 @@ import { getCurrencyRateToBrl } from './market-valuation.service'
 
 interface BalanceForSnapshot {
   currency: string
-  available: number
+  available?: number
+  total?: number
 }
 
 const SNAPSHOT_TOLERANCE_BRL = 0.01
+const SNAPSHOT_MAX_STALENESS_MS = 60 * 60 * 1000
 
 async function persistBalanceHistorySnapshot(
   userId: string,
@@ -17,7 +19,16 @@ async function persistBalanceHistorySnapshot(
     orderBy: { timestamp: 'desc' },
   })
 
-  if (lastSnapshot && Math.abs(lastSnapshot.totalBrl - totalBrl) < SNAPSHOT_TOLERANCE_BRL) {
+  const now = new Date()
+  const snapshotIsFreshEnough = lastSnapshot
+    ? (now.getTime() - lastSnapshot.timestamp.getTime()) < SNAPSHOT_MAX_STALENESS_MS
+    : false
+
+  if (
+    lastSnapshot
+    && Math.abs(lastSnapshot.totalBrl - totalBrl) < SNAPSHOT_TOLERANCE_BRL
+    && snapshotIsFreshEnough
+  ) {
     return { created: false, totalBrl }
   }
 
@@ -25,7 +36,7 @@ async function persistBalanceHistorySnapshot(
     data: {
       userId,
       totalBrl,
-      timestamp: new Date(),
+      timestamp: now,
     },
   })
 
@@ -47,7 +58,10 @@ export async function calculatePortfolioTotalBrl(balances: BalanceForSnapshot[])
 
   return balances.reduce((sum, balance) => {
     const rate = rateMap[balance.currency] ?? 0
-    return sum + (balance.available * rate)
+    const quantity = typeof balance.total === 'number'
+      ? balance.total
+      : (balance.available ?? 0)
+    return sum + (quantity * rate)
   }, 0)
 }
 
@@ -60,6 +74,7 @@ export async function recordBalanceHistorySnapshot(
     select: {
       currency: true,
       available: true,
+      total: true,
     },
   })
 

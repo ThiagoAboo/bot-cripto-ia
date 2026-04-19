@@ -11,7 +11,10 @@ interface RiskManagementCardProps {
 }
 
 export function RiskManagementCard({ data, onChange }: RiskManagementCardProps) {
-  const handleChange = (field: keyof RiskManagement, value: number) => {
+  const handleChange = (
+    field: 'stopLossPercent' | 'takeProfitPercent' | 'maxTradeAmount',
+    value: number,
+  ) => {
     onChange({ ...data, [field]: value })
   }
 
@@ -80,12 +83,13 @@ export function RiskManagementCard({ data, onChange }: RiskManagementCardProps) 
               type="number"
               step="1"
               min="1"
-              max="125"
+              max="1"
               value={data.leverage}
-              onChange={(e) => handleChange('leverage', parseFloat(e.target.value))}
+              readOnly
+              disabled
             />
             <p className="text-xs text-gray-500">
-              Multiplicador de capital (1 = sem alavancagem)
+              O runtime atual executa apenas operações spot. Por isso a alavancagem fica travada em 1x até existir suporte real para outro mercado.
             </p>
           </div>
 

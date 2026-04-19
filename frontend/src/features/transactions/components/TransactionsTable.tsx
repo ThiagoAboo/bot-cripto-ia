@@ -8,7 +8,17 @@ import {
 } from '../../../shared/components/ui/Table'
 import { Skeleton } from '../../../shared/components/ui/Skeleton'
 import { Button } from '../../../shared/components/ui/Button'
-import { ChevronLeft, ChevronRight, Download, TrendingUp, TrendingDown, Bot, User } from 'lucide-react'
+import {
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  TrendingUp,
+  TrendingDown,
+  Bot,
+  User,
+  RefreshCw,
+  XCircle,
+} from 'lucide-react'
 import { formatCurrency, formatDate, formatPercent, getProfitColor, cn } from '../../../shared/utils/formatters'
 import type { OrderFilters, OrderStatus, Transaction, TransactionsResponse } from '../types/transactions.types'
 
@@ -20,6 +30,14 @@ interface TransactionsTableProps {
   displayCurrency: string
   onExport: () => void
   isExporting?: boolean
+  onReconcileOrder: (orderId: string) => Promise<void>
+  onCancelOrder: (transaction: Transaction) => Promise<void>
+  onReconcileAll: () => Promise<void>
+  pendingOrderAction?: {
+    orderId: string
+    type: 'reconcile' | 'cancel'
+  } | null
+  isReconcilingAll?: boolean
 }
 
 const STATUS_STYLES: Record<OrderStatus, { label: string; className: string }> = {
@@ -39,6 +57,18 @@ function hasRequestedQuantity(transaction: Transaction): boolean {
     && transaction.requestedQuantity > transaction.quantity + 1e-8
 }
 
+function isOpenOrder(transaction: Transaction): boolean {
+  return transaction.status === 'pending' || transaction.status === 'partially_filled'
+}
+
+function canReconcileOrder(transaction: Transaction): boolean {
+  return isOpenOrder(transaction) && Boolean(transaction.externalOrderId)
+}
+
+function canCancelOrder(transaction: Transaction): boolean {
+  return isOpenOrder(transaction)
+}
+
 export function TransactionsTable({
   data,
   isLoading,
@@ -47,6 +77,11 @@ export function TransactionsTable({
   displayCurrency,
   onExport,
   isExporting = false,
+  onReconcileOrder,
+  onCancelOrder,
+  onReconcileAll,
+  pendingOrderAction = null,
+  isReconcilingAll = false,
 }: TransactionsTableProps) {
   const totalPages = data ? Math.ceil(data.total / filters.limit) : 0
 
@@ -61,7 +96,7 @@ export function TransactionsTable({
           <Table>
             <TableHeader>
               <TableRow>
-                {[...Array(8)].map((_, i) => (
+                {[...Array(11)].map((_, i) => (
                   <TableHead key={i}><Skeleton className="h-4 w-20" /></TableHead>
                 ))}
               </TableRow>
@@ -69,7 +104,7 @@ export function TransactionsTable({
             <TableBody>
               {[...Array(5)].map((_, i) => (
                 <TableRow key={i}>
-                  {[...Array(8)].map((_, j) => (
+                  {[...Array(11)].map((_, j) => (
                     <TableCell key={j}><Skeleton className="h-6 w-full" /></TableCell>
                   ))}
                 </TableRow>
@@ -91,11 +126,24 @@ export function TransactionsTable({
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <Button variant="outline" size="sm" onClick={onExport} isLoading={isExporting}>
-          <Download className="w-4 h-4 mr-2" />
-          Exportar CSV
-        </Button>
+      <div className="flex flex-col gap-3 rounded-lg border border-dark-300 bg-dark-300/30 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-sm font-medium text-white">Ordens pendentes e reconciliação</p>
+          <p className="text-xs text-gray-500">
+            Atualize os status da Binance antes de analisar fills parciais, cancelamentos e saldo reservado.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button variant="secondary" size="sm" onClick={() => void onReconcileAll()} isLoading={isReconcilingAll}>
+            <RefreshCw className="h-4 w-4" />
+            Reconciliar pendentes
+          </Button>
+          <Button variant="outline" size="sm" onClick={onExport} isLoading={isExporting}>
+            <Download className="w-4 h-4" />
+            Exportar CSV
+          </Button>
+        </div>
       </div>
 
       <div className="rounded-lg border border-dark-300 overflow-hidden">
@@ -113,6 +161,7 @@ export function TransactionsTable({
                 <TableHead className="text-right">Taxa</TableHead>
                 <TableHead className="text-right">Status</TableHead>
                 <TableHead className="text-right">Ganho</TableHead>
+                <TableHead className="text-right">Ações</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -124,13 +173,26 @@ export function TransactionsTable({
                 const convertedProfit = tx.profitBrl || 0
                 const quantityPrecision = getQuantityPrecision(tx.pair)
                 const statusStyle = STATUS_STYLES[tx.status]
+                const isReconcilingOrder = pendingOrderAction?.orderId === tx.id
+                  && pendingOrderAction.type === 'reconcile'
+                const isCancellingOrder = pendingOrderAction?.orderId === tx.id
+                  && pendingOrderAction.type === 'cancel'
                 
                 return (
                   <TableRow key={tx.id} className="hover:bg-dark-300/50">
                     <TableCell className="font-mono text-sm">
                       {formatDate(tx.date, 'full')}
                     </TableCell>
-                    <TableCell className="font-medium">{tx.pair}</TableCell>
+                    <TableCell>
+                      <div className="flex flex-col">
+                        <span className="font-medium">{tx.pair}</span>
+                        {tx.externalOrderId && (
+                          <span className="text-[11px] text-gray-500">
+                            Ordem externa #{tx.externalOrderId}
+                          </span>
+                        )}
+                      </div>
+                    </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
                         {tx.origin === 'bot' ? (
@@ -183,6 +245,11 @@ export function TransactionsTable({
                             Binance: {tx.externalStatus}
                           </span>
                         )}
+                        {tx.syncedAt && (
+                          <span className="text-[11px] text-gray-500">
+                            Sync: {formatDate(tx.syncedAt, 'full')}
+                          </span>
+                        )}
                       </div>
                     </TableCell>
                     <TableCell className={cn("text-right font-medium", getProfitColor(convertedProfit))}>
@@ -197,6 +264,38 @@ export function TransactionsTable({
                           )}
                         </div>
                       )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex flex-wrap justify-end gap-2">
+                        {canReconcileOrder(tx) && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => void onReconcileOrder(tx.id)}
+                            isLoading={isReconcilingOrder}
+                            disabled={Boolean(pendingOrderAction) && !isReconcilingOrder}
+                          >
+                            <RefreshCw className="h-4 w-4" />
+                            Reconciliar
+                          </Button>
+                        )}
+                        {canCancelOrder(tx) && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-error hover:bg-error/10 hover:text-error"
+                            onClick={() => void onCancelOrder(tx)}
+                            isLoading={isCancellingOrder}
+                            disabled={Boolean(pendingOrderAction) && !isCancellingOrder}
+                          >
+                            <XCircle className="h-4 w-4" />
+                            Cancelar
+                          </Button>
+                        )}
+                        {!canReconcileOrder(tx) && !canCancelOrder(tx) && (
+                          <span className="text-xs text-gray-500">Sem ações</span>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 )

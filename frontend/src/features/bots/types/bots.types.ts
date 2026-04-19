@@ -122,11 +122,71 @@ export interface BotModelArtifact {
     datasetFingerprint?: string
     featureFingerprint?: string
   }
+  decisionSummary?: BotDecisionSummary
+  paperReadiness?: BotPaperReadiness
+  operationalReadiness?: BotModelOperationalReadiness
+}
+
+export interface BotModelOperationalReadiness {
+  hasModel: boolean
+  modelReady: boolean
+  modelVersion?: string
+  modelUrl?: string
+  modelArchitecture?: string
+  validationStrategy?: string
+  forecastHorizonCandles?: number
+  buyThresholdPercent?: number
+  sellThresholdPercent?: number
+  hasEnginePackage: boolean
+  operationalBlockReason?: string
+}
+
+export interface BotFullAutoEligibility {
+  eligible: boolean
+  blockers: string[]
+  championArtifactId?: string
+  championModelVersion?: string
+  championModelUrl?: string
+  botModelSynchronized: boolean
+}
+
+export interface BotModelPromotionRecommendation {
+  artifactId: string
+  modelVersion: string
+  modelUrl: string
+  reason: string
+  accuracyGainPercent: number
+  averageStrategyReturnGainPercent: number
+  averageEdgeGainPercent: number
+  challengerAccuracyPercent: number
+  championAccuracyPercent: number
+  challengerAverageStrategyReturnPercent: number
+  championAverageStrategyReturnPercent: number
+  challengerAverageEdgePercent: number
+  championAverageEdgePercent: number
+}
+
+export interface BotModelGovernanceSummary {
+  evaluatedAt: string
+  championArtifactId?: string
+  championModelVersion?: string
+  championModelUrl?: string
+  recommendedPromotion?: BotModelPromotionRecommendation
+  fullAutoEligibility: BotFullAutoEligibility
+  policy: {
+    modelDecisionWindow: number
+    minimumAccuracyGainPercent: number
+    minimumAverageStrategyReturnGainPercent: number
+    minimumAverageEdgeGainPercent: number
+    maximumDrawdownDeltaPercent: number
+    autoPromotionEnabled: boolean
+  }
 }
 
 export interface BotModelCatalog {
   botId: string
   items: BotModelArtifact[]
+  governance: BotModelGovernanceSummary
 }
 
 export interface BotHistoryTransaction {

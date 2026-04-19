@@ -74,9 +74,13 @@ const pairDiscoveryOverrideSchema = z.object({
   lastSyncSummary: z.string().optional(),
 })
 
+const supportedExchangeSchema = z.literal('binance')
+const supportedLeverageSchema = z.literal(1)
+const operationModeSchema = z.literal('spot')
+
 const configurationsSchema = z.object({
   exchangeApiKeys: z.object({
-    exchange: z.enum(['binance', 'kucoin', 'bybit']),
+    exchange: supportedExchangeSchema,
     apiKey: z.string(),
     secretKey: z.string(),
   }),
@@ -84,7 +88,7 @@ const configurationsSchema = z.object({
     riskManagement: z.object({
       stopLossPercent: z.number().min(0).max(50),
       takeProfitPercent: z.number().min(0).max(100),
-      leverage: z.number().min(1).max(125),
+      leverage: supportedLeverageSchema,
       maxTradeAmount: z.number().positive(),
       maxTradeAmountUnit: z.enum(['USDT', 'percent']),
     }),
@@ -92,7 +96,7 @@ const configurationsSchema = z.object({
     fees: feesSchema,
     pairDiscovery: pairDiscoverySchema,
     advanced: z.object({
-      mode: z.enum(['spot', 'futures']),
+      mode: operationModeSchema,
       orderType: z.enum(['market', 'limit']),
       slippagePercent: z.number().min(0).max(5),
     }),
@@ -223,9 +227,13 @@ function buildConfigurationResponse(config: {
   slippagePercent: number
   strategies: string
 }) {
+  const normalizedExchange = 'binance'
+  const normalizedLeverage = 1
+  const normalizedMode = 'spot'
+
   return {
     exchangeApiKeys: {
-      exchange: config.exchange,
+      exchange: normalizedExchange,
       apiKey: config.apiKey,
       secretKey: config.secretKey,
     },
@@ -233,7 +241,7 @@ function buildConfigurationResponse(config: {
       riskManagement: {
         stopLossPercent: config.stopLossPercent,
         takeProfitPercent: config.takeProfitPercent,
-        leverage: config.leverage,
+        leverage: normalizedLeverage,
         maxTradeAmount: config.maxTradeAmount,
         maxTradeAmountUnit: config.maxTradeAmountUnit,
       },
@@ -247,7 +255,7 @@ function buildConfigurationResponse(config: {
       },
       pairDiscovery: parsePairDiscoveryConfig(config.pairDiscovery),
       advanced: {
-        mode: config.mode,
+        mode: normalizedMode,
         orderType: config.orderType,
         slippagePercent: config.slippagePercent,
       },
@@ -262,6 +270,38 @@ async function findOrCreateConfiguration(userId: string) {
   })
 
   if (config) {
+    if (
+      config.exchange !== 'binance'
+      || config.mode !== 'spot'
+      || config.leverage !== 1
+    ) {
+      logger.warn('[configurations] Normalizando configuração legada para o runtime suportado', {
+        module: 'configurations',
+        event: 'configuration_legacy_runtime_normalized',
+        userId,
+        legacyRuntime: {
+          exchange: config.exchange,
+          mode: config.mode,
+          leverage: config.leverage,
+        },
+        normalizedRuntime: {
+          exchange: 'binance',
+          mode: 'spot',
+          leverage: 1,
+        },
+      })
+
+      config = await prisma.configuration.update({
+        where: { userId },
+        data: {
+          exchange: 'binance',
+          mode: 'spot',
+          leverage: 1,
+          updatedAt: new Date(),
+        },
+      })
+    }
+
     return config
   }
 

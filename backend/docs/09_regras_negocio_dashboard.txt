@@ -11,12 +11,13 @@ API: GET /api/dashboard/total-balance
 REGRAS:
 
 1. totalBrl (Saldo total em reais)
-   - Somar todos os saldos disponíveis (Balance.available)
+   - Somar todos os saldos totais (Balance.total)
+   - Balance.total = available + reserved
    - Converter cada moeda para BRL usando cotação USDT/BRL
-   - Fórmula: SUM(available * taxa_conversao_para_brl)
+   - Fórmula: SUM(total * taxa_conversao_para_brl)
 
    SQL:
-   SELECT SUM(b.available * taxa_brl) as totalBrl
+   SELECT SUM(b.total * taxa_brl) as totalBrl
    FROM Balance b
    LEFT JOIN ExchangeRate e ON e.currency = b.currency
    WHERE b.userId = ?
@@ -77,7 +78,7 @@ API: GET /api/dashboard/currencies-balance
 REGRAS:
 
 1. balanceBrl (Saldo em reais por moeda)
-   - Balance.available * cotacao_para_brl
+   - Balance.total * cotacao_para_brl
 
 2. dailyProfitBrl (Lucro diário por moeda)
    - Filtrar transações por pair (ex: BTC/USDT -> moeda BTC)

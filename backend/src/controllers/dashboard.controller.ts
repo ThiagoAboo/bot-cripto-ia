@@ -5,11 +5,12 @@ import { prisma } from '../config/database'
 import { AuthRequest } from '../middleware/auth.middleware'
 import { analyzeBotInstance } from '../services/bot-analysis.service'
 import { buildBotDecisionSummary, buildBotPaperReadiness, loadBotPaperReadiness, resolveBotOperationalReadiness } from '../services/bot-decision.service'
+import { evaluateBotModelGovernance, resolveBotFullAutoEligibility } from '../services/bot-governance-policy.service'
 import { getBotInstanceById, listBotInstances, listBotTemplates, materializeEditableBotForUser } from '../services/bot-registry.service'
 import { isBotWorkerRunning, runBotCycle } from '../services/bot-runner.service'
-import { archiveBotModelArtifact, listBotModelArtifacts, promoteBotModelArtifact } from '../services/bot-model-governance.service'
+import { archiveBotModelArtifact, promoteBotModelArtifact } from '../services/bot-model-governance.service'
 import { getCurrencyRateToBrl } from '../services/market-valuation.service'
-import { recordBalanceHistorySnapshotValue } from '../services/portfolio.service'
+import { recordBalanceHistorySnapshot, recordBalanceHistorySnapshotValue } from '../services/portfolio.service'
 import { emitDashboardUpdate } from '../services/socket.service'
 import { logger } from '../utils/logger'
 import { endTrace, startTrace } from '../utils/tracer'
@@ -66,7 +67,17 @@ const botModelActionSchema = z.object({
   notes: z.string().trim().max(300).optional(),
 })
 
-async function getBalancesWithRates(balances: Array<{ currency: string; available: number }>): Promise<{ rateMap: Record<string, number>; usdtBrlRate: number }> {
+function getPortfolioBalanceAmount(balance: { available?: number; total?: number }): number {
+  if (typeof balance.total === 'number' && Number.isFinite(balance.total)) {
+    return balance.total
+  }
+
+  return balance.available ?? 0
+}
+
+async function getBalancesWithRates(
+  balances: Array<{ currency: string; available?: number; total?: number }>,
+): Promise<{ rateMap: Record<string, number>; usdtBrlRate: number }> {
   const uniqueCurrencies = Array.from(new Set(balances.map((balance) => balance.currency)))
   const rateEntries = await Promise.all(uniqueCurrencies.map(async (currency) => {
     const rate = await getCurrencyRateToBrl(currency).catch(() => 0)
@@ -235,6 +246,50 @@ async function ensureBotCanGoOnline(bot: {
   return null
 }
 
+async function ensureBotExecutionModeAllowed(params: {
+  userId: string
+  botId?: string
+  bot: {
+    modelUrl: string | null
+    name: string
+  }
+  validateOnlineReadiness: boolean
+  executionMode: 'paper' | 'semi_auto' | 'full_auto'
+}) {
+  if (params.validateOnlineReadiness) {
+    const onlineGuardError = await ensureBotCanGoOnline(params.bot, 'online')
+    if (onlineGuardError) {
+      return onlineGuardError
+    }
+  }
+
+  if (params.executionMode !== 'full_auto') {
+    return null
+  }
+
+  const onlineGuardError = await ensureBotCanGoOnline(params.bot, 'online')
+  if (onlineGuardError) {
+    return onlineGuardError
+  }
+
+  if (!params.botId || !params.bot.modelUrl) {
+    return 'Crie o bot em paper ou semi_auto, associe um champion e valide sinais suficientes antes de migrar para full_auto.'
+  }
+
+  const fullAutoEligibility = await resolveBotFullAutoEligibility({
+    userId: params.userId,
+    botId: params.botId,
+    currentBotModelUrl: params.bot.modelUrl,
+  })
+
+  if (!fullAutoEligibility.eligible) {
+    return fullAutoEligibility.blockers[0]
+      ?? 'O champion atual ainda não atende aos critérios mínimos para operar em full_auto.'
+  }
+
+  return null
+}
+
 export async function getTotalBalance(req: AuthRequest, res: Response): Promise<Response> {
   startTrace(req.userId!, 'getTotalBalance', 'dashboard')
 
@@ -260,7 +315,7 @@ export async function getTotalBalance(req: AuthRequest, res: Response): Promise<
     const { rateMap, usdtBrlRate } = await getBalancesWithRates(balances)
     const totalBrl = balances.reduce((sum: number, balance: any) => {
       const rate = rateMap[balance.currency] ?? 0
-      return sum + (balance.available * rate)
+      return sum + (getPortfolioBalanceAmount(balance) * rate)
     }, 0)
 
     const dailyProfitBrl = recentTransactions.reduce((sum: number, transaction: any) => sum + (transaction.profitBrl || 0), 0)
@@ -321,7 +376,7 @@ export async function getCurrenciesBalance(req: AuthRequest, res: Response): Pro
 
     for (const currency of currencies) {
       const balance = balances.find((entry: any) => entry.currency === currency)
-      if (!balance || balance.available === 0) {
+      if (!balance || getPortfolioBalanceAmount(balance) === 0) {
         continue
       }
 
@@ -361,7 +416,7 @@ export async function getCurrenciesBalance(req: AuthRequest, res: Response): Pro
       const winningTrades = last100Transactions.filter((transaction: any) => (transaction.profitBrl || 0) > 0).length
       const hitRate = last100Transactions.length > 0 ? (winningTrades / last100Transactions.length) * 100 : 0
 
-      const balanceBrl = balance.available * (rateMap[currency] ?? 0)
+      const balanceBrl = getPortfolioBalanceAmount(balance) * (rateMap[currency] ?? 0)
       const previousBalanceBrl = balanceBrl - dailyProfitBrl
       const dailyProfitPercent = previousBalanceBrl > 0 ? (dailyProfitBrl / previousBalanceBrl) * 100 : 0
       const initialBalanceBrl = balanceBrl - totalPnlBrl
@@ -760,15 +815,16 @@ export async function getBotModels(req: AuthRequest, res: Response): Promise<Res
       return res.status(404).json({ success: false, error: 'Bot não encontrado' })
     }
 
-    const items = await listBotModelArtifacts(userId, bot.id)
+    const catalog = await evaluateBotModelGovernance({
+      userId,
+      botId: bot.id,
+      currentBotModelUrl: bot.modelUrl,
+    })
 
     endTrace('getBotModels', { userId, botId: bot.id })
     return res.json({
       success: true,
-      data: {
-        botId: bot.id,
-        items,
-      },
+      data: catalog,
     })
   } catch (error) {
     logger.error('[dashboard] Erro ao buscar catálogo de modelos do bot', {
@@ -916,10 +972,18 @@ export async function createBot(req: AuthRequest, res: Response): Promise<Respon
       return res.status(404).json({ success: false, error: 'Template de bot não encontrado' })
     }
 
-    const onlineGuardError = await ensureBotCanGoOnline({ modelUrl: null, name: payload.name }, payload.status)
-    if (onlineGuardError) {
+    const executionModeGuardError = await ensureBotExecutionModeAllowed({
+      userId,
+      bot: {
+        modelUrl: null,
+        name: payload.name,
+      },
+      validateOnlineReadiness: payload.status === 'online',
+      executionMode: payload.executionMode,
+    })
+    if (executionModeGuardError) {
       endTrace('createBot', { userId, errorFlag: true })
-      return res.status(400).json({ success: false, error: onlineGuardError })
+      return res.status(400).json({ success: false, error: executionModeGuardError })
     }
 
     const createdBot = await prisma.bot.create({
@@ -999,10 +1063,17 @@ export async function updateBot(req: AuthRequest, res: Response): Promise<Respon
     const currentParameters = safeJsonParse<Record<string, unknown>>(materializedBot.bot.parameters, {})
     const nextParameters = sanitizeParametersPatch(validation.data.parameters, currentParameters)
     const nextStatus = validation.data.status ?? materializedBot.bot.status as 'online' | 'offline'
-    const onlineGuardError = await ensureBotCanGoOnline(materializedBot.bot, nextStatus)
-    if (validation.data.status === 'online' && onlineGuardError) {
+    const nextExecutionMode = validation.data.executionMode ?? materializedBot.bot.executionMode as 'paper' | 'semi_auto' | 'full_auto'
+    const executionModeGuardError = await ensureBotExecutionModeAllowed({
+      userId,
+      botId: materializedBot.bot.id,
+      bot: materializedBot.bot,
+      validateOnlineReadiness: validation.data.status === 'online',
+      executionMode: nextExecutionMode,
+    })
+    if (executionModeGuardError) {
       endTrace('updateBot', { userId, botId: id, errorFlag: true })
-      return res.status(400).json({ success: false, error: onlineGuardError })
+      return res.status(400).json({ success: false, error: executionModeGuardError })
     }
 
     const updatedBot = await prisma.bot.update({
@@ -1316,6 +1387,16 @@ export async function getPerformance(req: AuthRequest, res: Response): Promise<R
         startDate = new Date(0)
         break
     }
+
+    await recordBalanceHistorySnapshot(userId).catch((snapshotError) => {
+      logger.warn('[dashboard] Falha ao semear snapshot antes de consultar performance', {
+        module: 'dashboard',
+        event: 'balance_snapshot_performance_seed_failed',
+        userId,
+        error: snapshotError,
+        skipPersistence: true,
+      })
+    })
 
     const history = await prisma.balanceHistory.findMany({
       where: { userId, timestamp: { gte: startDate } },

@@ -39,6 +39,7 @@ import type {
   BotHistory,
   BotListItem,
   BotModelArtifact,
+  BotModelGovernanceSummary,
   BotPaperReadiness,
   BotOperationalStatus,
   BotTemplateSummary,
@@ -626,6 +627,7 @@ function BotHistoryPanel({ history, isLoading }: { history?: BotHistory; isLoadi
 function BotModelsPanel({
   botName,
   models,
+  governance,
   isLoading,
   isPromoting,
   isArchiving,
@@ -634,6 +636,7 @@ function BotModelsPanel({
 }: {
   botName: string
   models?: BotModelArtifact[]
+  governance?: BotModelGovernanceSummary
   isLoading: boolean
   isPromoting: boolean
   isArchiving: boolean
@@ -641,6 +644,7 @@ function BotModelsPanel({
   onArchive: (modelId: string) => Promise<void>
 }) {
   const activeModel = models?.find((item) => item.isActive) ?? models?.find((item) => item.governanceRole === 'champion')
+  const recommendedPromotion = governance?.recommendedPromotion
 
   return (
     <Card>
@@ -652,6 +656,37 @@ function BotModelsPanel({
       </CardHeader>
 
       <CardContent className="space-y-4">
+        {governance?.fullAutoEligibility ? (
+          <div
+            className="rounded-2xl border p-4"
+            style={{
+              borderColor: governance.fullAutoEligibility.eligible ? 'var(--success-500)' : 'var(--warning-500)',
+              backgroundColor: governance.fullAutoEligibility.eligible
+                ? 'color-mix(in srgb, var(--success-500) 12%, transparent)'
+                : 'color-mix(in srgb, var(--warning-500) 12%, transparent)',
+            }}
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant={governance.fullAutoEligibility.eligible ? 'success' : 'warning'}>
+                {governance.fullAutoEligibility.eligible ? 'full_auto elegível' : 'full_auto bloqueado'}
+              </Badge>
+              {governance.championModelVersion && <Badge variant="default">{governance.championModelVersion}</Badge>}
+            </div>
+            <p className="mt-3 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+              {governance.fullAutoEligibility.eligible
+                ? 'O champion atual já cumpre os critérios formais para operação real.'
+                : 'O champion atual ainda não pode abrir novas posições em full_auto.'}
+            </p>
+            {!governance.fullAutoEligibility.eligible && governance.fullAutoEligibility.blockers.length > 0 && (
+              <div className="mt-3 space-y-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                {governance.fullAutoEligibility.blockers.map((blocker) => (
+                  <p key={blocker}>- {blocker}</p>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
+
         {activeModel ? (
           <div className="rounded-2xl border border-success-500/25 bg-success-500/10 p-4">
             <div className="flex flex-wrap items-center gap-2">
@@ -673,6 +708,33 @@ function BotModelsPanel({
             Ainda não há champion definido para este bot.
           </div>
         )}
+
+        {recommendedPromotion ? (
+          <div className="rounded-2xl border border-primary-500/25 bg-primary-500/10 p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="primary">Promoção recomendada</Badge>
+                  <Badge variant="default">{recommendedPromotion.modelVersion}</Badge>
+                </div>
+                <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                  O challenger {recommendedPromotion.modelVersion} superou o champion atual pelos critérios configurados.
+                </p>
+                <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  {recommendedPromotion.reason}
+                </p>
+              </div>
+
+              <Button
+                size="sm"
+                onClick={() => void onPromote(recommendedPromotion.artifactId)}
+                isLoading={isPromoting}
+              >
+                Promover recomendado
+              </Button>
+            </div>
+          </div>
+        ) : null}
 
         {isLoading ? (
           <div className="space-y-3">
@@ -707,6 +769,33 @@ function BotModelsPanel({
                       F1 {typeof model.evaluation.f1Score === 'number' ? formatPercent(model.evaluation.f1Score) : 'N/A'} ·
                       best epoch {model.evaluation.bestEpoch ?? 'N/A'}
                     </div>
+                    {model.paperReadiness && (
+                      <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                        Paper {model.paperReadiness.evaluatedSignals}/{model.paperReadiness.minimumEvaluatedSignals} sinais ·
+                        acurácia {formatPercent(model.paperReadiness.accuracyPercent)} ·
+                        retorno {formatPercent(model.paperReadiness.averageStrategyReturnPercent)} ·
+                        edge {formatPercent(model.paperReadiness.averageEdgePercent)}
+                      </div>
+                    )}
+                    {model.decisionSummary && (
+                      <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                        {model.decisionSummary.evaluated} sinais avaliados ·
+                        pendentes {model.decisionSummary.pending} ·
+                        confiança média {formatPercent(model.decisionSummary.averageConfidence)}
+                      </div>
+                    )}
+                    {model.operationalReadiness && !model.operationalReadiness.modelReady && (
+                      <div className="text-xs" style={{ color: 'var(--warning-500)' }}>
+                        {model.operationalReadiness.operationalBlockReason ?? 'Artefato ainda não está pronto para operação contínua.'}
+                      </div>
+                    )}
+                    {model.paperReadiness && model.paperReadiness.blockers.length > 0 && (
+                      <div className="space-y-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                        {model.paperReadiness.blockers.slice(0, 2).map((blocker) => (
+                          <p key={blocker}>- {blocker}</p>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex flex-wrap gap-2">
@@ -797,6 +886,11 @@ function CreateBotModal({
       return
     }
 
+    if (executionMode === 'full_auto') {
+      toast.error('Crie a instância em paper ou semi_auto. O modo full_auto só é liberado após champion válido e paper readiness suficiente.')
+      return
+    }
+
     await onCreate({
       templateId: selectedTemplateId,
       name: name.trim(),
@@ -862,7 +956,7 @@ function CreateBotModal({
           </SectionField>
 
           <div className="grid gap-4 md:grid-cols-2">
-            <SectionField label="Modo">
+            <SectionField label="Modo" description="Novas instâncias precisam nascer em paper ou semi_auto e só migram para full_auto depois da validação do champion.">
               <Select value={executionMode} onValueChange={(value) => setExecutionMode(value as BotExecutionMode)}>
                 <SelectTrigger><SelectValue placeholder="Modo" /></SelectTrigger>
                 <SelectContent>
@@ -1012,6 +1106,7 @@ export function BotsPage() {
     if (confidences.length === 0) return 'N/A'
     return `${Math.round(Math.max(...confidences))}%`
   }, [bots])
+  const fullAutoEligibility = botModels?.governance.fullAutoEligibility
 
   const handleCreateBot = async (payload: CreateBotPayload) => {
     const createdBot = await createBotMutation.mutateAsync(payload)
@@ -1022,6 +1117,11 @@ export function BotsPage() {
   const handleSaveBot = async () => {
     if (!selectedBotId || !formState.name.trim()) {
       toast.error('Selecione um bot e preencha o nome antes de salvar')
+      return
+    }
+
+     if (formState.executionMode === 'full_auto' && fullAutoEligibility && !fullAutoEligibility.eligible) {
+      toast.error(fullAutoEligibility.blockers[0] ?? 'O champion atual ainda não está apto para full_auto')
       return
     }
 
@@ -1247,7 +1347,12 @@ export function BotsPage() {
                       </SectionField>
 
                       <div className="grid gap-4 md:grid-cols-2">
-                        <SectionField label="Modo de execução">
+                        <SectionField
+                          label="Modo de execução"
+                          description={formState.executionMode === 'full_auto' && fullAutoEligibility && !fullAutoEligibility.eligible
+                            ? fullAutoEligibility.blockers[0]
+                            : 'paper executa na carteira local, semi_auto só sugere e full_auto exige champion validado em paper.'}
+                        >
                           <Select value={formState.executionMode} onValueChange={(value) => setFormState((current) => ({ ...current, executionMode: value as BotExecutionMode }))}>
                             <SelectTrigger><SelectValue placeholder="Modo" /></SelectTrigger>
                             <SelectContent>
@@ -1467,6 +1572,7 @@ export function BotsPage() {
             <BotModelsPanel
               botName={botDetail.name}
               models={botModels?.items}
+              governance={botModels?.governance}
               isLoading={isLoadingModels}
               isPromoting={isPromotingModel}
               isArchiving={isArchivingModel}

@@ -135,6 +135,8 @@ REGRAS:
    - consultar fills/trades quando disponíveis
    - recalcular quantity, total, fee, feeCurrency e feeRateApplied
    - atualizar syncedAt
+   - se a ordem reconciliada virar uma venda executada, recalcular profitBrl e
+     profitPercent usando a mesma política FIFO aplicada às ordens locais
 
 4. Se a ordem estiver parcialmente executada:
    - quantity representa o volume já executado
@@ -145,6 +147,8 @@ REGRAS:
    - sincronizar saldos locais
    - registrar snapshot em BalanceHistory
    - calcular FIFO/lucro quando for venda
+   - renovar o snapshot mesmo sem mudança material de valor quando a última amostra
+     estiver antiga demais para sustentar o gráfico recente de performance
 
 6. Se a ordem for cancelada ou rejeitada:
    - encerrar o ciclo local da ordem

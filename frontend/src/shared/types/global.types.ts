@@ -97,7 +97,7 @@ export interface ApiResponse<T> {
     riskManagement: {
       stopLossPercent: number
       takeProfitPercent: number
-      leverage: number
+      leverage: 1
       maxTradeAmount: number
       maxTradeAmountUnit: 'USDT' | 'percent'
     }
@@ -126,15 +126,15 @@ export interface ApiResponse<T> {
       excludedAssets: string[]
     }
     advanced: {
-      mode: 'spot' | 'futures'
+      mode: 'spot'
       orderType: 'market' | 'limit'
       slippagePercent: number
     }
   }
   
   // Configuração de API keys
-  export interface ExchangeApiKeys {
-    exchange: 'binance' | 'kucoin' | 'bybit'
+export interface ExchangeApiKeys {
+    exchange: 'binance'
     apiKey: string
     secretKey: string
   }

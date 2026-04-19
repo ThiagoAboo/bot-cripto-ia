@@ -60,7 +60,7 @@ REGRAS DE VALIDAÇÃO:
 |-------|-------|------|
 | stopLossPercent | 0 < valor <= 50 | "Stop-loss deve ser entre 0 e 50%" |
 | takeProfitPercent | 0 < valor <= 100 | "Take-profit deve ser entre 0 e 100%" |
-| leverage | 1 <= valor <= 125 | "Alavancagem deve ser entre 1 e 125x" |
+| leverage | valor deve ser exatamente 1 | "Alavancagem deve permanecer em 1x no runtime spot atual" |
 | maxTradeAmount | > 0 | "Valor máximo deve ser positivo" |
 | discountUsdtPercent | 0 <= valor <= 1 | "Desconto USDT deve ser entre 0 e 1%" |
 | discountBnbPercent | 0 <= valor <= 1 | "Desconto BNB deve ser entre 0 e 1%" |
@@ -78,6 +78,8 @@ REGRAS DE VALIDAÇÃO:
 | strategies | JSON válido com estrutura correta | "Estratégias inválidas" |
 
 REGRAS ADICIONAIS:
+- exchange deve permanecer em "binance" até existir integração operacional homologada para outras corretoras
+- mode deve permanecer em "spot" até existir suporte real para outro mercado
 - Se reserveBnbForFeesEnabled = true, então minBnbBalance deve ser maior que zero
 - BNB pode estar em allowedPairs, mas a reserva mínima deve continuar protegida
 - excludedAssets nunca pode ser auto-incluído pelo pairDiscovery

@@ -12,6 +12,14 @@ export const TRANSACTIONS_QUERY_KEYS = {
   pairs: ['transactions', 'pairs'],
 }
 
+async function invalidateTransactionContext(queryClient: ReturnType<typeof useQueryClient>, orderId?: string) {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: TRANSACTIONS_QUERY_KEYS.transactions }),
+    queryClient.invalidateQueries({ queryKey: TRANSACTIONS_QUERY_KEYS.balance }),
+    ...(orderId ? [queryClient.invalidateQueries({ queryKey: TRANSACTIONS_QUERY_KEYS.transaction(orderId) })] : []),
+  ])
+}
+
 export function useTransactions(filters: OrderFilters) {
   return useQuery({
     queryKey: [...TRANSACTIONS_QUERY_KEYS.transactions, filters],
@@ -33,9 +41,8 @@ export function useCreateOrder() {
 
   return useMutation({
     mutationFn: (order: ManualOrderRequest) => transactionsService.createOrder(order),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: TRANSACTIONS_QUERY_KEYS.transactions })
-      queryClient.invalidateQueries({ queryKey: TRANSACTIONS_QUERY_KEYS.balance })
+    onSuccess: async () => {
+      await invalidateTransactionContext(queryClient)
       toast.success('Ordem enviada com sucesso!')
     },
     onError: (error: Error) => {
@@ -49,12 +56,48 @@ export function useCancelOrder() {
 
   return useMutation({
     mutationFn: (orderId: string) => transactionsService.cancelOrder(orderId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: TRANSACTIONS_QUERY_KEYS.transactions })
+    onSuccess: async (_, orderId) => {
+      await invalidateTransactionContext(queryClient, orderId)
       toast.success('Ordem cancelada com sucesso')
     },
     onError: (error: Error) => {
       toast.error(`Erro ao cancelar ordem: ${error.message}`)
+    },
+  })
+}
+
+export function useReconcileOrder() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (orderId: string) => transactionsService.reconcileOrder(orderId),
+    onSuccess: async (_, orderId) => {
+      await invalidateTransactionContext(queryClient, orderId)
+      toast.success('Ordem reconciliada com sucesso')
+    },
+    onError: (error: Error) => {
+      toast.error(`Erro ao reconciliar ordem: ${error.message}`)
+    },
+  })
+}
+
+export function useReconcileOrders() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: () => transactionsService.reconcileOpenOrders(),
+    onSuccess: async (items) => {
+      await invalidateTransactionContext(queryClient)
+
+      if (items.length === 0) {
+        toast.success('Nenhuma ordem externa pendente para reconciliar')
+        return
+      }
+
+      toast.success(`${items.length} ordem(ns) reconciliada(s) com sucesso`)
+    },
+    onError: (error: Error) => {
+      toast.error(`Erro ao reconciliar ordens: ${error.message}`)
     },
   })
 }

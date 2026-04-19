@@ -208,7 +208,7 @@ interface BotParameters {
     minBnbBalance: number
   }
   advanced: {
-    mode: 'spot' | 'futures'
+    mode: 'spot'
     orderType: 'market' | 'limit'
     slippagePercent: number
   }
@@ -307,14 +307,14 @@ OBJETIVO: Configurar bots, APIs e parâmetros.
 
 SEÇÕES:
 1. Chaves de API
-   - Exchange (Binance, KuCoin, Bybit)
+   - Exchange (Binance)
    - API Key e Secret Key
    - Teste de conexão
 
 2. Gerenciamento de Risco
    - Stop-loss (%)
    - Take-profit (%)
-   - Alavancagem
+   - Alavancagem fixa em 1x
    - Quantidade máxima por trade
 
 3. Moedas Permitidas
@@ -327,9 +327,16 @@ SEÇÕES:
    - Saldo mínimo BNB
 
 5. Opções Avançadas
-   - Modo (Spot/Futuros)
+   - Modo (Spot)
    - Tipo de ordem (Market/Limit)
    - Slippage tolerado (%)
+
+OBSERVAÇÃO OPERACIONAL:
+- O frontend e o backend atuais operam somente em `spot`
+- A integração operacional atual está homologada apenas para `binance`
+- `leverage` deve permanecer em `1` até existir execução real fora de spot
+- `futures` não deve ser exposto como opção ativa até existir execução real,
+  reconciliação e regras de risco dedicadas para esse mercado
 
 6. Configuração por Estratégia
    - Parâmetros específicos para cada tipo de estratégia
@@ -389,7 +396,7 @@ COMPONENTES:
 
 3. Saldo Disponível
    - Saldo por moeda
-   - Valores disponíveis e reservados
+   - Valores disponíveis, reservados e total em carteira
 
 4. Formulário de Ordem Manual
    - Par, Tipo (Compra/Venda)
@@ -406,6 +413,9 @@ COMPONENTES:
    - Todas as transações (manuais e automáticas)
    - Paginação
    - Exportação para CSV
+   - Ações para reconciliar ordens externas em aberto
+   - Ações para cancelar ordens pendentes/parcialmente executadas
+   - Exibição de status bruto da exchange, ordem externa e última sincronização
 
 
 6.6 LOG / TRACE GERAL

@@ -91,6 +91,41 @@ const {
           configFingerprint: 'cfg-1',
           metricsFingerprint: 'met-1',
         },
+        decisionSummary: {
+          total: 42,
+          pending: 2,
+          evaluated: 40,
+          correct: 25,
+          accuracyPercent: 62.5,
+          averageConfidence: 71,
+          averageMarketReturnPercent: 0.18,
+          averageStrategyReturnPercent: 0.31,
+          bestEdgePercent: 1.8,
+          worstEdgePercent: -0.9,
+        },
+        paperReadiness: {
+          readyForFullAuto: true,
+          evaluatedSignals: 40,
+          pendingSignals: 2,
+          minimumEvaluatedSignals: 30,
+          accuracyPercent: 62.5,
+          minimumAccuracyPercent: 55,
+          averageStrategyReturnPercent: 0.31,
+          minimumAverageStrategyReturnPercent: 0.15,
+          averageEdgePercent: 0.09,
+          minimumAverageEdgePercent: 0,
+          maxObservedDrawdownPercent: 4.8,
+          maximumDrawdownPercent: 12,
+          maxConsecutiveIncorrect: 3,
+          currentConsecutiveIncorrect: 0,
+          maximumConsecutiveIncorrect: 5,
+          blockers: [],
+        },
+        operationalReadiness: {
+          hasModel: true,
+          modelReady: true,
+          hasEnginePackage: true,
+        },
       },
       {
         id: 'model-2',
@@ -117,8 +152,80 @@ const {
           configFingerprint: 'cfg-2',
           metricsFingerprint: 'met-2',
         },
+        decisionSummary: {
+          total: 44,
+          pending: 1,
+          evaluated: 43,
+          correct: 29,
+          accuracyPercent: 67.44,
+          averageConfidence: 74,
+          averageMarketReturnPercent: 0.2,
+          averageStrategyReturnPercent: 0.41,
+          bestEdgePercent: 2.1,
+          worstEdgePercent: -0.6,
+        },
+        paperReadiness: {
+          readyForFullAuto: true,
+          evaluatedSignals: 43,
+          pendingSignals: 1,
+          minimumEvaluatedSignals: 30,
+          accuracyPercent: 67.44,
+          minimumAccuracyPercent: 55,
+          averageStrategyReturnPercent: 0.41,
+          minimumAverageStrategyReturnPercent: 0.15,
+          averageEdgePercent: 0.16,
+          minimumAverageEdgePercent: 0,
+          maxObservedDrawdownPercent: 5.1,
+          maximumDrawdownPercent: 12,
+          maxConsecutiveIncorrect: 3,
+          currentConsecutiveIncorrect: 0,
+          maximumConsecutiveIncorrect: 5,
+          blockers: [],
+        },
+        operationalReadiness: {
+          hasModel: true,
+          modelReady: true,
+          hasEnginePackage: true,
+        },
       },
     ],
+    governance: {
+      evaluatedAt: '2026-04-14T09:00:00.000Z',
+      championArtifactId: 'model-1',
+      championModelVersion: 'v1',
+      championModelUrl: '/models/rsi-alpha-v1.json',
+      recommendedPromotion: {
+        artifactId: 'model-2',
+        modelVersion: 'v2',
+        modelUrl: '/models/rsi-alpha-v2.json',
+        reason: 'accuracy +4.94 pp · retorno medio +0.1000% · edge medio +0.0700% · drawdown delta 0.30 pp',
+        accuracyGainPercent: 4.94,
+        averageStrategyReturnGainPercent: 0.1,
+        averageEdgeGainPercent: 0.07,
+        challengerAccuracyPercent: 67.44,
+        championAccuracyPercent: 62.5,
+        challengerAverageStrategyReturnPercent: 0.41,
+        championAverageStrategyReturnPercent: 0.31,
+        challengerAverageEdgePercent: 0.16,
+        championAverageEdgePercent: 0.09,
+      },
+      fullAutoEligibility: {
+        eligible: true,
+        blockers: [],
+        championArtifactId: 'model-1',
+        championModelVersion: 'v1',
+        championModelUrl: '/models/rsi-alpha-v1.json',
+        botModelSynchronized: true,
+      },
+      policy: {
+        modelDecisionWindow: 60,
+        minimumAccuracyGainPercent: 1,
+        minimumAverageStrategyReturnGainPercent: 0.05,
+        minimumAverageEdgeGainPercent: 0,
+        maximumDrawdownDeltaPercent: 2,
+        autoPromotionEnabled: false,
+      },
+    },
   },
   botDetailMock: {
     id: 'bot-1',
@@ -384,8 +491,19 @@ describe('BotsPage', () => {
     expect(await screen.findByText('Governança de Modelos')).toBeInTheDocument()
     expect(screen.getAllByText('Champion').length).toBeGreaterThan(0)
     expect(screen.getByText('Challenger')).toBeInTheDocument()
+    expect(screen.getByText('Promoção recomendada')).toBeInTheDocument()
+    expect(screen.getByText('full_auto elegível')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Promover' }))
+
+    await waitFor(() => {
+      expect(promoteBotModelMutateAsync).toHaveBeenCalledWith({
+        botId: 'bot-1',
+        modelId: 'model-2',
+      })
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Promover recomendado' }))
 
     await waitFor(() => {
       expect(promoteBotModelMutateAsync).toHaveBeenCalledWith({

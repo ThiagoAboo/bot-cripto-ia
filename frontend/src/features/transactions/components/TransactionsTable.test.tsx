@@ -1,10 +1,14 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { TransactionsTable } from './TransactionsTable'
 
 describe('TransactionsTable', () => {
   it('renders partial-fill metadata with requested quantity and external status', () => {
+    const onReconcileOrder = vi.fn().mockResolvedValue(undefined)
+    const onCancelOrder = vi.fn().mockResolvedValue(undefined)
+    const onReconcileAll = vi.fn().mockResolvedValue(undefined)
+
     render(
       <TransactionsTable
         data={{
@@ -40,11 +44,25 @@ describe('TransactionsTable', () => {
         onFiltersChange={vi.fn()}
         displayCurrency="USDT"
         onExport={vi.fn()}
+        onReconcileOrder={onReconcileOrder}
+        onCancelOrder={onCancelOrder}
+        onReconcileAll={onReconcileAll}
       />,
     )
 
     expect(screen.getByText('Parcial')).toBeInTheDocument()
     expect(screen.getByText('de 1.00000000 solicitado')).toBeInTheDocument()
     expect(screen.getByText('Binance: PARTIALLY_FILLED')).toBeInTheDocument()
+    expect(screen.getByText('Ordem externa #321')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Reconciliar$/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Cancelar/i })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Reconciliar$/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Cancelar/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Reconciliar pendentes/i }))
+
+    expect(onReconcileOrder).toHaveBeenCalledWith('tx-partial-1')
+    expect(onCancelOrder).toHaveBeenCalledWith(expect.objectContaining({ id: 'tx-partial-1' }))
+    expect(onReconcileAll).toHaveBeenCalledTimes(1)
   })
 })

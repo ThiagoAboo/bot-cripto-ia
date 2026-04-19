@@ -518,7 +518,7 @@ export async function executeConfigurationReset(
   if (paperBalance) {
     await recordBalanceHistorySnapshot(userId, [{
       currency: paperBalance.currency,
-      available: paperBalance.amount,
+      total: paperBalance.amount,
     }]).catch(() => undefined)
   }
 

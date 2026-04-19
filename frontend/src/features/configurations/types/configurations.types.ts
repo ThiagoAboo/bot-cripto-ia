@@ -1,7 +1,7 @@
 // Tipos específicos da tela de Configurações
 
 export interface ExchangeApiKeys {
-    exchange: 'binance' | 'kucoin' | 'bybit'
+    exchange: 'binance'
     apiKey: string
     secretKey: string
   }
@@ -9,7 +9,7 @@ export interface ExchangeApiKeys {
   export interface RiskManagement {
     stopLossPercent: number
     takeProfitPercent: number
-    leverage: number
+    leverage: 1
     maxTradeAmount: number
     maxTradeAmountUnit: 'USDT' | 'percent'
   }
@@ -168,8 +168,8 @@ export interface ConfigurationResetResult {
     configuration: Configurations
   }
   
-  export interface AdvancedOptions {
-    mode: 'spot' | 'futures'
+export interface AdvancedOptions {
+    mode: 'spot'
     orderType: 'market' | 'limit'
     slippagePercent: number
   }

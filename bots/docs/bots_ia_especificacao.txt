@@ -891,7 +891,38 @@ Regras operacionais:
 Objetivo:
 - permitir promoção controlada após alguns dias em `paper`
 - comparar versões do modelo sem perder rastreabilidade
-- suportar futura política `champion/challenger` automática
+- expor uma política objetiva para recomendação de promoção e liberação de `full_auto`
+
+Estado operacional atual:
+- `GET /api/dashboard/bots/{id}/models` retorna o catálogo de artefatos enriquecido com:
+  - `decisionSummary`
+  - `paperReadiness`
+  - `operationalReadiness`
+  - `governance.recommendedPromotion`
+  - `governance.fullAutoEligibility`
+  - `governance.policy`
+- a promoção recomendada é apenas sugestão operacional; a troca efetiva de
+  `champion` continua controlada por ação explícita
+- ao criar ou atualizar um bot para `full_auto`, o backend deve validar se:
+  - existe `champion` válido
+  - o `champion` está pronto operacionalmente
+  - o `champion` atingiu o placar mínimo em `paper`
+  - o `modelUrl` ativo do bot está sincronizado com o `champion`
+- se um bot já estiver em `full_auto` e perder elegibilidade, o runner deve
+  bloquear novas compras, registrar o motivo e manter saídas defensivas
+  disponíveis
+- os thresholds da política devem ser configuráveis por ambiente:
+  - `BOT_GOVERNANCE_MODEL_DECISIONS_LIMIT`
+  - `BOT_GOVERNANCE_MIN_ACCURACY_GAIN_PERCENT`
+  - `BOT_GOVERNANCE_MIN_AVG_STRATEGY_RETURN_GAIN_PERCENT`
+  - `BOT_GOVERNANCE_MIN_AVG_EDGE_GAIN_PERCENT`
+  - `BOT_GOVERNANCE_MAX_DRAWDOWN_DELTA_PERCENT`
+  - `BOT_GOVERNANCE_AUTO_PROMOTE`
+- quando `BOT_GOVERNANCE_AUTO_PROMOTE=true`, o runner deve promover
+  automaticamente o challenger recomendado antes da análise do ciclo, atualizando
+  o `champion` e o `modelUrl` operacional do bot
+- a promoção automática continua auditável e deve registrar o motivo consolidado
+  da recomendação no artefato promovido
 
 10.4 MÉTRICAS DE AVALIAÇÃO
 
@@ -1274,7 +1305,104 @@ Regras:
 - Deve atualizar `currentPair`, `recommendedAction`, `confidence` e `lastAnalysis`
   do bot para o dashboard refletir a leitura mais recente
 
-13.8 CONSULTAR STATUS DO WORKER DOS BOTS
+13.8 CONSULTAR CATALOGO DE MODELOS E GOVERNANCA DO BOT
+
+GET /api/dashboard/bots/{id}/models
+
+Objetivo:
+- Expor artefatos `champion`, `challenger` e `archived` com contexto suficiente
+  para avaliacao operacional
+- Guiar promocao de modelos e habilitacao de `full_auto` com criterios
+  verificaveis
+
+Response:
+{
+  "success": true,
+  "data": {
+    "botId": "bot_macd_01",
+    "items": [
+      {
+        "id": "artifact_001",
+        "botId": "bot_macd_01",
+        "modelVersion": "macd-rf-v4",
+        "modelUrl": "/models/bot_macd_01/macd-rf-v4",
+        "fingerprint": "fp_abc123",
+        "architecture": "random_forest",
+        "validationStrategy": "walk_forward",
+        "forecastHorizonCandles": 6,
+        "governanceRole": "champion",
+        "isActive": true,
+        "createdAt": "2026-04-18T20:10:00.000Z",
+        "updatedAt": "2026-04-18T20:10:00.000Z",
+        "evaluation": {
+          "accuracyPercent": 61.4,
+          "f1Score": 0.58,
+          "logLoss": 0.61,
+          "walkForwardFolds": 5
+        },
+        "reproducibility": {
+          "configFingerprint": "cfg_123",
+          "datasetFingerprint": "ds_456",
+          "featureFingerprint": "ft_789"
+        },
+        "decisionSummary": {
+          "sampleSize": 60,
+          "evaluatedCount": 48,
+          "accuracyPercent": 63.54
+        },
+        "paperReadiness": {
+          "readyForFullAuto": true,
+          "accuracyPercent": 63.54,
+          "averageStrategyReturnPercent": 0.84,
+          "averageEdgePercent": 0.19,
+          "blockers": []
+        },
+        "operationalReadiness": {
+          "hasModel": true,
+          "modelReady": true,
+          "hasEnginePackage": true
+        }
+      }
+    ],
+    "governance": {
+      "evaluatedAt": "2026-04-19T11:20:00.000Z",
+      "championArtifactId": "artifact_001",
+      "championModelVersion": "macd-rf-v4",
+      "championModelUrl": "/models/bot_macd_01/macd-rf-v4",
+      "recommendedPromotion": {
+        "artifactId": "artifact_002",
+        "modelVersion": "macd-rf-v5",
+        "reason": "accuracy +2.1 pp · retorno medio +0.1200% · edge medio +0.0300% · drawdown delta 0.5 pp"
+      },
+      "fullAutoEligibility": {
+        "eligible": true,
+        "blockers": [],
+        "championArtifactId": "artifact_001",
+        "botModelSynchronized": true
+      },
+      "policy": {
+        "modelDecisionWindow": 60,
+        "minimumAccuracyGainPercent": 1,
+        "minimumAverageStrategyReturnGainPercent": 0.05,
+        "minimumAverageEdgeGainPercent": 0,
+        "maximumDrawdownDeltaPercent": 2,
+        "autoPromotionEnabled": false
+      }
+    }
+  }
+}
+
+Regras:
+- cada item deve trazer metadados de avaliacao, reproducao e prontidao
+  operacional do artefato
+- `recommendedPromotion` nao promove sozinho; serve para orientar a troca
+  controlada de `champion`
+- `fullAutoEligibility.blockers` deve ser usado pelo frontend e pela operacao
+  para explicar por que o bot ainda nao pode entrar em `full_auto`
+- `policy` deve refletir os thresholds efetivos carregados pelo backend no
+  momento da avaliacao
+
+13.9 CONSULTAR STATUS DO WORKER DOS BOTS
 
 GET /api/dashboard/bots/worker-status
 
@@ -1406,6 +1534,13 @@ Regras obrigatorias:
 - esse placar deve ser exposto como `paperReadiness`, com `readyForFullAuto` e uma
   lista objetiva de `blockers`, para que a promoção para operação real seja guiada por
   critérios verificáveis e não só por feeling
+- a troca para `full_auto` deve falhar se `fullAutoEligibility.eligible = false`
+  no momento da criação ou atualização do bot
+- se o bot já estiver em `full_auto` e a elegibilidade cair durante a operação,
+  novas compras devem ser bloqueadas com decisão `skipped` e evento
+  `bot_cycle_full_auto_governance_blocked`
+- vendas defensivas e saídas de risco podem continuar habilitadas mesmo quando
+  novas entradas estiverem temporariamente bloqueadas por governança
 - se a exchange responder `NEW` ou `PARTIALLY_FILLED`, o runner deve persistir a
   ordem como `submitted`, bloquear novas entradas para o mesmo bot e aguardar
   a reconciliação antes de abrir outra posição

@@ -1,4 +1,4 @@
-import { act, render, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const {
@@ -7,6 +7,10 @@ const {
   offMock,
   resetSocketListeners,
   emitSocketEvent,
+  reconcileOrderMutateAsync,
+  reconcileOrdersMutateAsync,
+  cancelOrderMutateAsync,
+  confirmMock,
   transactionsQueryKeys,
 } = vi.hoisted(() => {
   const listeners = new Map<string, Set<(payload?: unknown) => void>>()
@@ -34,6 +38,10 @@ const {
     emitSocketEvent: (event: string, payload?: unknown) => {
       listeners.get(event)?.forEach((callback) => callback(payload))
     },
+    reconcileOrderMutateAsync: vi.fn().mockResolvedValue(undefined),
+    reconcileOrdersMutateAsync: vi.fn().mockResolvedValue(undefined),
+    cancelOrderMutateAsync: vi.fn().mockResolvedValue(undefined),
+    confirmMock: vi.fn().mockReturnValue(true),
     transactionsQueryKeys: {
       transactions: ['transactions'],
       balance: ['transactions', 'balance'],
@@ -85,6 +93,18 @@ vi.mock('./hooks/useTransactions', () => ({
     data: { rate: 5 },
     isLoading: false,
   }),
+  useReconcileOrder: () => ({
+    mutateAsync: reconcileOrderMutateAsync,
+    isPending: false,
+  }),
+  useReconcileOrders: () => ({
+    mutateAsync: reconcileOrdersMutateAsync,
+    isPending: false,
+  }),
+  useCancelOrder: () => ({
+    mutateAsync: cancelOrderMutateAsync,
+    isPending: false,
+  }),
 }))
 
 vi.mock('./services/transactions.service', () => ({
@@ -114,7 +134,27 @@ vi.mock('./components/TransactionFilters', () => ({
 }))
 
 vi.mock('./components/TransactionsTable', () => ({
-  TransactionsTable: () => <div>TransactionsTable</div>,
+  TransactionsTable: (props: any) => (
+    <div>
+      <button type="button" onClick={() => void props.onReconcileAll()}>
+        Reconcile All
+      </button>
+      <button type="button" onClick={() => void props.onReconcileOrder('order-1')}>
+        Reconcile One
+      </button>
+      <button
+        type="button"
+        onClick={() => void props.onCancelOrder({
+          id: 'order-2',
+          pair: 'BTC/USDT',
+          externalOrderId: 'ext-123',
+        })}
+      >
+        Cancel One
+      </button>
+      <div>TransactionsTable</div>
+    </div>
+  ),
 }))
 
 vi.mock('../../shared/components/ui/Skeleton', () => ({
@@ -123,12 +163,19 @@ vi.mock('../../shared/components/ui/Skeleton', () => ({
 
 import TransacoesPage from './TransacoesPage'
 
+vi.stubGlobal('confirm', confirmMock)
+
 describe('TransacoesPage realtime updates', () => {
   beforeEach(() => {
     invalidateQueries.mockClear()
     onMock.mockClear()
     offMock.mockClear()
     resetSocketListeners()
+    reconcileOrderMutateAsync.mockClear()
+    reconcileOrdersMutateAsync.mockClear()
+    cancelOrderMutateAsync.mockClear()
+    confirmMock.mockReturnValue(true)
+    confirmMock.mockClear()
   })
 
   it('invalidates transactions and balance when a new order arrives', async () => {
@@ -159,5 +206,21 @@ describe('TransacoesPage realtime updates', () => {
 
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: transactionsQueryKeys.transactions })
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: transactionsQueryKeys.balance })
+  })
+
+  it('delegates reconcile and cancel actions from the table', async () => {
+    render(<TransacoesPage />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reconcile All' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Reconcile One' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel One' }))
+
+    await waitFor(() => {
+      expect(reconcileOrdersMutateAsync).toHaveBeenCalledTimes(1)
+    })
+
+    expect(reconcileOrderMutateAsync).toHaveBeenCalledWith('order-1')
+    expect(cancelOrderMutateAsync).toHaveBeenCalledWith('order-2')
+    expect(confirmMock).toHaveBeenCalled()
   })
 })

@@ -11,7 +11,7 @@ interface AdvancedOptionsCardProps {
 }
 
 export function AdvancedOptionsCard({ data, onChange }: AdvancedOptionsCardProps) {
-  const handleChange = (field: keyof AdvancedOptions, value: string | number) => {
+  const handleChange = (field: 'orderType' | 'slippagePercent', value: string | number) => {
     onChange({ ...data, [field]: value })
   }
 
@@ -32,17 +32,14 @@ export function AdvancedOptionsCard({ data, onChange }: AdvancedOptionsCardProps
               <Zap className="w-4 h-4 text-warning" />
               Modo de operação
             </Label>
-            <Select value={data.mode} onValueChange={(value) => handleChange('mode', value)}>
-              <SelectTrigger>
-                <SelectValue placeholder="Selecione o modo" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="spot">Spot (à vista)</SelectItem>
-                <SelectItem value="futures">Futuros</SelectItem>
-              </SelectContent>
-            </Select>
+            <div
+              id="mode"
+              className="app-input flex h-11 w-full items-center rounded-xl px-3 text-sm shadow-sm"
+            >
+              Spot (à vista)
+            </div>
             <p className="text-xs text-gray-500">
-              Spot: compra/venda real | Futuros: operações com alavancagem
+              O motor operacional atual executa apenas ordens spot. Futuros ainda não fazem parte do fluxo real do produto.
             </p>
           </div>
 
