@@ -7,6 +7,7 @@ RUN apt-get update \
 WORKDIR /workspace/backend
 
 COPY backend/package*.json ./
+COPY backend/tsconfig*.json ./
 COPY backend/prisma ./prisma
 
 RUN npm ci
@@ -29,6 +30,7 @@ ENV PATH="/opt/botenv/bin:${PATH}"
 WORKDIR /workspace/backend
 
 COPY backend/package*.json ./
+COPY backend/tsconfig*.json ./
 COPY backend/prisma ./prisma
 COPY backend/storage ./storage
 COPY bots ../bots
@@ -37,7 +39,7 @@ COPY --from=builder /workspace/backend/dist ./dist
 
 RUN python3 -m venv /opt/botenv \
   && /opt/botenv/bin/pip install --no-cache-dir -r ../bots/python/requirements.runtime.txt \
-  && /opt/botenv/bin/pip install --no-cache-dir torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu \
+  && /opt/botenv/bin/pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu torch==2.10.0 \
   && ln -sf /opt/botenv/bin/python /usr/local/bin/python
 RUN npx prisma generate
 

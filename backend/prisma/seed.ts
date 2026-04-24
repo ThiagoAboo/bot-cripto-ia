@@ -4,10 +4,12 @@ import { PrismaClient } from '@prisma/client'
 import bcrypt from 'bcryptjs'
 import crypto from 'crypto'
 import path from 'path'
-import { promises as fs } from 'fs'
+import { existsSync, promises as fs } from 'fs'
 
 function normalizeDatabaseUrlForHostExecution(value: string | undefined): string | undefined {
-  if (!value || !value.includes('@postgres:5432')) {
+  const runningInContainer = process.env.DOCKERIZED === 'true' || existsSync('/.dockerenv')
+
+  if (runningInContainer || !value || !value.includes('@postgres:5432')) {
     return value
   }
 
@@ -261,13 +263,22 @@ async function ensureBootstrapArtifact(params: {
   const modelUrl = `/models/${filename}`
   const savedAt = new Date().toISOString()
 
-  const artifact = {
+  const fingerprint = buildFingerprint({
+    sourceFingerprint: template.fingerprint,
+    userId: params.userId,
+    botId: params.botId,
+    modelVersion,
+    savedAt,
+  })
+
+  const artifact: Record<string, any> = {
     ...template,
     savedAt,
     sessionId: `bootstrap-${params.botId}-session`,
     userId: params.userId,
     botId: params.botId,
     modelVersion,
+    fingerprint,
     summary: {
       ...(template.summary ?? {}),
       architecture: template.summary?.architecture ?? 'random_forest',
@@ -299,14 +310,6 @@ async function ensureBootstrapArtifact(params: {
       includedPairs: params.allowedPairs,
     },
   }
-
-  artifact.fingerprint = buildFingerprint({
-    sourceFingerprint: template.fingerprint,
-    userId: params.userId,
-    botId: params.botId,
-    modelVersion,
-    savedAt,
-  })
 
   const absolutePath = path.join(resolveModelStorageDir(), filename)
   await fs.writeFile(absolutePath, JSON.stringify(artifact, null, 2), 'utf-8')

@@ -61,7 +61,7 @@ const runtimeAnalysisSchema = z.object({
     sellSignals: z.number(),
     holdSignals: z.number(),
   }),
-  bestOpportunity: runtimeOpportunitySchema.optional(),
+  bestOpportunity: runtimeOpportunitySchema.nullable().optional(),
   opportunities: z.array(runtimeOpportunitySchema),
   socialSignals: z.array(runtimeSocialSignalSchema),
 })

@@ -1,5 +1,6 @@
 numpy
 pandas
 scikit-learn
-xgboost
+xgboost-cpu==3.2.0
 joblib
+typing-extensions>=4.10.0

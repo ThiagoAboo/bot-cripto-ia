@@ -1,0 +1,180 @@
+{
+  "artifactType": "bot-crypto-ia-training-model",
+  "formatVersion": 4,
+  "fingerprint": "56cda24a7ffa6fabdea59539eb2511b66807c00af7cd8fb8f01f36be560da417",
+  "savedAt": "2026-04-24T19:42:16.846Z",
+  "sessionId": "bootstrap-bot2-session",
+  "userId": "cmnw1v03g0000ow1phrcexg7v",
+  "botId": "bot2",
+  "modelVersion": "bootstrap-bot2-v1",
+  "summary": {
+    "architecture": "random_forest",
+    "dataSource": "bootstrap_seed",
+    "timeframe": "1h",
+    "bestEpoch": 1,
+    "bestValLoss": 0.01,
+    "totalEpochs": 1,
+    "validationStrategy": "holdout"
+  },
+  "evaluation": {
+    "architecture": "random_forest",
+    "architectureLabel": "MACD Momentum Bot Bootstrap Classifier",
+    "validationStrategy": "holdout",
+    "validationSplitPercent": 20,
+    "walkForwardFolds": 0,
+    "labelConfiguration": {
+      "horizonCandles": 5,
+      "buyThresholdPercent": 0.3,
+      "sellThresholdPercent": -0.3
+    },
+    "bestEpoch": 1,
+    "bestValLoss": 0.01,
+    "bestAccuracy": 1,
+    "bestF1Score": 1,
+    "logLoss": 0.01,
+    "benchmark": {
+      "baseline": "buy_and_hold",
+      "baselineAccuracy": 0.33,
+      "modelEdgePercent": 0.67
+    },
+    "confusionMatrix": {
+      "hold": {
+        "hold": 1,
+        "buy": 0,
+        "sell": 0
+      },
+      "buy": {
+        "hold": 0,
+        "buy": 1,
+        "sell": 0
+      },
+      "sell": {
+        "hold": 0,
+        "buy": 0,
+        "sell": 1
+      }
+    }
+  },
+  "reproducibility": {
+    "configFingerprint": "ca0e8d61698d2837f7ac3b4d4f38f93cae3031d49baf8af682d745b13cfdcebb",
+    "metricsFingerprint": "0212d8a7f113eaeb057099e8c9ecb515276e5c420386278eddf7155c45f6cb5a",
+    "featureFingerprint": "69b156e00c248346e21dea8c54903b22805ac02d74da2884300f4f684a533b48",
+    "datasetFingerprint": "098106b7a86e674d7ee56fcaea560bde6d16f84021a9d10759012cb28a451b4b",
+    "validationSplit": 0.2,
+    "walkForwardFolds": 0,
+    "forecastHorizonCandles": 5,
+    "buyThresholdPercent": 0.3,
+    "sellThresholdPercent": -0.3,
+    "includedPairs": [
+      "BTC/USDT",
+      "ETH/USDT",
+      "SOL/USDT",
+      "BNB/USDT",
+      "XRP/USDT"
+    ],
+    "indicators": [
+      "close_return_1",
+      "close_return_3",
+      "close_return_6",
+      "range_pct",
+      "body_pct",
+      "volume_change_1",
+      "sma7_gap",
+      "sma14_gap",
+      "ema7_gap",
+      "rsi_norm",
+      "macd_norm",
+      "bb_position",
+      "volatility_5",
+      "trend_strength",
+      "social_score",
+      "social_mentions_norm"
+    ],
+    "trainingPeriod": {
+      "startDate": "2026-04-01T00:00:00.000Z",
+      "endDate": "2026-04-18T00:00:00.000Z"
+    }
+  },
+  "config": {
+    "architecture": "random_forest",
+    "timeframe": "1h",
+    "includedPairs": [
+      "BTC/USDT",
+      "ETH/USDT",
+      "SOL/USDT",
+      "BNB/USDT",
+      "XRP/USDT"
+    ],
+    "indicators": [
+      "close_return_1",
+      "close_return_3",
+      "close_return_6",
+      "range_pct",
+      "body_pct",
+      "volume_change_1",
+      "sma7_gap",
+      "sma14_gap",
+      "ema7_gap",
+      "rsi_norm",
+      "macd_norm",
+      "bb_position",
+      "volatility_5",
+      "trend_strength",
+      "social_score",
+      "social_mentions_norm"
+    ],
+    "dataSource": "bootstrap_seed",
+    "hyperparameters": {
+      "forecastHorizonCandles": 5,
+      "buyThresholdPercent": 0.3,
+      "sellThresholdPercent": -0.3
+    }
+  },
+  "metrics": [
+    {
+      "epoch": 1,
+      "trainLoss": 0.01,
+      "valLoss": 0.01,
+      "trainAccuracy": 1,
+      "valAccuracy": 1,
+      "precision": 1,
+      "recall": 1,
+      "f1Score": 1,
+      "logLoss": 0.01,
+      "learningRate": 0.001,
+      "duration": 0.1
+    }
+  ],
+  "enginePackage": {
+    "provider": "python",
+    "serializer": "joblib",
+    "architecture": "random_forest",
+    "task": "multiclass_trade_classifier",
+    "inputMode": "tabular",
+    "sequenceLength": 48,
+    "featureNames": [
+      "close_return_1",
+      "close_return_3",
+      "close_return_6",
+      "range_pct",
+      "body_pct",
+      "volume_change_1",
+      "sma7_gap",
+      "sma14_gap",
+      "ema7_gap",
+      "rsi_norm",
+      "macd_norm",
+      "bb_position",
+      "volatility_5",
+      "trend_strength",
+      "social_score",
+      "social_mentions_norm"
+    ],
+    "classes": [
+      "hold",
+      "buy",
+      "sell"
+    ],
+    "payloadBase64": "gASVfQEAAAAAAAB9lCiMBW1vZGVslIwNc2tsZWFybi5kdW1teZSMD0R1bW15Q2xhc3NpZmllcpSTlCmBlH2UKIwIc3RyYXRlZ3mUjAhjb25zdGFudJSMDHJhbmRvbV9zdGF0ZZROaAhLAYwObl9mZWF0dXJlc19pbl+USxCMCV9zdHJhdGVneZRoCIwOc3BhcnNlX291dHB1dF+UiYwKbl9vdXRwdXRzX5RLAYwIY2xhc3Nlc1+UjBNqb2JsaWIubnVtcHlfcGlja2xllIwRTnVtcHlBcnJheVdyYXBwZXKUk5QpgZR9lCiMCHN1YmNsYXNzlIwFbnVtcHmUjAduZGFycmF5lJOUjAVzaGFwZZRLA4WUjAVvcmRlcpSMAUOUjAVkdHlwZZRoFYwFZHR5cGWUk5SMAmk4lImIh5RSlChLA4wBPJROTk5K/////0r/////SwB0lGKMCmFsbG93X21tYXCUiIwbbnVtcHlfYXJyYXlfYWxpZ25tZW50X2J5dGVzlEsQdWIH/////////wAAAAAAAAAAAQAAAAAAAAACAAAAAAAAAJVjAAAAAAAAAIwKbl9jbGFzc2VzX5RLA4wMY2xhc3NfcHJpb3JflGgRKYGUfZQoaBRoF2gYSwOFlGgaaBtoHGgejAJmOJSJiIeUUpQoSwNoIk5OTkr/////Sv////9LAHSUYmgkiGglSxB1Ygv//////////////1VVVVVVVdU/VVVVVVVV1T9VVVVVVVXVP5UpAAAAAAAAAIwQX3NrbGVhcm5fdmVyc2lvbpSMBTEuOC4wlHVijAZzY2FsZXKUTnUu"
+  }
+}

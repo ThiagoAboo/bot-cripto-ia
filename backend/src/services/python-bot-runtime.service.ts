@@ -33,7 +33,7 @@ export interface PythonBotRuntimeResult {
     sellSignals: number
     holdSignals: number
   }
-  bestOpportunity?: PythonBotRuntimeOpportunity
+  bestOpportunity?: PythonBotRuntimeOpportunity | null
   opportunities: PythonBotRuntimeOpportunity[]
   socialSignals: SocialSignal[]
 }
