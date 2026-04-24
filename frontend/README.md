@@ -95,7 +95,7 @@ D – Dependency Inversion Principle
 | Gráficos                     | Recharts + lightweight-charts            |
 | Formulários                  | React Hook Form + Zod                    |
 | Comunicação real-time        | Socket.io-client                         |
-| Mock de API                  | JSON Server                              |
+| Mock de API                  | Apenas auxiliar/legado; operação principal via backend real |
 | Testes                       | Vitest + React Testing Library           |
 | Ícones                       | Lucide React                             |
 
@@ -571,13 +571,13 @@ WS     /ws/training/{sessionId}
 7. [OK] Implementar Transações
 8. [OK] Implementar Log / Trace Geral
 9. [OK] Implementar Login e Perfil
-10. [ ] Integrar com backend real
-11. [ ] Implementar testes unitários
-12. [ ] Otimizar chunks para produção
+10. [OK] Integrar com backend real
+11. [OK] Implementar testes de contrato e interface com Vitest
+12. [ ] Otimizar chunks de gráficos para produção
 
 
 ================================================================================
-CREDENCIAIS DE ACESSO (MODO MOCK)
+CREDENCIAIS DE ACESSO (SEED PADRÃO)
 ===============================================================================
 
 Email: admin@botcrypto.com
@@ -597,8 +597,8 @@ npm run dev
 # Build para produção
 npm run build
 
-# Rodar mock da API (em outro terminal)
-npm run mock-api
+# Rodar backend real (em outro terminal)
+# backend: npm run dev
 
 
 ================================================================================

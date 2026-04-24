@@ -19,42 +19,57 @@ services:
     networks:
       - bot-network
 
-  redis:
-    image: redis:7-alpine
-    container_name: bot-crypto-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    networks:
-      - bot-network
-
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: ./backend/Dockerfile
     container_name: bot-crypto-backend
     environment:
-      - NODE_ENV=production
-      - PORT=3001
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/botcrypto?schema=public
-      - JWT_SECRET=prod-secret-key-change-this-to-a-secure-value
-      - JWT_EXPIRES_IN=24h
-      - CORS_ORIGIN=http://localhost
-      - LOG_LEVEL=info
-      - TRACE_ENABLED=true
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/botcrypto?schema=public
+      JWT_SECRET: prod-secret-key-change-this-to-a-secure-value
+      JWT_EXPIRES_IN: 24h
+      CORS_ORIGIN: http://localhost
+      LOG_LEVEL: info
+      TRACE_ENABLED: true
+      TRAINING_MODEL_STORAGE_DIR: ./storage/models
+      TRAINING_UPLOAD_STORAGE_DIR: ./storage/uploads
+      TRAINING_CHECKPOINT_STORAGE_DIR: ./storage/checkpoints
+      BOT_WORKER_AUTOSTART: "false"
+      BOT_RUNTIME_EXPECT_EXTERNAL_SERVICE: "true"
+      BOT_RUNTIME_SHARED_SECRET: change-this-shared-secret
+      BOT_RUNTIME_BACKEND_BASE_URL: http://backend:3001
+      BOT_RUNTIME_HEARTBEAT_TTL_MS: 60000
+      PYTHON_ML_EXECUTABLE: python
+      PYTHON_BOT_RUNTIME_EXECUTABLE: python
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
+    ports:
+      - "3001:3001"
     volumes:
-      - ./backend/uploads:/app/uploads
-      - ./backend/models:/app/models
+      - ./backend/storage:/workspace/backend/storage
+    restart: unless-stopped
+    networks:
+      - bot-network
+
+  bots:
+    build:
+      context: .
+      dockerfile: ./bots/Dockerfile
+    container_name: bot-crypto-bots
+    environment:
+      BOT_RUNTIME_BACKEND_BASE_URL: http://backend:3001
+      BOT_RUNTIME_SHARED_SECRET: change-this-shared-secret
+      BOT_RUNTIME_SERVICE_NAME: bots_runtime
+      BOT_RUNTIME_TIMEOUT_SECONDS: 30
+      BOT_RUNTIME_LOOP_INTERVAL_MS: 15000
+      BOT_RUNTIME_ENABLE_MAINTENANCE: "true"
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      backend:
+        condition: service_started
     restart: unless-stopped
     networks:
       - bot-network
@@ -77,9 +92,9 @@ services:
       - "8080:8080"
     environment:
       ADMINER_DEFAULT_SERVER: postgres
-    restart: unless-stopped
     depends_on:
       - postgres
+    restart: unless-stopped
     networks:
       - bot-network
 
@@ -89,4 +104,3 @@ networks:
 
 volumes:
   postgres_data:
-  redis_data:

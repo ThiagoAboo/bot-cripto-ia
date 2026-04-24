@@ -2,6 +2,9 @@
 
 import { PrismaClient } from '@prisma/client'
 import bcrypt from 'bcryptjs'
+import crypto from 'crypto'
+import path from 'path'
+import { promises as fs } from 'fs'
 
 function normalizeDatabaseUrlForHostExecution(value: string | undefined): string | undefined {
   if (!value || !value.includes('@postgres:5432')) {
@@ -218,6 +221,102 @@ const BOT_INSTANCES = [
   },
 ]
 
+const BOOTSTRAP_MODEL_SOURCE_FILENAME = 'model_bootstrap_bot1_bootstrap-e2e-v1.h5'
+
+function buildFingerprint(value: unknown): string {
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify(value))
+    .digest('hex')
+}
+
+function resolveModelStorageDir(): string {
+  return path.resolve(__dirname, '..', 'storage', 'models')
+}
+
+function sanitizeSegment(value: string): string {
+  return value
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'artifact'
+}
+
+async function loadBootstrapArtifactTemplate(): Promise<Record<string, any>> {
+  const templatePath = path.join(resolveModelStorageDir(), BOOTSTRAP_MODEL_SOURCE_FILENAME)
+  const raw = await fs.readFile(templatePath, 'utf-8')
+  return JSON.parse(raw) as Record<string, any>
+}
+
+async function ensureBootstrapArtifact(params: {
+  userId: string
+  botId: string
+  botName: string
+  allowedPairs: string[]
+}) {
+  await fs.mkdir(resolveModelStorageDir(), { recursive: true })
+
+  const template = await loadBootstrapArtifactTemplate()
+  const modelVersion = `bootstrap-${sanitizeSegment(params.botId)}-v1`
+  const filename = `model_bootstrap_${sanitizeSegment(params.botId)}_${sanitizeSegment(modelVersion)}.h5`
+  const modelUrl = `/models/${filename}`
+  const savedAt = new Date().toISOString()
+
+  const artifact = {
+    ...template,
+    savedAt,
+    sessionId: `bootstrap-${params.botId}-session`,
+    userId: params.userId,
+    botId: params.botId,
+    modelVersion,
+    summary: {
+      ...(template.summary ?? {}),
+      architecture: template.summary?.architecture ?? 'random_forest',
+      dataSource: 'bootstrap_seed',
+      timeframe: template.summary?.timeframe ?? '1h',
+      bestEpoch: template.summary?.bestEpoch ?? 1,
+      bestValLoss: template.summary?.bestValLoss ?? 0.01,
+      totalEpochs: template.summary?.totalEpochs ?? 1,
+      validationStrategy: template.summary?.validationStrategy ?? 'holdout',
+    },
+    evaluation: {
+      ...(template.evaluation ?? {}),
+      architecture: template.evaluation?.architecture ?? template.summary?.architecture ?? 'random_forest',
+      architectureLabel: `${params.botName} Bootstrap Classifier`,
+      validationStrategy: template.evaluation?.validationStrategy ?? 'holdout',
+    },
+    reproducibility: {
+      ...(template.reproducibility ?? {}),
+      includedPairs: params.allowedPairs,
+      trainingPeriod: template.reproducibility?.trainingPeriod ?? {
+        startDate: '2026-04-01T00:00:00.000Z',
+        endDate: '2026-04-18T00:00:00.000Z',
+      },
+    },
+    config: {
+      ...(template.config ?? {}),
+      timeframe: template.config?.timeframe ?? '1h',
+      dataSource: 'bootstrap_seed',
+      includedPairs: params.allowedPairs,
+    },
+  }
+
+  artifact.fingerprint = buildFingerprint({
+    sourceFingerprint: template.fingerprint,
+    userId: params.userId,
+    botId: params.botId,
+    modelVersion,
+    savedAt,
+  })
+
+  const absolutePath = path.join(resolveModelStorageDir(), filename)
+  await fs.writeFile(absolutePath, JSON.stringify(artifact, null, 2), 'utf-8')
+
+  return {
+    modelUrl,
+    artifact,
+  }
+}
+
 async function main() {
   console.log('🌱 Iniciando seed do banco de dados...')
 
@@ -235,6 +334,7 @@ async function main() {
     }
   })
   console.log(`✅ Usuário criado: ${user.email} (ID: ${user.id})`)
+  const defaultAllowedPairs = JSON.parse(DEFAULT_ALLOWED_PAIRS) as string[]
 
   // Criar configurações padrão
   await prisma.configuration.upsert({
@@ -293,7 +393,7 @@ async function main() {
 
   // Criar instâncias operacionais de bots
   for (const botData of BOT_INSTANCES) {
-    await prisma.bot.upsert({
+    const bot = await prisma.bot.upsert({
       where: { id: botData.id },
       update: {
         userId: user.id,
@@ -317,12 +417,107 @@ async function main() {
         status: 'online'
       }
     })
+
+    const bootstrapArtifact = await ensureBootstrapArtifact({
+      userId: user.id,
+      botId: bot.id,
+      botName: bot.name,
+      allowedPairs: defaultAllowedPairs.slice(0, 5),
+    })
+
+    await prisma.botModelArtifact.updateMany({
+      where: {
+        userId: user.id,
+        botId: bot.id,
+        modelUrl: { not: bootstrapArtifact.modelUrl },
+        governanceRole: { not: 'archived' },
+      },
+      data: {
+        isActive: false,
+        governanceRole: 'challenger',
+        updatedAt: new Date(),
+      },
+    })
+
+    await prisma.botModelArtifact.upsert({
+      where: {
+        botId_modelUrl: {
+          botId: bot.id,
+          modelUrl: bootstrapArtifact.modelUrl,
+        },
+      },
+      update: {
+        userId: user.id,
+        modelVersion: bootstrapArtifact.artifact.modelVersion,
+        fingerprint: bootstrapArtifact.artifact.fingerprint,
+        architecture: bootstrapArtifact.artifact.summary?.architecture ?? null,
+        validationStrategy: bootstrapArtifact.artifact.summary?.validationStrategy ?? null,
+        forecastHorizonCandles: bootstrapArtifact.artifact.reproducibility?.forecastHorizonCandles ?? 5,
+        governanceRole: 'champion',
+        isActive: true,
+        notes: 'Bootstrap artifact seeded for operational readiness',
+        evaluationSummary: JSON.stringify({
+          bestEpoch: bootstrapArtifact.artifact.summary?.bestEpoch ?? 1,
+          bestValLoss: bootstrapArtifact.artifact.summary?.bestValLoss ?? 0.01,
+          accuracyPercent: bootstrapArtifact.artifact.evaluation?.bestAccuracy ?? 1,
+          f1Score: bootstrapArtifact.artifact.evaluation?.bestF1Score ?? 1,
+          logLoss: bootstrapArtifact.artifact.evaluation?.logLoss ?? 0.01,
+          walkForwardFolds: bootstrapArtifact.artifact.evaluation?.walkForwardFolds ?? 0,
+        }),
+        reproducibilitySummary: JSON.stringify({
+          configFingerprint: bootstrapArtifact.artifact.reproducibility?.configFingerprint,
+          metricsFingerprint: bootstrapArtifact.artifact.reproducibility?.metricsFingerprint,
+          datasetFingerprint: bootstrapArtifact.artifact.reproducibility?.datasetFingerprint,
+          featureFingerprint: bootstrapArtifact.artifact.reproducibility?.featureFingerprint,
+        }),
+        promotedAt: new Date(),
+        archivedAt: null,
+        updatedAt: new Date(),
+      },
+      create: {
+        userId: user.id,
+        botId: bot.id,
+        modelVersion: bootstrapArtifact.artifact.modelVersion,
+        modelUrl: bootstrapArtifact.modelUrl,
+        fingerprint: bootstrapArtifact.artifact.fingerprint,
+        architecture: bootstrapArtifact.artifact.summary?.architecture ?? null,
+        validationStrategy: bootstrapArtifact.artifact.summary?.validationStrategy ?? null,
+        forecastHorizonCandles: bootstrapArtifact.artifact.reproducibility?.forecastHorizonCandles ?? 5,
+        governanceRole: 'champion',
+        isActive: true,
+        notes: 'Bootstrap artifact seeded for operational readiness',
+        evaluationSummary: JSON.stringify({
+          bestEpoch: bootstrapArtifact.artifact.summary?.bestEpoch ?? 1,
+          bestValLoss: bootstrapArtifact.artifact.summary?.bestValLoss ?? 0.01,
+          accuracyPercent: bootstrapArtifact.artifact.evaluation?.bestAccuracy ?? 1,
+          f1Score: bootstrapArtifact.artifact.evaluation?.bestF1Score ?? 1,
+          logLoss: bootstrapArtifact.artifact.evaluation?.logLoss ?? 0.01,
+          walkForwardFolds: bootstrapArtifact.artifact.evaluation?.walkForwardFolds ?? 0,
+        }),
+        reproducibilitySummary: JSON.stringify({
+          configFingerprint: bootstrapArtifact.artifact.reproducibility?.configFingerprint,
+          metricsFingerprint: bootstrapArtifact.artifact.reproducibility?.metricsFingerprint,
+          datasetFingerprint: bootstrapArtifact.artifact.reproducibility?.datasetFingerprint,
+          featureFingerprint: bootstrapArtifact.artifact.reproducibility?.featureFingerprint,
+        }),
+        promotedAt: new Date(),
+      },
+    })
+
+    await prisma.bot.update({
+      where: { id: bot.id },
+      data: {
+        modelVersion: bootstrapArtifact.artifact.modelVersion,
+        modelUrl: bootstrapArtifact.modelUrl,
+      },
+    })
   }
   console.log(`✅ Instâncias de bots criadas`)
 
   // Criar saldos iniciais
   const balances = [
     { currency: 'USDT', available: 12500, reserved: 500, total: 13000 },
+    { currency: 'BNB', available: 0.75, reserved: 0.05, total: 0.8 },
     { currency: 'BTC', available: 0.5, reserved: 0, total: 0.5 },
     { currency: 'ETH', available: 3.2, reserved: 0.2, total: 3.4 },
     { currency: 'SOL', available: 50, reserved: 10, total: 60 }
@@ -340,6 +535,7 @@ async function main() {
   // Criar histórico de saldo inicial
   const totalBrl = balances.reduce((sum, b) => {
     if (b.currency === 'USDT') return sum + b.available * 5.85
+    if (b.currency === 'BNB') return sum + b.available * 3200
     if (b.currency === 'BTC') return sum + b.available * 350000
     if (b.currency === 'ETH') return sum + b.available * 18000
     if (b.currency === 'SOL') return sum + b.available * 80

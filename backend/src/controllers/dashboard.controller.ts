@@ -11,6 +11,7 @@ import { isBotWorkerRunning, runBotCycle } from '../services/bot-runner.service'
 import { archiveBotModelArtifact, promoteBotModelArtifact } from '../services/bot-model-governance.service'
 import { getCurrencyRateToBrl } from '../services/market-valuation.service'
 import { recordBalanceHistorySnapshot, recordBalanceHistorySnapshotValue } from '../services/portfolio.service'
+import { DEFAULT_BOT_RUNTIME_SERVICE_NAME, getRuntimeHeartbeatStatus } from '../services/runtime-heartbeat.service'
 import { emitDashboardUpdate } from '../services/socket.service'
 import { logger } from '../utils/logger'
 import { endTrace, startTrace } from '../utils/tracer'
@@ -232,6 +233,10 @@ async function mapBotDetail(bot: BotDetailSource, configurationAllowedPairs: str
     effectiveAllowedPairs,
     allowedPairsSource: instanceAllowedPairs.length > 0 ? 'instance' : 'global',
   }
+}
+
+function isExternalBotRuntimeExpected(): boolean {
+  return process.env.NODE_ENV !== 'test' && process.env.BOT_RUNTIME_EXPECT_EXTERNAL_SERVICE === 'true'
 }
 
 async function ensureBotCanGoOnline(bot: {
@@ -1257,11 +1262,22 @@ export async function getBotWorkerStatus(req: AuthRequest, res: Response): Promi
   startTrace(req.userId!, 'getBotWorkerStatus', 'dashboard')
 
   try {
+    const externalExpected = isExternalBotRuntimeExpected()
+    const heartbeat = externalExpected
+      ? await getRuntimeHeartbeatStatus(DEFAULT_BOT_RUNTIME_SERVICE_NAME)
+      : null
+
     endTrace('getBotWorkerStatus', { userId: req.userId })
     return res.json({
       success: true,
       data: {
-        running: isBotWorkerRunning(),
+        running: externalExpected ? Boolean(heartbeat?.running) : isBotWorkerRunning(),
+        mode: externalExpected ? 'external' : 'internal',
+        serviceName: heartbeat?.serviceName,
+        instanceId: heartbeat?.instanceId,
+        lastHeartbeatAt: heartbeat?.lastHeartbeatAt,
+        ttlMs: heartbeat?.ttlMs,
+        metadata: heartbeat?.metadata,
       },
     })
   } catch (error) {

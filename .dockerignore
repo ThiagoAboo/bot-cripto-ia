@@ -1,0 +1,12 @@
+.git
+.qodo
+**/node_modules
+**/dist
+**/.vite
+**/.pytest_cache
+**/__pycache__
+**/*.pyc
+**/.DS_Store
+frontend/coverage
+backend/coverage
+backend/storage/checkpoints

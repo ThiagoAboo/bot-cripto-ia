@@ -318,6 +318,22 @@ model SocialSignalSnapshot {
 }
 
 // ==============================
+// HEARTBEAT DE RUNTIMES EXTERNOS
+// ==============================
+model RuntimeHeartbeat {
+  id          String   @id @default(cuid())
+  serviceName String
+  instanceId  String
+  metadata    String   @default("{}")
+  heartbeatAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([serviceName, instanceId])
+  @@index([serviceName, heartbeatAt])
+}
+
+// ==============================
 // LOG
 // ==============================
 model Log {

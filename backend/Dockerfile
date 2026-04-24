@@ -1,42 +1,44 @@
-# Build stage
-FROM node:20-alpine AS builder
+FROM node:20-bookworm-slim AS builder
 
-# Install OpenSSL for Prisma
-RUN apk add --no-cache openssl
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+WORKDIR /workspace/backend
 
-# Copy package files
-COPY package*.json ./
-COPY prisma ./prisma/
+COPY backend/package*.json ./
+COPY backend/prisma ./prisma
 
-# Install dependencies
 RUN npm ci
 
-# Generate Prisma client
+COPY backend ./
+
 RUN npx prisma generate
-
-# Copy source code
-COPY . .
-
-# Build TypeScript
 RUN npm run build
 
-# Production stage
-FROM node:20-alpine
 
-# Install OpenSSL for Prisma
-RUN apk add --no-cache openssl
+FROM node:20-bookworm-slim AS runner
 
-WORKDIR /app
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 python3-pip python3-venv openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
-# Copy built files
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/package*.json ./
+ENV PYTHONUNBUFFERED=1
+ENV PATH="/opt/botenv/bin:${PATH}"
 
-# Generate Prisma client for production
+WORKDIR /workspace/backend
+
+COPY backend/package*.json ./
+COPY backend/prisma ./prisma
+COPY backend/storage ./storage
+COPY bots ../bots
+COPY --from=builder /workspace/backend/node_modules ./node_modules
+COPY --from=builder /workspace/backend/dist ./dist
+
+RUN python3 -m venv /opt/botenv \
+  && /opt/botenv/bin/pip install --no-cache-dir -r ../bots/python/requirements.runtime.txt \
+  && /opt/botenv/bin/pip install --no-cache-dir torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu \
+  && ln -sf /opt/botenv/bin/python /usr/local/bin/python
 RUN npx prisma generate
 
 EXPOSE 3001

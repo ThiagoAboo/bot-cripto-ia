@@ -48,7 +48,7 @@ CONCEITO FUNDAMENTAL:
 | Runtime | Node.js | 20+ |
 | Framework | Express | 4.18+ |
 | Linguagem | TypeScript | 5.0+ |
-| Banco de Dados | SQLite (dev) / PostgreSQL (prod) | - |
+| Banco de Dados | PostgreSQL | - |
 | ORM | Prisma | 5.0+ |
 | Autenticação | JWT + bcrypt | - |
 | Validação | Zod | - |
@@ -135,7 +135,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -580,6 +580,9 @@ npm run build
 # Rodar em produção
 npm start
 
+# Subir stack containerizada (Postgres + backend + bots + frontend)
+docker compose up --build
+
 10.1.1 HEALTHCHECKS OPERACIONAIS
 -------------------------------------------------------------------------------
 
@@ -611,8 +614,9 @@ Senha: admin123
 
 Cria automaticamente:
 - Usuário administrador
-- 5 bots (estratégias padrão)
-- Saldos iniciais (USDT, BTC, ETH, SOL)
+- 5 bots especialistas por indicador
+- Artefatos bootstrap operacionais para cada bot
+- Saldos iniciais (USDT, BNB, BTC, ETH, SOL)
 - Configurações padrão
 
 
@@ -631,21 +635,21 @@ Bot (1) ---- (N) TrainingSession
 Bot (1) ---- (N) Trace
 
 
-12. PRÓXIMOS PASSOS PARA IMPLEMENTAÇÃO
+12. ESTADO OPERACIONAL ATUAL
 ===============================================================================
 
-1. [ ] Configurar projeto Node.js + TypeScript
-2. [ ] Configurar Prisma com SQLite
-3. [ ] Implementar autenticação JWT
-4. [ ] Implementar CRUD de configurações
-5. [ ] Implementar endpoints do dashboard
-6. [ ] Implementar WebSocket para tempo real
-7. [ ] Implementar sistema de logs e traces
-8. [ ] Implementar treinamento de IA
-9. [ ] Integrar com exchange real
-10. [ ] Escrever testes
-11. [ ] Documentar com Swagger
-12. [ ] Configurar Docker e deploy
+1. [OK] Backend Node.js + TypeScript operacional
+2. [OK] Prisma e PostgreSQL como base principal
+3. [OK] Autenticação JWT
+4. [OK] CRUD de configurações, resets e backup/restore
+5. [OK] Endpoints do dashboard, transações, treinamento, logs e traces
+6. [OK] Socket.IO para atualização em tempo real
+7. [OK] Runner social/pair discovery e userDataStream da Binance
+8. [OK] Runtime de bots com análise multi-moeda e execução paper/full_auto
+9. [OK] Serviço externo da camada bots via `/api/bot-runtime/*`
+10. [OK] Testes automatizados de contrato e comportamento
+11. [OK] Docker/compose alinhados ao stack atual (backend + bots + frontend + postgres)
+12. [ ] Homologação operacional prolongada em paper antes de liberar full_auto
 
 ================================================================================
 FIM DA DOCUMENTAÇÃO COMPLETA DO BACKEND

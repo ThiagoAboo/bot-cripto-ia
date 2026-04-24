@@ -66,8 +66,10 @@ Diretriz arquitetural alvo:
 - a camada `bots/` deve ser executável de forma independente do frontend e do backend
 - o backend não deve conhecer a implementação interna dos bots
 - os bots devem conhecer apenas contratos HTTP/WebSocket do backend
-- enquanto a migração arquitetural não for concluída integralmente, pode existir modo ponte em que o backend aciona o runtime Python local
-- o objetivo final continua sendo `bots -> backend`, e não `backend -> bots`
+- a implementação atual já possui um serviço Python externo (`bots/python/service.py`)
+  consumindo a fila operacional do backend via `/api/bot-runtime/*`
+- o worker interno do backend pode continuar existindo apenas como fallback/manual mode,
+  mas o fluxo preferencial passa a ser `bots -> backend`
 
 
 ================================================================================
@@ -220,16 +222,19 @@ O bot executa um loop contínuo a cada intervalo configurável:
 6. Registrar traces de cada passo
 
 No estado atual do projeto:
-- existe um worker interno no backend que percorre bots `online`
-- o worker usa cooldown por par/ação e threshold mínimo de confiança
+- existe um serviço Python externo que consome a fila do backend e executa o ciclo
+  dos bots de forma independente
+- o backend expõe o payload pronto do ciclo e aplica o resultado retornado pelo
+  runtime Python
+- o worker interno do backend continua disponível como fallback operacional
+- ambos usam cooldown por par/ação e threshold mínimo de confiança
 - o frontend também pode disparar um ciclo pontual por bot via dashboard
 
 Direção de evolução obrigatória:
-- o loop contínuo deve migrar para a própria camada `bots/`
-- a camada `bots/` deve nascer preparada para:
-  - analisar múltiplas moedas por bot
-  - gerar múltiplos planos por ciclo
-  - limitar execução por risco/configuração sem perder visibilidade das demais oportunidades
+- manter a camada `bots/` como dona do loop contínuo
+- manter cada bot analisando múltiplas moedas por ciclo
+- continuar expondo múltiplos planos por ciclo, mesmo quando só uma execução
+  puder ser enviada por limitação de risco/configuração
 
 2.5 MÁQUINAS DE ESTADO
 
@@ -1157,7 +1162,43 @@ interface BotConfiguration {
 
 Os bots consomem dados do backend através das seguintes APIs:
 
-13.1 CARREGAR CONFIGURAÇÕES
+13.1 ORQUESTRAR LOOP EXTERNO DOS BOTS
+
+GET /api/bot-runtime/queue
+
+Objetivo:
+- listar bots elegíveis para processamento pelo serviço externo
+
+GET /api/bot-runtime/bots/{id}/cycle-context
+
+Objetivo:
+- obter o payload consolidado do ciclo já com:
+  - configurações do bot
+  - allowedPairs efetivos
+  - snapshot de saldos
+  - posições abertas
+  - sinais recentes
+  - bloqueios de full_auto
+  - contexto de risco
+
+POST /api/bot-runtime/bots/{id}/apply-cycle
+
+Objetivo:
+- devolver ao backend o resultado calculado pelo runtime Python para que a
+  decisão, a execução da ordem e a persistência continuem centralizadas no backend
+
+POST /api/bot-runtime/maintenance
+
+Objetivo:
+- disparar manutenção operacional (reconciliação de ordens e avaliação de
+  decisões pendentes) a partir do serviço externo
+
+POST /api/bot-runtime/heartbeat
+
+Objetivo:
+- registrar heartbeat da camada bots para healthcheck e observabilidade
+
+13.2 CARREGAR CONFIGURAÇÕES
 
 GET /api/configurations
 
@@ -1171,7 +1212,7 @@ Response:
   }
 }
 
-13.2 CARREGAR DADOS DE MERCADO
+13.3 CARREGAR DADOS DE MERCADO
 
 GET /api/exchange/candles?pair=BTC/USDT&period=1h&limit=100
 
@@ -1183,7 +1224,7 @@ Response:
   ]
 }
 
-13.3 CARREGAR PREÇO ATUAL
+13.4 CARREGAR PREÇO ATUAL
 
 GET /api/exchange/price?pair=BTC/USDT
 

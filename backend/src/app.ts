@@ -8,6 +8,7 @@ import { Server } from 'socket.io'
 
 import { prisma } from './config/database'
 import { authMiddleware, resolveAuthenticatedUserFromToken, type AuthenticatedUser } from './middleware/auth.middleware'
+import { botRuntimeAuthMiddleware } from './middleware/bot-runtime-auth.middleware'
 import {
   getScopedRoom,
   getSystemLogsRoom,
@@ -24,6 +25,7 @@ import { startTrainingWorker, stopTrainingWorker } from './services/training-wor
 import { logger } from './utils/logger'
 
 import * as authController from './controllers/auth.controller'
+import * as botRuntimeController from './controllers/bot-runtime.controller'
 import * as healthController from './controllers/health.controller'
 import * as dashboardController from './controllers/dashboard.controller'
 import * as configurationsController from './controllers/configurations.controller'
@@ -251,6 +253,12 @@ io.on('connection', (socket) => {
 app.get('/health', healthController.getReadiness)
 app.get('/health/live', healthController.getLiveness)
 app.get('/health/ready', healthController.getReadiness)
+app.get('/api/bot-runtime/heartbeat', botRuntimeAuthMiddleware, botRuntimeController.getBotRuntimeHeartbeat)
+app.post('/api/bot-runtime/heartbeat', botRuntimeAuthMiddleware, botRuntimeController.postBotRuntimeHeartbeat)
+app.get('/api/bot-runtime/queue', botRuntimeAuthMiddleware, botRuntimeController.getBotRuntimeQueue)
+app.post('/api/bot-runtime/maintenance', botRuntimeAuthMiddleware, botRuntimeController.postBotRuntimeMaintenance)
+app.get('/api/bot-runtime/bots/:id/cycle-context', botRuntimeAuthMiddleware, botRuntimeController.getBotRuntimeCycleContext)
+app.post('/api/bot-runtime/bots/:id/apply-cycle', botRuntimeAuthMiddleware, botRuntimeController.applyBotRuntimeCycle)
 
 app.post('/api/auth/login', authController.login)
 app.post('/api/auth/register', authController.register)
@@ -352,6 +360,12 @@ app.use('*', (req, res) => {
 
 const PORT = Number(process.env.PORT || 3001)
 
+function shouldStartInternalBotWorker(): boolean {
+  return process.env.NODE_ENV !== 'test'
+    && process.env.BOT_WORKER_AUTOSTART !== 'false'
+    && process.env.BOT_RUNTIME_EXPECT_EXTERNAL_SERVICE !== 'true'
+}
+
 function logServerStartup(port: number | string): void {
   logger.info('[app] Servidor iniciado', {
     module: 'app',
@@ -417,7 +431,7 @@ export async function startServer(port: number = PORT): Promise<typeof httpServe
       if (process.env.TRAINING_WORKER_AUTOSTART !== 'false' && process.env.NODE_ENV !== 'test') {
         startTrainingWorker()
       }
-      if (process.env.BOT_WORKER_AUTOSTART !== 'false' && process.env.NODE_ENV !== 'test') {
+      if (shouldStartInternalBotWorker()) {
         startBotWorker()
       }
       if (process.env.BINANCE_USER_STREAM_AUTOSTART !== 'false' && process.env.NODE_ENV !== 'test') {

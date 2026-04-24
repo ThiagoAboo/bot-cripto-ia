@@ -2,6 +2,7 @@ import { prisma } from '../config/database'
 import { getBinanceUserStreamStatus } from './binance-user-stream.service'
 import { isBotWorkerRunning } from './bot-runner.service'
 import { getPairDiscoveryRunnerStatus } from './pair-discovery-runner.service'
+import { DEFAULT_BOT_RUNTIME_SERVICE_NAME, getRuntimeHeartbeatStatus } from './runtime-heartbeat.service'
 import { isTrainingWorkerRunning } from './training-worker.service'
 
 type HealthComponentState = 'up' | 'down' | 'disabled'
@@ -26,6 +27,10 @@ export interface OperationalHealthReport {
 
 function resolveWorkerExpectation(envFlagName: string): boolean {
   return process.env.NODE_ENV !== 'test' && process.env[envFlagName] !== 'false'
+}
+
+function isExternalBotRuntimeExpected(): boolean {
+  return process.env.NODE_ENV !== 'test' && process.env.BOT_RUNTIME_EXPECT_EXTERNAL_SERVICE === 'true'
 }
 
 function buildWorkerComponent(
@@ -79,12 +84,30 @@ export async function getOperationalHealthReport(): Promise<OperationalHealthRep
   const database = await getDatabaseHealthComponent()
   const pairDiscoveryRunner = getPairDiscoveryRunnerStatus()
   const binanceUserStream = getBinanceUserStreamStatus()
+  const externalBotRuntimeExpected = isExternalBotRuntimeExpected()
+  const externalBotRuntimeHeartbeat = externalBotRuntimeExpected
+    ? await getRuntimeHeartbeatStatus(DEFAULT_BOT_RUNTIME_SERVICE_NAME)
+    : null
 
   const checks: OperationalHealthReport['checks'] = {
     database,
     botWorker: buildWorkerComponent(
-      resolveWorkerExpectation('BOT_WORKER_AUTOSTART'),
-      isBotWorkerRunning(),
+      externalBotRuntimeExpected || resolveWorkerExpectation('BOT_WORKER_AUTOSTART'),
+      externalBotRuntimeExpected
+        ? Boolean(externalBotRuntimeHeartbeat?.running)
+        : isBotWorkerRunning(),
+      externalBotRuntimeExpected
+        ? {
+            mode: 'external',
+            serviceName: externalBotRuntimeHeartbeat?.serviceName ?? DEFAULT_BOT_RUNTIME_SERVICE_NAME,
+            instanceId: externalBotRuntimeHeartbeat?.instanceId,
+            lastHeartbeatAt: externalBotRuntimeHeartbeat?.lastHeartbeatAt,
+            ttlMs: externalBotRuntimeHeartbeat?.ttlMs,
+            metadata: externalBotRuntimeHeartbeat?.metadata,
+          }
+        : {
+            mode: 'internal',
+          },
     ),
     trainingWorker: buildWorkerComponent(
       resolveWorkerExpectation('TRAINING_WORKER_AUTOSTART'),
@@ -115,4 +138,3 @@ export async function getOperationalHealthReport(): Promise<OperationalHealthRep
     checks,
   }
 }
-

@@ -32,7 +32,7 @@ import { getInternalApiBaseUrl } from './internal-api-base-url.service'
 import { getCurrencyRateToBrl } from './market-valuation.service'
 import { recordBalanceHistorySnapshot } from './portfolio.service'
 import { resolveTrainingModelArtifactPath } from './training-model.service'
-import { runPythonBotCycle } from './python-bot-runtime.service'
+import { runPythonBotCycle, type PythonBotCyclePlanResult } from './python-bot-runtime.service'
 import { emitDashboardUpdate } from './socket.service'
 import { logger } from '../utils/logger'
 import { endTrace, startTrace, trace } from '../utils/tracer'
@@ -58,6 +58,23 @@ export interface BotCycleResult {
   analysis: BotAnalysisResponse
   execution: BotCycleExecution
   plans?: BotCycleExecution[]
+}
+
+export interface BotRuntimeQueueItem {
+  botId: string
+  botName: string
+  userId: string
+  executionMode: BotExecutionMode
+  status: string
+  isPaused: boolean
+}
+
+export interface BotRuntimeCycleContext {
+  botId: string
+  botName: string
+  userId: string
+  generatedAt: string
+  payload: Parameters<typeof runPythonBotCycle>[0]
 }
 
 interface TradePlan {
@@ -1006,292 +1023,339 @@ async function buildTradePlan(params: {
   }
 }
 
-export async function runBotCycle(botId: string, userId: string): Promise<BotCycleResult | null> {
-  if (processingBots.has(botId)) {
+async function loadBotForCycle(botId: string, userId: string) {
+  return prisma.bot.findFirst({
+    where: {
+      id: botId,
+      userId,
+    },
+    include: {
+      template: true,
+    },
+  })
+}
+
+function buildBotAnalysisFromCycleResult(params: {
+  bot: Awaited<ReturnType<typeof loadBotForCycle>>
+  strategyId: string
+  cycleGeneratedAt: string
+  cycleResult: PythonBotCyclePlanResult
+}): BotAnalysisResponse {
+  const { bot, strategyId, cycleGeneratedAt, cycleResult } = params
+  if (!bot) {
+    throw new Error('Bot não encontrado ao mapear análise do ciclo')
+  }
+
+  return {
+    botId: bot.id,
+    botName: bot.name,
+    strategyId,
+    templateId: bot.template?.id ?? undefined,
+    templateName: bot.template?.name ?? undefined,
+    primarySpecialist: cycleResult.analysis.primarySpecialist,
+    timeframe: cycleResult.analysis.timeframe,
+    generatedAt: cycleGeneratedAt,
+    analyzedPairs: cycleResult.analysis.analyzedPairs,
+    summary: cycleResult.analysis.summary,
+    bestOpportunity: cycleResult.analysis.bestOpportunity ? {
+      pair: cycleResult.analysis.bestOpportunity.pair,
+      action: cycleResult.analysis.bestOpportunity.action,
+      confidence: cycleResult.analysis.bestOpportunity.confidence,
+      price: cycleResult.analysis.bestOpportunity.price,
+      reason: cycleResult.analysis.bestOpportunity.reason,
+      specialists: cycleResult.analysis.bestOpportunity.specialists.map((specialist) => ({
+        specialist: specialist.specialist,
+        action: specialist.action,
+        confidence: specialist.confidence,
+        reason: specialist.reason,
+        indicators: specialist.indicators,
+      })),
+    } : undefined,
+    opportunities: cycleResult.analysis.opportunities.map((opportunity) => ({
+      pair: opportunity.pair,
+      action: opportunity.action,
+      confidence: opportunity.confidence,
+      price: opportunity.price,
+      reason: opportunity.reason,
+      specialists: opportunity.specialists.map((specialist) => ({
+        specialist: specialist.specialist,
+        action: specialist.action,
+        confidence: specialist.confidence,
+        reason: specialist.reason,
+        indicators: specialist.indicators,
+      })),
+    })),
+    socialSignals: cycleResult.analysis.socialSignals.slice(0, 5),
+  }
+}
+
+function buildBotCyclePlans(
+  executionMode: BotExecutionMode,
+  cycleResult: PythonBotCyclePlanResult,
+): BotCycleExecution[] {
+  return (cycleResult.plans ?? []).map((plan) => ({
+    mode: executionMode,
+    status: normalizePlanStatus(plan.status),
+    reason: plan.reason,
+    pair: plan.pair,
+    action: plan.action as 'buy' | 'sell' | 'hold' | undefined,
+    quantity: plan.quantity,
+    rank: plan.rank,
+    source: plan.source,
+  }))
+}
+
+export async function listBotRuntimeQueue(): Promise<BotRuntimeQueueItem[]> {
+  const bots = await prisma.bot.findMany({
+    where: {
+      userId: { not: null },
+      status: 'online',
+      isPaused: false,
+    },
+    orderBy: [
+      { updatedAt: 'asc' },
+      { createdAt: 'asc' },
+    ],
+    select: {
+      id: true,
+      userId: true,
+      name: true,
+      executionMode: true,
+      status: true,
+      isPaused: true,
+    },
+  })
+
+  return bots
+    .filter((bot): bot is typeof bot & { userId: string } => Boolean(bot.userId))
+    .map((bot) => ({
+      botId: bot.id,
+      botName: bot.name,
+      userId: bot.userId,
+      executionMode: (bot.executionMode as BotExecutionMode) || 'paper',
+      status: bot.status,
+      isPaused: bot.isPaused,
+    }))
+}
+
+export async function buildBotRuntimeCycleContext(
+  botId: string,
+  userId?: string,
+): Promise<BotRuntimeCycleContext | null> {
+  const bot = await prisma.bot.findFirst({
+    where: {
+      id: botId,
+      ...(userId ? { userId } : { userId: { not: null } }),
+    },
+    include: {
+      template: true,
+    },
+  })
+
+  if (!bot?.userId) {
     return null
   }
 
-  processingBots.add(botId)
-  startTrace(userId, 'runBotCycle', 'bot')
+  if (bot.isPaused || bot.status !== 'online') {
+    return null
+  }
 
-  try {
-    const bot = await prisma.bot.findFirst({
-      where: {
-        id: botId,
-        userId,
-      },
-      include: {
-        template: true,
-      },
+  if (await hasActiveTrainingSession(bot.userId, bot.id)) {
+    return null
+  }
+
+  const autoPromotion = await autoPromoteRecommendedBotModel({
+    userId: bot.userId,
+    botId: bot.id,
+    currentBotModelUrl: bot.modelUrl,
+  })
+
+  if (autoPromotion.applied && autoPromotion.artifact) {
+    bot.modelUrl = autoPromotion.artifact.modelUrl
+    bot.modelVersion = autoPromotion.artifact.modelVersion
+
+    logger.info('[bot] Challenger promovido automaticamente para champion antes do ciclo', {
+      module: 'bot',
+      event: 'bot_cycle_auto_model_promotion_applied',
+      userId: bot.userId,
+      botId: bot.id,
+      promotedArtifactId: autoPromotion.artifact.id,
+      promotedModelVersion: autoPromotion.artifact.modelVersion,
+      promotedModelUrl: autoPromotion.artifact.modelUrl,
+      recommendationReason: autoPromotion.recommendation?.reason,
     })
+  }
 
-    if (!bot) {
-      endTrace('runBotCycle', { userId, botId, errorFlag: true })
-      return null
-    }
+  const modelReadiness = await resolveBotOperationalReadiness(bot.modelUrl)
+  if (!modelReadiness.modelReady) {
+    return null
+  }
 
-    if (bot.isPaused || bot.status !== 'online') {
-      const analysis = await analyzeBotInstance(userId, botId)
-      if (!analysis) {
-        endTrace('runBotCycle', { userId, botId, errorFlag: true })
-        return null
-      }
+  const executionMode = ((bot.executionMode || 'paper') as BotExecutionMode)
+  const templateParameters = safeJsonParse<Record<string, unknown>>(bot.template?.defaultParameters, {})
+  const instanceParameters = safeJsonParse<Record<string, unknown>>(bot.parameters, {})
+  const parameters = {
+    ...templateParameters,
+    ...instanceParameters,
+  }
+  const timeframe = resolveTimeframe(parameters)
+  const configuration = await prisma.configuration.findUnique({
+    where: { userId: bot.userId },
+    select: {
+      maxTradeAmount: true,
+      maxTradeAmountUnit: true,
+      allowedPairs: true,
+      stopLossPercent: true,
+      takeProfitPercent: true,
+    },
+  })
+  const configuredAllowedPairs = normalizePairs(safeJsonParse(configuration?.allowedPairs, []))
+  const allowedPairs = resolveEffectiveAllowedPairs(parameters, configuredAllowedPairs)
+  const effectiveAllowedPairs = allowedPairs.length > 0 ? allowedPairs : configuredAllowedPairs
+  const riskConfig = resolveRiskConfig(parameters, configuration)
+  const minimumConfidence = typeof parameters.minConfidence === 'number'
+    ? parameters.minConfidence
+    : DEFAULT_MIN_CONFIDENCE
+  let exchangeCredentials: Awaited<ReturnType<typeof getUserExchangeCredentials>> = null
+  let fullAutoBuyBlockReason: string | undefined
+  let openExchangeOrder: {
+    pair: string
+    status: string
+    requestedQuantity: number | null
+    quantity: number
+    externalStatus: string | null
+  } | null = null
 
-      const result: BotCycleResult = {
-        botId: bot.id,
-        botName: bot.name,
-        generatedAt: new Date().toISOString(),
-        analysis,
-        execution: {
-          mode: (bot.executionMode as BotExecutionMode) || 'paper',
-          status: 'skipped',
-          reason: bot.isPaused ? 'Bot pausado; ciclo ignorado' : `Bot em status ${bot.status}; ciclo ignorado`,
-        },
-      }
-
-      endTrace('runBotCycle', { userId, botId })
-      return result
-    }
-
-    if (await hasActiveTrainingSession(userId, bot.id)) {
-      const analysis = await analyzeBotInstance(userId, botId)
-      if (!analysis) {
-        endTrace('runBotCycle', { userId, botId, errorFlag: true })
-        return null
-      }
-
-      const result: BotCycleResult = {
-        botId: bot.id,
-        botName: bot.name,
-        generatedAt: new Date().toISOString(),
-        analysis,
-        execution: {
-          mode: (bot.executionMode as BotExecutionMode) || 'paper',
-          status: 'skipped',
-          reason: 'Treinamento ativo detectado; execução automática adiada',
-        },
-      }
-
-      endTrace('runBotCycle', { userId, botId })
-      return result
-    }
-
-    const autoPromotion = await autoPromoteRecommendedBotModel({
-      userId,
+  if (executionMode === 'full_auto') {
+    exchangeCredentials = await getUserExchangeCredentials(bot.userId)
+    const fullAutoEligibility = await resolveBotFullAutoEligibility({
+      userId: bot.userId,
       botId: bot.id,
       currentBotModelUrl: bot.modelUrl,
     })
-
-    if (autoPromotion.applied && autoPromotion.artifact) {
-      bot.modelUrl = autoPromotion.artifact.modelUrl
-      bot.modelVersion = autoPromotion.artifact.modelVersion
-
-      logger.info('[bot] Challenger promovido automaticamente para champion antes do ciclo', {
-        module: 'bot',
-        event: 'bot_cycle_auto_model_promotion_applied',
-        userId,
-        botId: bot.id,
-        promotedArtifactId: autoPromotion.artifact.id,
-        promotedModelVersion: autoPromotion.artifact.modelVersion,
-        promotedModelUrl: autoPromotion.artifact.modelUrl,
-        recommendationReason: autoPromotion.recommendation?.reason,
-      })
+    if (!fullAutoEligibility.eligible) {
+      fullAutoBuyBlockReason = fullAutoEligibility.blockers[0]
+        ?? 'O champion atual ainda não atende aos critérios mínimos para abrir novas posições em full_auto.'
     }
 
-    const executionMode = ((bot.executionMode || 'paper') as BotExecutionMode)
-    const modelReadiness = await resolveBotOperationalReadiness(bot.modelUrl)
-    if (!modelReadiness.modelReady) {
-      const analysis = await analyzeBotInstance(userId, botId)
-      if (!analysis) {
-        endTrace('runBotCycle', { userId, botId, errorFlag: true })
-        return null
-      }
-
-      const result: BotCycleResult = {
-        botId: bot.id,
-        botName: bot.name,
-        generatedAt: new Date().toISOString(),
-        analysis,
-        execution: {
-          mode: executionMode,
-          status: 'skipped',
-          reason: modelReadiness.operationalBlockReason ?? 'Bot sem modelo executável para operação contínua',
-          pair: analysis.bestOpportunity?.pair,
-          action: analysis.bestOpportunity?.action,
-        },
-      }
-
-      logger.warn('[bot] Operação automática bloqueada por ausência de modelo executável', {
-        module: 'bot',
-        event: 'bot_cycle_model_not_ready',
-        userId,
-        botId: bot.id,
-        botName: bot.name,
-        modelUrl: bot.modelUrl,
-      })
-
-      endTrace('runBotCycle', { userId, botId, currentPair: analysis.bestOpportunity?.pair, recommendedAction: analysis.bestOpportunity?.action, confidence: analysis.bestOpportunity?.confidence })
-      return result
-    }
-
-    const templateParameters = safeJsonParse<Record<string, unknown>>(bot.template?.defaultParameters, {})
-    const instanceParameters = safeJsonParse<Record<string, unknown>>(bot.parameters, {})
-    const parameters = {
-      ...templateParameters,
-      ...instanceParameters,
-    }
-    const timeframe = resolveTimeframe(parameters)
-    const configuration = await prisma.configuration.findUnique({
-      where: { userId },
-      select: {
-        maxTradeAmount: true,
-        maxTradeAmountUnit: true,
-        allowedPairs: true,
-        stopLossPercent: true,
-        takeProfitPercent: true,
-      },
-    })
-    const configuredAllowedPairs = normalizePairs(safeJsonParse(configuration?.allowedPairs, []))
-    const allowedPairs = resolveEffectiveAllowedPairs(parameters, configuredAllowedPairs)
-    const effectiveAllowedPairs = allowedPairs.length > 0 ? allowedPairs : configuredAllowedPairs
-    const riskConfig = resolveRiskConfig(parameters, configuration)
-    const minimumConfidence = typeof parameters.minConfidence === 'number'
-      ? parameters.minConfidence
-      : DEFAULT_MIN_CONFIDENCE
-    let exchangeCredentials: Awaited<ReturnType<typeof getUserExchangeCredentials>> = null
-    let fullAutoBuyBlockReason: string | undefined
-    let openExchangeOrder: {
-      pair: string
-      status: string
-      requestedQuantity: number | null
-      quantity: number
-      externalStatus: string | null
-    } | null = null
-
-    if (executionMode === 'full_auto') {
-      exchangeCredentials = await getUserExchangeCredentials(userId)
-      const fullAutoEligibility = await resolveBotFullAutoEligibility({
-        userId,
-        botId: bot.id,
-        currentBotModelUrl: bot.modelUrl,
-      })
-      if (!fullAutoEligibility.eligible) {
-        fullAutoBuyBlockReason = fullAutoEligibility.blockers[0]
-          ?? 'O champion atual ainda não atende aos critérios mínimos para abrir novas posições em full_auto.'
-      }
-
-      if (exchangeCredentials) {
-        await reconcileOpenOrdersForUserSafely(userId)
-        openExchangeOrder = await prisma.transaction.findFirst({
-          where: {
-            userId,
-            botId: bot.id,
-            externalOrderId: { not: null },
-            status: { in: ['pending', 'partially_filled'] },
-          },
-          orderBy: [
-            { syncedAt: 'desc' },
-            { date: 'desc' },
-          ],
-          select: {
-            pair: true,
-            status: true,
-            requestedQuantity: true,
-            quantity: true,
-            externalStatus: true,
-          },
-        })
-
-        const liveBalancesBefore = await getAccountBalances(exchangeCredentials.apiKey, exchangeCredentials.secretKey, { forceRefresh: true })
-        await syncExternalBalances(userId, liveBalancesBefore)
-      }
-    }
-
-    const [balances, recentSellTransactions, recentExecutions, exposureSnapshot, openPositionsRaw, user] = await Promise.all([
-      prisma.balance.findMany({
-        where: { userId },
-        select: {
-          currency: true,
-          available: true,
-          reserved: true,
-          total: true,
-        },
-      }),
-      prisma.transaction.findMany({
+    if (exchangeCredentials) {
+      await reconcileOpenOrdersForUserSafely(bot.userId)
+      openExchangeOrder = await prisma.transaction.findFirst({
         where: {
-          userId,
+          userId: bot.userId,
           botId: bot.id,
-          status: 'executed',
-          type: 'sell',
-          profitBrl: { not: null },
+          externalOrderId: { not: null },
+          status: { in: ['pending', 'partially_filled'] },
         },
-        orderBy: { date: 'desc' },
-        take: Math.max(riskConfig.maxConsecutiveLosses, 25),
-        select: {
-          date: true,
-          profitBrl: true,
-        },
-      }),
-      prisma.transaction.findMany({
-        where: {
-          userId,
-          botId: bot.id,
-          status: 'executed',
-        },
-        orderBy: { date: 'desc' },
-        take: 50,
+        orderBy: [
+          { syncedAt: 'desc' },
+          { date: 'desc' },
+        ],
         select: {
           pair: true,
-          type: true,
-          date: true,
+          status: true,
+          requestedQuantity: true,
+          quantity: true,
+          externalStatus: true,
         },
-      }),
-      getPortfolioExposureSnapshot(userId).catch(() => ({
-        totalPortfolioBrl: 0,
-        totalExposureBrl: 0,
-        openPositionsCount: 0,
-        pairExposureBrl: new Map<string, number>(),
-      })),
-      Promise.all((effectiveAllowedPairs.length > 0 ? effectiveAllowedPairs : configuredAllowedPairs).map(async (pair) => {
-        try {
-          const currentPrice = await getTickerPrice(pair)
-          const position = await getOpenPositionSnapshot(userId, pair, currentPrice)
-          if (!position) {
-            return null
-          }
+      })
 
-          return {
-            ...position,
-            exposureBrl: 0,
-          }
-        } catch {
+      const liveBalancesBefore = await getAccountBalances(exchangeCredentials.apiKey, exchangeCredentials.secretKey, { forceRefresh: true })
+      await syncExternalBalances(bot.userId, liveBalancesBefore)
+    }
+  }
+
+  const [balances, recentSellTransactions, recentExecutions, exposureSnapshot, openPositionsRaw, user] = await Promise.all([
+    prisma.balance.findMany({
+      where: { userId: bot.userId },
+      select: {
+        currency: true,
+        available: true,
+        reserved: true,
+        total: true,
+      },
+    }),
+    prisma.transaction.findMany({
+      where: {
+        userId: bot.userId,
+        botId: bot.id,
+        status: 'executed',
+        type: 'sell',
+        profitBrl: { not: null },
+      },
+      orderBy: { date: 'desc' },
+      take: Math.max(riskConfig.maxConsecutiveLosses, 25),
+      select: {
+        date: true,
+        profitBrl: true,
+      },
+    }),
+    prisma.transaction.findMany({
+      where: {
+        userId: bot.userId,
+        botId: bot.id,
+        status: 'executed',
+      },
+      orderBy: { date: 'desc' },
+      take: 50,
+      select: {
+        pair: true,
+        type: true,
+        date: true,
+      },
+    }),
+    getPortfolioExposureSnapshot(bot.userId).catch(() => ({
+      totalPortfolioBrl: 0,
+      totalExposureBrl: 0,
+      openPositionsCount: 0,
+      pairExposureBrl: new Map<string, number>(),
+    })),
+    Promise.all((effectiveAllowedPairs.length > 0 ? effectiveAllowedPairs : configuredAllowedPairs).map(async (pair) => {
+      try {
+        const currentPrice = await getTickerPrice(pair)
+        const position = await getOpenPositionSnapshot(bot.userId!, pair, currentPrice)
+        if (!position) {
           return null
         }
-      })),
-      prisma.user.findUnique({
-        where: { id: userId },
-        select: {
-          email: true,
-        },
-      }).catch(() => null),
-    ])
 
-    const openPositions = openPositionsRaw
-      .filter((position): position is (OpenPositionSnapshot & { exposureBrl: number }) => position !== null)
-      .map((position) => ({
-        ...position,
-        exposureBrl: exposureSnapshot.pairExposureBrl.get(position.pair) ?? 0,
-      }))
+        return {
+          ...position,
+          exposureBrl: 0,
+        }
+      } catch {
+        return null
+      }
+    })),
+    prisma.user.findUnique({
+      where: { id: bot.userId },
+      select: {
+        email: true,
+      },
+    }).catch(() => null),
+  ])
 
-    const strategyType = bot.template?.strategyType ?? bot.strategyType
-    const strategyId = bot.template?.id ?? buildStrategyId(strategyType)
-    const cycleGeneratedAt = new Date().toISOString()
-    const pairLimit = resolveMaxPairsToAnalyze(parameters)
-    const cycleResult = await runPythonBotCycle({
+  const openPositions = openPositionsRaw
+    .filter((position): position is (OpenPositionSnapshot & { exposureBrl: number }) => position !== null)
+    .map((position) => ({
+      ...position,
+      exposureBrl: exposureSnapshot.pairExposureBrl.get(position.pair) ?? 0,
+    }))
+
+  const strategyType = bot.template?.strategyType ?? bot.strategyType
+  const strategyId = bot.template?.id ?? buildStrategyId(strategyType)
+  const cycleGeneratedAt = new Date().toISOString()
+  const pairLimit = resolveMaxPairsToAnalyze(parameters)
+
+  return {
+    botId: bot.id,
+    botName: bot.name,
+    userId: bot.userId,
+    generatedAt: cycleGeneratedAt,
+    payload: {
       backend: {
         baseUrl: getInternalApiBaseUrl(),
         accessToken: signUserAccessToken({
-          id: userId,
+          id: bot.userId,
           email: user?.email ?? '',
         }),
         timeoutSeconds: Number(process.env.PYTHON_BOT_RUNTIME_TIMEOUT_SECONDS ?? 15),
@@ -1351,537 +1415,716 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
             }
           : null,
       },
-    })
+    },
+  }
+}
 
-    const analysis: BotAnalysisResponse = {
+export async function applyBotRuntimeCycleResult(params: {
+  botId: string
+  userId: string
+  cycleResult: PythonBotCyclePlanResult
+  cycleGeneratedAt?: string
+}): Promise<BotCycleResult | null> {
+  const bot = await loadBotForCycle(params.botId, params.userId)
+  if (!bot) {
+    return null
+  }
+
+  const executionMode = ((bot.executionMode || 'paper') as BotExecutionMode)
+  const modelReadiness = await resolveBotOperationalReadiness(bot.modelUrl)
+  const templateParameters = safeJsonParse<Record<string, unknown>>(bot.template?.defaultParameters, {})
+  const instanceParameters = safeJsonParse<Record<string, unknown>>(bot.parameters, {})
+  const parameters = {
+    ...templateParameters,
+    ...instanceParameters,
+  }
+  const timeframe = resolveTimeframe(parameters)
+  const cycleGeneratedAt = params.cycleGeneratedAt ?? new Date().toISOString()
+
+  const analysis = buildBotAnalysisFromCycleResult({
+    bot,
+    strategyId: bot.template?.id ?? buildStrategyId(bot.template?.strategyType ?? bot.strategyType),
+    cycleGeneratedAt,
+    cycleResult: params.cycleResult,
+  })
+  const cyclePlans = buildBotCyclePlans(executionMode, params.cycleResult)
+  const primaryPlannedOpportunity = cyclePlans.find((plan) => plan.status !== 'skipped')
+    ?? cyclePlans[0]
+    ?? undefined
+  const actionableOpportunity = analysis.opportunities.find((opportunity) => opportunity.action !== 'hold')
+
+  await prisma.bot.update({
+    where: { id: bot.id },
+    data: {
+      focusPair: primaryPlannedOpportunity?.pair ?? actionableOpportunity?.pair ?? bot.focusPair ?? null,
+      currentPair: analysis.bestOpportunity?.pair ?? null,
+      recommendedAction: analysis.bestOpportunity?.action ?? 'hold',
+      confidence: analysis.bestOpportunity?.confidence ?? 0,
+      lastAnalysis: new Date(cycleGeneratedAt),
+      updatedAt: new Date(cycleGeneratedAt),
+    },
+  }).catch(() => undefined)
+
+  emitDashboardUpdate(params.userId, {
+    scope: 'bots',
+    reason: 'bot_analysis_refreshed',
+    botId: bot.id,
+    updatedAt: cycleGeneratedAt,
+  })
+
+  if (bot.isPaused || bot.status !== 'online') {
+    return {
       botId: bot.id,
       botName: bot.name,
-      strategyId,
-      templateId: bot.template?.id ?? undefined,
-      templateName: bot.template?.name ?? undefined,
-      primarySpecialist: cycleResult.analysis.primarySpecialist,
-      timeframe: cycleResult.analysis.timeframe,
       generatedAt: cycleGeneratedAt,
-      analyzedPairs: cycleResult.analysis.analyzedPairs,
-      summary: cycleResult.analysis.summary,
-      bestOpportunity: cycleResult.analysis.bestOpportunity ? {
-        pair: cycleResult.analysis.bestOpportunity.pair,
-        action: cycleResult.analysis.bestOpportunity.action,
-        confidence: cycleResult.analysis.bestOpportunity.confidence,
-        price: cycleResult.analysis.bestOpportunity.price,
-        reason: cycleResult.analysis.bestOpportunity.reason,
-        specialists: cycleResult.analysis.bestOpportunity.specialists.map((specialist) => ({
-          specialist: specialist.specialist,
-          action: specialist.action,
-          confidence: specialist.confidence,
-          reason: specialist.reason,
-          indicators: specialist.indicators,
-        })),
-      } : undefined,
-      opportunities: cycleResult.analysis.opportunities.map((opportunity) => ({
-        pair: opportunity.pair,
-        action: opportunity.action,
-        confidence: opportunity.confidence,
-        price: opportunity.price,
-        reason: opportunity.reason,
-        specialists: opportunity.specialists.map((specialist) => ({
-          specialist: specialist.specialist,
-          action: specialist.action,
-          confidence: specialist.confidence,
-          reason: specialist.reason,
-          indicators: specialist.indicators,
-        })),
-      })),
-      socialSignals: cycleResult.analysis.socialSignals.slice(0, 5),
-    }
-    const cyclePlans: BotCycleExecution[] = (cycleResult.plans ?? []).map((plan) => ({
-      mode: executionMode,
-      status: normalizePlanStatus(plan.status),
-      reason: plan.reason,
-      pair: plan.pair,
-      action: plan.action as 'buy' | 'sell' | 'hold' | undefined,
-      quantity: plan.quantity,
-      rank: plan.rank,
-      source: plan.source,
-    }))
-    const primaryPlannedOpportunity = cyclePlans.find((plan) => plan.status !== 'skipped')
-      ?? cyclePlans[0]
-      ?? undefined
-    const actionableOpportunity = analysis.opportunities.find((opportunity) => opportunity.action !== 'hold')
-
-    await prisma.bot.update({
-      where: { id: bot.id },
-      data: {
-        focusPair: primaryPlannedOpportunity?.pair ?? actionableOpportunity?.pair ?? bot.focusPair ?? null,
-        currentPair: analysis.bestOpportunity?.pair ?? null,
-        recommendedAction: analysis.bestOpportunity?.action ?? 'hold',
-        confidence: analysis.bestOpportunity?.confidence ?? 0,
-        lastAnalysis: new Date(cycleGeneratedAt),
-        updatedAt: new Date(cycleGeneratedAt),
-      },
-    }).catch(() => undefined)
-
-    emitDashboardUpdate(userId, {
-      scope: 'bots',
-      reason: 'bot_analysis_refreshed',
-      botId: bot.id,
-      updatedAt: cycleGeneratedAt,
-    })
-
-    const selectedOpportunity = (
-      cycleResult.plan.pair
-      && cycleResult.plan.action
-      && typeof cycleResult.plan.decisionPrice === 'number'
-      && typeof cycleResult.plan.confidence === 'number'
-    ) ? {
-      pair: cycleResult.plan.pair,
-      action: cycleResult.plan.action,
-      confidence: cycleResult.plan.confidence,
-      price: cycleResult.plan.decisionPrice,
-      reason: cycleResult.plan.reason,
-    } : analysis.bestOpportunity
-    const plannedQuantity = cycleResult.plan.quantity
-    const isRiskOverride = Boolean(cycleResult.plan.isRiskOverride)
-    const decisionTimestamp = new Date()
-    const persistDecision = async (input: {
-      executionStatus: BotCycleExecution['status']
-      reason: string
-      requestedQuantity?: number
-      executedQuantity?: number
-      transactionId?: string
-      slippagePercent?: number
-      simulatedLatencyMs?: number
-      simulatedFillPercent?: number
-      decisionPrice?: number
-      pair?: string
-      action?: 'buy' | 'sell' | 'hold'
-      confidence?: number
-      createdAt?: Date
-    }) => {
-      const pair = input.pair ?? selectedOpportunity?.pair
-      const action = input.action ?? selectedOpportunity?.action
-      const decisionPrice = input.decisionPrice ?? selectedOpportunity?.price
-      const confidence = input.confidence ?? selectedOpportunity?.confidence
-
-      if (
-        !pair
-        || !action
-        || typeof decisionPrice !== 'number'
-        || !Number.isFinite(decisionPrice)
-        || decisionPrice <= QUANTITY_EPSILON
-        || typeof confidence !== 'number'
-        || !Number.isFinite(confidence)
-      ) {
-        return
-      }
-
-      try {
-        await recordBotDecision({
-          userId,
-          botId: bot.id,
-          pair,
-          action,
-          confidence,
-          reason: input.reason,
-          timeframe,
-          executionMode,
-          executionStatus: input.executionStatus,
-          decisionPrice,
-          requestedQuantity: input.requestedQuantity,
-          executedQuantity: input.executedQuantity,
-          transactionId: input.transactionId,
-          slippagePercent: input.slippagePercent,
-          simulatedLatencyMs: input.simulatedLatencyMs,
-          simulatedFillPercent: input.simulatedFillPercent,
-          modelVersion: modelReadiness.modelVersion,
-          modelUrl: modelReadiness.modelUrl,
-          modelArchitecture: modelReadiness.modelArchitecture,
-          horizonCandles: modelReadiness.forecastHorizonCandles ?? 5,
-          buyThresholdPercent: modelReadiness.buyThresholdPercent ?? 0.3,
-          sellThresholdPercent: modelReadiness.sellThresholdPercent ?? -0.3,
-          createdAt: input.createdAt ?? decisionTimestamp,
-        })
-      } catch (decisionError) {
-        logger.warn('[bot] Falha ao persistir decisão do bot', {
-          module: 'bot',
-          event: 'bot_decision_record_failed',
-          userId,
-          botId: bot.id,
-          pair,
-          action,
-          error: decisionError,
-          skipPersistence: true,
-        })
-      }
-    }
-
-    if (cycleResult.plan.status === 'skipped') {
-      await persistDecision({
-        executionStatus: 'skipped',
-        reason: cycleResult.plan.reason,
-        requestedQuantity: plannedQuantity,
-        pair: cycleResult.plan.pair,
-        action: cycleResult.plan.action,
-        confidence: cycleResult.plan.confidence,
-        decisionPrice: cycleResult.plan.decisionPrice,
-      })
-
-      const result: BotCycleResult = {
-        botId: bot.id,
-        botName: bot.name,
-        generatedAt: cycleGeneratedAt,
-        analysis,
-        plans: cyclePlans,
-        execution: {
-          mode: executionMode,
-          status: 'skipped',
-          reason: cycleResult.plan.reason,
-          pair: cycleResult.plan.pair,
-          action: cycleResult.plan.action,
-          quantity: plannedQuantity,
-        },
-      }
-
-      endTrace('runBotCycle', {
-        userId,
-        botId,
-        currentPair: cycleResult.plan.pair,
-        recommendedAction: cycleResult.plan.action,
-        confidence: cycleResult.plan.confidence,
-      })
-      return result
-    }
-
-    if (cycleResult.plan.status === 'suggested') {
-      await persistDecision({
-        executionStatus: 'suggested',
-        reason: cycleResult.plan.reason,
-        requestedQuantity: plannedQuantity,
-        pair: cycleResult.plan.pair,
-        action: cycleResult.plan.action,
-        confidence: cycleResult.plan.confidence,
-        decisionPrice: cycleResult.plan.decisionPrice,
-      })
-
-      const result: BotCycleResult = {
-        botId: bot.id,
-        botName: bot.name,
-        generatedAt: cycleGeneratedAt,
-        analysis,
-        plans: cyclePlans,
-        execution: {
-          mode: executionMode,
-          status: 'suggested',
-          reason: cycleResult.plan.reason,
-          pair: cycleResult.plan.pair,
-          action: cycleResult.plan.action,
-          quantity: plannedQuantity,
-        },
-      }
-
-      endTrace('runBotCycle', {
-        userId,
-        botId,
-        currentPair: cycleResult.plan.pair,
-        recommendedAction: cycleResult.plan.action,
-        confidence: cycleResult.plan.confidence,
-      })
-      return result
-    }
-
-    if (
-      !selectedOpportunity
-      || !selectedOpportunity.pair
-      || !selectedOpportunity.action
-      || typeof selectedOpportunity.price !== 'number'
-      || !Number.isFinite(selectedOpportunity.price)
-      || selectedOpportunity.price <= QUANTITY_EPSILON
-      || typeof plannedQuantity !== 'number'
-      || !Number.isFinite(plannedQuantity)
-      || plannedQuantity <= QUANTITY_EPSILON
-    ) {
-      await persistDecision({
-        executionStatus: 'skipped',
-        reason: 'O runtime Python não retornou um plano de execução válido',
-      })
-
-      const result: BotCycleResult = {
-        botId: bot.id,
-        botName: bot.name,
-        generatedAt: cycleGeneratedAt,
-        analysis,
-        plans: cyclePlans,
-        execution: {
-          mode: executionMode,
-          status: 'skipped',
-          reason: 'O runtime Python não retornou um plano de execução válido',
-        },
-      }
-
-      endTrace('runBotCycle', { userId, botId, errorFlag: true })
-      return result
-    }
-
-    const executionAction = selectedOpportunity.action as 'buy' | 'sell'
-
-    let transaction: ExecutedOrderPayload
-    let executionStatus: BotCycleExecution['status'] = 'executed'
-    let executionReason = cycleResult.plan.reason
-    let paperSimulation = cycleResult.plan.paperSimulation
-      ? {
-          requestedQuantity: cycleResult.plan.paperSimulation.requestedQuantity,
-          executedQuantity: cycleResult.plan.paperSimulation.executedQuantity,
-          executionPrice: cycleResult.plan.paperSimulation.executionPrice,
-          slippagePercent: cycleResult.plan.paperSimulation.slippagePercent,
-          simulatedLatencyMs: cycleResult.plan.paperSimulation.simulatedLatencyMs,
-          simulatedFillPercent: cycleResult.plan.paperSimulation.simulatedFillPercent,
-        }
-      : null
-
-    if (executionMode === 'full_auto' && exchangeCredentials) {
-      const preparedOrder = await prepareSpotOrderRequest({
-        pair: selectedOpportunity.pair,
-        quantity: plannedQuantity,
-        orderType: 'MARKET',
-        referencePrice: selectedOpportunity.price,
-      })
-
-      if (!preparedOrder.isValid || !preparedOrder.quantity) {
-        const reason = preparedOrder.rejectionReason ?? 'A ordem não atendeu aos filtros da Binance'
-        await persistDecision({
-          executionStatus: 'skipped',
-          reason,
-          requestedQuantity: plannedQuantity,
-        })
-
-        const result: BotCycleResult = {
-          botId: bot.id,
-          botName: bot.name,
-          generatedAt: new Date().toISOString(),
-          analysis,
-          plans: cyclePlans,
-          execution: {
-            mode: executionMode,
-            status: 'skipped',
-            reason,
-            pair: selectedOpportunity.pair,
-            action: selectedOpportunity.action,
-          },
-        }
-
-        logger.warn('[bot] Ordem bloqueada pelos filtros da Binance', {
-          module: 'bot',
-          event: 'bot_cycle_binance_filter_skip',
-          userId,
-          botId: bot.id,
-          pair: selectedOpportunity.pair,
-          action: selectedOpportunity.action,
-          quantity: plannedQuantity,
-          reason: preparedOrder.rejectionReason,
-          adjustments: preparedOrder.adjustments,
-        })
-
-        endTrace('runBotCycle', { userId, botId, currentPair: selectedOpportunity.pair, recommendedAction: selectedOpportunity.action, confidence: selectedOpportunity.confidence })
-        return result
-      }
-
-      const liveOrder = await createSpotOrder(exchangeCredentials.apiKey, exchangeCredentials.secretKey, {
-        pair: selectedOpportunity.pair,
-        side: selectedOpportunity.action === 'buy' ? 'BUY' : 'SELL',
-        quantity: preparedOrder.quantity,
-      })
-
-      const requestedQuantity = roundQuantity(Number(liveOrder.origQty || preparedOrder.quantity || plannedQuantity))
-      const executedQuantity = roundQuantity(Number(liveOrder.executedQty || 0))
-      const executedTotal = Number(liveOrder.cummulativeQuoteQty || (executedQuantity * selectedOpportunity.price))
-      const executedPrice = executedQuantity > QUANTITY_EPSILON && executedTotal > QUANTITY_EPSILON
-        ? (executedTotal / executedQuantity)
-        : selectedOpportunity.price
-      const localOrderStatus = mapBinanceOrderStatusToLocalStatus(liveOrder.status, executedQuantity)
-      const syncedAt = new Date(liveOrder.updateTime || liveOrder.transactTime || Date.now())
-
-      if (localOrderStatus === 'executed' && (!Number.isFinite(executedQuantity) || executedQuantity <= QUANTITY_EPSILON)) {
-        throw new Error('A Binance não retornou quantidade executada válida para a ordem do bot')
-      }
-
-      const { quoteCurrency } = getPairCurrencies(selectedOpportunity.pair)
-      const liveFee = await extractBinanceFeeBreakdown({
-        fills: liveOrder.fills,
-        quoteCurrency,
-        totalValue: executedTotal,
-      })
-
-      if (localOrderStatus === 'executed') {
-        transaction = await executeOrderForUser({
-          userId,
-          pair: selectedOpportunity.pair,
-          type: executionAction,
-          quantity: executedQuantity,
-          requestedQuantity,
-          orderType: 'market',
-          price: executedPrice,
-          totalOverride: executedTotal,
-          feeOverride: liveFee.fee,
-          feeCurrencyOverride: liveFee.feeCurrency,
-          feeRateAppliedOverride: liveFee.feeRateApplied,
-          feeDiscountSourceOverride: liveFee.feeDiscountSource,
-          feeInQuoteOverride: liveFee.feeInQuote,
-          origin: 'bot',
-          botId: bot.id,
-          statusOverride: localOrderStatus,
-          externalOrderId: String(liveOrder.orderId),
-          externalClientOrderId: liveOrder.clientOrderId,
-          externalStatus: liveOrder.status,
-          syncedAt,
-        })
-      } else {
-        transaction = await upsertExchangeOrderSnapshot({
-          userId,
-          pair: selectedOpportunity.pair,
-          type: executionAction,
-          origin: 'bot',
-          botId: bot.id,
-          orderType: 'market',
-          requestedQuantity,
-          executedQuantity,
-          price: executedPrice,
-          total: executedTotal,
-          fee: liveFee.fee ?? 0,
-          feeInQuote: liveFee.feeInQuote,
-          feeCurrency: liveFee.feeCurrency || quoteCurrency,
-          feeRateApplied: liveFee.feeRateApplied ?? 0,
-          feeDiscountSource: liveFee.feeDiscountSource,
-          externalOrderId: String(liveOrder.orderId),
-          externalClientOrderId: liveOrder.clientOrderId,
-          externalStatus: liveOrder.status,
-          status: localOrderStatus,
-          syncedAt,
-        })
-
-        executionStatus = 'submitted'
-      }
-
-      const liveBalancesAfter = await getAccountBalances(exchangeCredentials.apiKey, exchangeCredentials.secretKey, { forceRefresh: true })
-      await syncExternalBalances(userId, liveBalancesAfter)
-      await recordBalanceHistorySnapshot(userId, liveBalancesAfter.map((balance) => ({
-        currency: balance.currency,
-        total: balance.total,
-      }))).catch((snapshotError) => {
-        logger.warn('[bot] Falha ao registrar snapshot após ordem real do bot', {
-          module: 'bot',
-          event: 'bot_cycle_live_balance_snapshot_failed',
-          userId,
-          botId: bot.id,
-          error: snapshotError,
-          skipPersistence: true,
-        })
-      })
-
-      if (localOrderStatus === 'executed') {
-        executionReason = isRiskOverride
-          ? `${selectedOpportunity.reason} · ordem real executada na Binance`
-          : 'Executado automaticamente em modo full_auto na Binance'
-      } else if (localOrderStatus === 'partially_filled') {
-        executionReason = 'Ordem enviada para Binance e executada parcialmente; aguardando reconciliação dos próximos fills'
-      } else if (localOrderStatus === 'pending') {
-        executionReason = 'Ordem enviada para Binance e registrada como pendente; o bot vai acompanhar a execução antes de abrir nova posição'
-      } else if (localOrderStatus === 'cancelled') {
-        executionReason = 'A Binance retornou a ordem do bot como cancelada; a posição não foi aberta por completo'
-      } else {
-        executionReason = 'A Binance rejeitou a ordem enviada pelo bot; nenhuma posição nova foi confirmada'
-      }
-
-      if (preparedOrder.adjustments.length > 0) {
-        executionReason = `${executionReason} · ${preparedOrder.adjustments.join(' · ')}`
-      }
-    } else {
-      paperSimulation = paperSimulation ?? buildPaperSimulation({
-        action: executionAction,
-        confidence: selectedOpportunity.confidence,
-        requestedQuantity: plannedQuantity,
-        referencePrice: selectedOpportunity.price,
-      })
-
-      transaction = await executeOrderForUser({
-        userId,
-        pair: selectedOpportunity.pair,
-        type: executionAction,
-        quantity: paperSimulation.executedQuantity,
-        requestedQuantity: paperSimulation.requestedQuantity,
-        orderType: 'market',
-        price: paperSimulation.executionPrice,
-        origin: 'bot',
-        botId: bot.id,
-      })
-
-      if (isRiskOverride) {
-        executionReason = `${selectedOpportunity.reason} · ordem executada em modo paper`
-      } else {
-        executionReason = `${executionReason} · slippage ${paperSimulation.slippagePercent.toFixed(2)}% · fill ${Math.round(paperSimulation.simulatedFillPercent * 100)}%`
-      }
-    }
-
-    await persistDecision({
-      executionStatus,
-      reason: executionReason,
-      requestedQuantity: transaction.requestedQuantity ?? transaction.quantity,
-      executedQuantity: transaction.quantity,
-      transactionId: transaction.id,
-      slippagePercent: paperSimulation?.slippagePercent,
-      simulatedLatencyMs: paperSimulation?.simulatedLatencyMs,
-      simulatedFillPercent: paperSimulation?.simulatedFillPercent,
-      decisionPrice: transaction.price,
-      createdAt: transaction.date,
-    })
-
-    logger.info('[bot] Ordem automatizada executada pelo ciclo do bot', {
-      module: 'bot',
-      event: executionMode === 'full_auto'
-        ? (executionStatus === 'executed' ? 'bot_cycle_order_executed_full_auto' : 'bot_cycle_order_submitted_full_auto')
-        : 'bot_cycle_order_executed_paper',
-      userId,
-      botId: bot.id,
-      botName: bot.name,
-      pair: selectedOpportunity.pair,
-      action: selectedOpportunity.action,
-      confidence: selectedOpportunity.confidence,
-      quantity: transaction.requestedQuantity ?? transaction.quantity,
-      transactionId: transaction.id,
-      transactionStatus: transaction.status,
-    })
-
-    emitDashboardUpdate(userId, {
-      scope: 'bots',
-      reason: executionStatus === 'executed' ? 'bot_cycle_executed' : 'bot_cycle_submitted',
-      botId: bot.id,
-      updatedAt: new Date().toISOString(),
-    })
-
-    const result: BotCycleResult = {
-      botId: bot.id,
-      botName: bot.name,
-      generatedAt: new Date().toISOString(),
       analysis,
       plans: cyclePlans,
       execution: {
         mode: executionMode,
-        status: executionStatus,
-        reason: executionReason,
-        pair: selectedOpportunity.pair,
-        action: selectedOpportunity.action,
-        quantity: transaction.requestedQuantity ?? transaction.quantity,
-        transaction,
+        status: 'skipped',
+        reason: bot.isPaused ? 'Bot pausado; aplicação do ciclo ignorada' : `Bot em status ${bot.status}; aplicação do ciclo ignorada`,
       },
     }
+  }
 
-    trace('DEBUG', 'bot', 'runBotCycle', 'Ciclo do bot executou ordem com sucesso', 0, {
-      userId,
+  if (await hasActiveTrainingSession(params.userId, bot.id)) {
+    return {
       botId: bot.id,
-      currentPair: selectedOpportunity.pair,
-      recommendedAction: selectedOpportunity.action,
-      confidence: selectedOpportunity.confidence,
+      botName: bot.name,
+      generatedAt: cycleGeneratedAt,
+      analysis,
+      plans: cyclePlans,
+      execution: {
+        mode: executionMode,
+        status: 'skipped',
+        reason: 'Treinamento ativo detectado; execução automática adiada',
+      },
+    }
+  }
+
+  if (!modelReadiness.modelReady) {
+    return {
+      botId: bot.id,
+      botName: bot.name,
+      generatedAt: cycleGeneratedAt,
+      analysis,
+      plans: cyclePlans,
+      execution: {
+        mode: executionMode,
+        status: 'skipped',
+        reason: modelReadiness.operationalBlockReason ?? 'Bot sem modelo executável para operação contínua',
+        pair: analysis.bestOpportunity?.pair,
+        action: analysis.bestOpportunity?.action,
+      },
+    }
+  }
+
+  const configuration = await prisma.configuration.findUnique({
+    where: { userId: params.userId },
+    select: {
+      maxTradeAmount: true,
+      maxTradeAmountUnit: true,
+    },
+  })
+
+  let exchangeCredentials: Awaited<ReturnType<typeof getUserExchangeCredentials>> = null
+  let openExchangeOrder: {
+    pair: string
+    status: string
+    requestedQuantity: number | null
+    quantity: number
+    externalStatus: string | null
+  } | null = null
+  let fullAutoBuyBlockReason: string | undefined
+
+  if (executionMode === 'full_auto') {
+    exchangeCredentials = await getUserExchangeCredentials(params.userId)
+    const fullAutoEligibility = await resolveBotFullAutoEligibility({
+      userId: params.userId,
+      botId: bot.id,
+      currentBotModelUrl: bot.modelUrl,
     })
-    endTrace('runBotCycle', { userId, botId, currentPair: selectedOpportunity.pair, recommendedAction: selectedOpportunity.action, confidence: selectedOpportunity.confidence })
+    if (!fullAutoEligibility.eligible) {
+      fullAutoBuyBlockReason = fullAutoEligibility.blockers[0]
+        ?? 'O champion atual ainda não atende aos critérios mínimos para abrir novas posições em full_auto.'
+    }
+
+    if (exchangeCredentials) {
+      await reconcileOpenOrdersForUserSafely(params.userId)
+      openExchangeOrder = await prisma.transaction.findFirst({
+        where: {
+          userId: params.userId,
+          botId: bot.id,
+          externalOrderId: { not: null },
+          status: { in: ['pending', 'partially_filled'] },
+        },
+        orderBy: [
+          { syncedAt: 'desc' },
+          { date: 'desc' },
+        ],
+        select: {
+          pair: true,
+          status: true,
+          requestedQuantity: true,
+          quantity: true,
+          externalStatus: true,
+        },
+      })
+
+      const liveBalancesBefore = await getAccountBalances(exchangeCredentials.apiKey, exchangeCredentials.secretKey, { forceRefresh: true })
+      await syncExternalBalances(params.userId, liveBalancesBefore)
+    }
+  }
+
+  const selectedOpportunity = (
+    params.cycleResult.plan.pair
+    && params.cycleResult.plan.action
+    && typeof params.cycleResult.plan.decisionPrice === 'number'
+    && typeof params.cycleResult.plan.confidence === 'number'
+  ) ? {
+    pair: params.cycleResult.plan.pair,
+    action: params.cycleResult.plan.action,
+    confidence: params.cycleResult.plan.confidence,
+    price: params.cycleResult.plan.decisionPrice,
+    reason: params.cycleResult.plan.reason,
+  } : analysis.bestOpportunity
+  const plannedQuantity = params.cycleResult.plan.quantity
+  const isRiskOverride = Boolean(params.cycleResult.plan.isRiskOverride)
+  const decisionTimestamp = new Date()
+  const persistDecision = async (input: {
+    executionStatus: BotCycleExecution['status']
+    reason: string
+    requestedQuantity?: number
+    executedQuantity?: number
+    transactionId?: string
+    slippagePercent?: number
+    simulatedLatencyMs?: number
+    simulatedFillPercent?: number
+    decisionPrice?: number
+    pair?: string
+    action?: 'buy' | 'sell' | 'hold'
+    confidence?: number
+    createdAt?: Date
+  }) => {
+    const pair = input.pair ?? selectedOpportunity?.pair
+    const action = input.action ?? selectedOpportunity?.action
+    const decisionPrice = input.decisionPrice ?? selectedOpportunity?.price
+    const confidence = input.confidence ?? selectedOpportunity?.confidence
+
+    if (
+      !pair
+      || !action
+      || typeof decisionPrice !== 'number'
+      || !Number.isFinite(decisionPrice)
+      || decisionPrice <= QUANTITY_EPSILON
+      || typeof confidence !== 'number'
+      || !Number.isFinite(confidence)
+    ) {
+      return
+    }
+
+    try {
+      await recordBotDecision({
+        userId: params.userId,
+        botId: bot.id,
+        pair,
+        action,
+        confidence,
+        reason: input.reason,
+        timeframe,
+        executionMode,
+        executionStatus: input.executionStatus,
+        decisionPrice,
+        requestedQuantity: input.requestedQuantity,
+        executedQuantity: input.executedQuantity,
+        transactionId: input.transactionId,
+        slippagePercent: input.slippagePercent,
+        simulatedLatencyMs: input.simulatedLatencyMs,
+        simulatedFillPercent: input.simulatedFillPercent,
+        modelVersion: modelReadiness.modelVersion,
+        modelUrl: modelReadiness.modelUrl,
+        modelArchitecture: modelReadiness.modelArchitecture,
+        horizonCandles: modelReadiness.forecastHorizonCandles ?? 5,
+        buyThresholdPercent: modelReadiness.buyThresholdPercent ?? 0.3,
+        sellThresholdPercent: modelReadiness.sellThresholdPercent ?? -0.3,
+        createdAt: input.createdAt ?? decisionTimestamp,
+      })
+    } catch (decisionError) {
+      logger.warn('[bot] Falha ao persistir decisão do bot', {
+        module: 'bot',
+        event: 'bot_decision_record_failed',
+        userId: params.userId,
+        botId: bot.id,
+        pair,
+        action,
+        error: decisionError,
+        skipPersistence: true,
+      })
+    }
+  }
+
+  if (params.cycleResult.plan.status === 'skipped') {
+    await persistDecision({
+      executionStatus: 'skipped',
+      reason: params.cycleResult.plan.reason,
+      requestedQuantity: plannedQuantity,
+      pair: params.cycleResult.plan.pair,
+      action: params.cycleResult.plan.action,
+      confidence: params.cycleResult.plan.confidence,
+      decisionPrice: params.cycleResult.plan.decisionPrice,
+    })
+
+    return {
+      botId: bot.id,
+      botName: bot.name,
+      generatedAt: cycleGeneratedAt,
+      analysis,
+      plans: cyclePlans,
+      execution: {
+        mode: executionMode,
+        status: 'skipped',
+        reason: params.cycleResult.plan.reason,
+        pair: params.cycleResult.plan.pair,
+        action: params.cycleResult.plan.action,
+        quantity: plannedQuantity,
+      },
+    }
+  }
+
+  if (params.cycleResult.plan.status === 'suggested') {
+    await persistDecision({
+      executionStatus: 'suggested',
+      reason: params.cycleResult.plan.reason,
+      requestedQuantity: plannedQuantity,
+      pair: params.cycleResult.plan.pair,
+      action: params.cycleResult.plan.action,
+      confidence: params.cycleResult.plan.confidence,
+      decisionPrice: params.cycleResult.plan.decisionPrice,
+    })
+
+    return {
+      botId: bot.id,
+      botName: bot.name,
+      generatedAt: cycleGeneratedAt,
+      analysis,
+      plans: cyclePlans,
+      execution: {
+        mode: executionMode,
+        status: 'suggested',
+        reason: params.cycleResult.plan.reason,
+        pair: params.cycleResult.plan.pair,
+        action: params.cycleResult.plan.action,
+        quantity: plannedQuantity,
+      },
+    }
+  }
+
+  if (
+    !selectedOpportunity
+    || !selectedOpportunity.pair
+    || !selectedOpportunity.action
+    || typeof selectedOpportunity.price !== 'number'
+    || !Number.isFinite(selectedOpportunity.price)
+    || selectedOpportunity.price <= QUANTITY_EPSILON
+    || typeof plannedQuantity !== 'number'
+    || !Number.isFinite(plannedQuantity)
+    || plannedQuantity <= QUANTITY_EPSILON
+  ) {
+    await persistDecision({
+      executionStatus: 'skipped',
+      reason: 'O runtime Python não retornou um plano de execução válido',
+    })
+
+    return {
+      botId: bot.id,
+      botName: bot.name,
+      generatedAt: cycleGeneratedAt,
+      analysis,
+      plans: cyclePlans,
+      execution: {
+        mode: executionMode,
+        status: 'skipped',
+        reason: 'O runtime Python não retornou um plano de execução válido',
+      },
+    }
+  }
+
+  if (executionMode === 'full_auto' && selectedOpportunity.action === 'buy' && fullAutoBuyBlockReason) {
+    await persistDecision({
+      executionStatus: 'skipped',
+      reason: fullAutoBuyBlockReason,
+      requestedQuantity: plannedQuantity,
+      decisionPrice: selectedOpportunity.price,
+    })
+
+    return {
+      botId: bot.id,
+      botName: bot.name,
+      generatedAt: cycleGeneratedAt,
+      analysis,
+      plans: cyclePlans,
+      execution: {
+        mode: executionMode,
+        status: 'skipped',
+        reason: fullAutoBuyBlockReason,
+        pair: selectedOpportunity.pair,
+        action: selectedOpportunity.action,
+        quantity: plannedQuantity,
+      },
+    }
+  }
+
+  if (executionMode === 'full_auto' && openExchangeOrder) {
+    const quantity = openExchangeOrder.requestedQuantity ?? openExchangeOrder.quantity
+    await persistDecision({
+      executionStatus: 'skipped',
+      reason: `Ainda existe uma ordem ${openExchangeOrder.status === 'partially_filled' ? 'parcialmente executada' : 'pendente'} em ${openExchangeOrder.pair}; o bot vai aguardar a reconciliação antes de abrir nova posição`,
+      requestedQuantity: quantity ?? undefined,
+      decisionPrice: selectedOpportunity.price,
+    })
+
+    return {
+      botId: bot.id,
+      botName: bot.name,
+      generatedAt: cycleGeneratedAt,
+      analysis,
+      plans: cyclePlans,
+      execution: {
+        mode: executionMode,
+        status: 'skipped',
+        reason: `Ainda existe uma ordem ${openExchangeOrder.status === 'partially_filled' ? 'parcialmente executada' : 'pendente'} em ${openExchangeOrder.pair}; o bot vai aguardar a reconciliação antes de abrir nova posição`,
+        pair: selectedOpportunity.pair,
+        action: selectedOpportunity.action,
+        quantity: quantity ?? undefined,
+      },
+    }
+  }
+
+  const executionAction = selectedOpportunity.action as 'buy' | 'sell'
+
+  let transaction: ExecutedOrderPayload
+  let executionStatus: BotCycleExecution['status'] = 'executed'
+  let executionReason = params.cycleResult.plan.reason
+  let paperSimulation = params.cycleResult.plan.paperSimulation
+    ? {
+        requestedQuantity: params.cycleResult.plan.paperSimulation.requestedQuantity,
+        executedQuantity: params.cycleResult.plan.paperSimulation.executedQuantity,
+        executionPrice: params.cycleResult.plan.paperSimulation.executionPrice,
+        slippagePercent: params.cycleResult.plan.paperSimulation.slippagePercent,
+        simulatedLatencyMs: params.cycleResult.plan.paperSimulation.simulatedLatencyMs,
+        simulatedFillPercent: params.cycleResult.plan.paperSimulation.simulatedFillPercent,
+      }
+    : null
+
+  if (executionMode === 'full_auto' && exchangeCredentials) {
+    const preparedOrder = await prepareSpotOrderRequest({
+      pair: selectedOpportunity.pair,
+      quantity: plannedQuantity,
+      orderType: 'MARKET',
+      referencePrice: selectedOpportunity.price,
+    })
+
+    if (!preparedOrder.isValid || !preparedOrder.quantity) {
+      const reason = preparedOrder.rejectionReason ?? 'A ordem não atendeu aos filtros da Binance'
+      await persistDecision({
+        executionStatus: 'skipped',
+        reason,
+        requestedQuantity: plannedQuantity,
+      })
+
+      return {
+        botId: bot.id,
+        botName: bot.name,
+        generatedAt: new Date().toISOString(),
+        analysis,
+        plans: cyclePlans,
+        execution: {
+          mode: executionMode,
+          status: 'skipped',
+          reason,
+          pair: selectedOpportunity.pair,
+          action: selectedOpportunity.action,
+        },
+      }
+    }
+
+    const liveOrder = await createSpotOrder(exchangeCredentials.apiKey, exchangeCredentials.secretKey, {
+      pair: selectedOpportunity.pair,
+      side: selectedOpportunity.action === 'buy' ? 'BUY' : 'SELL',
+      quantity: preparedOrder.quantity,
+    })
+
+    const requestedQuantity = roundQuantity(Number(liveOrder.origQty || preparedOrder.quantity || plannedQuantity))
+    const executedQuantity = roundQuantity(Number(liveOrder.executedQty || 0))
+    const executedTotal = Number(liveOrder.cummulativeQuoteQty || (executedQuantity * selectedOpportunity.price))
+    const executedPrice = executedQuantity > QUANTITY_EPSILON && executedTotal > QUANTITY_EPSILON
+      ? (executedTotal / executedQuantity)
+      : selectedOpportunity.price
+    const localOrderStatus = mapBinanceOrderStatusToLocalStatus(liveOrder.status, executedQuantity)
+    const syncedAt = new Date(liveOrder.updateTime || liveOrder.transactTime || Date.now())
+
+    if (localOrderStatus === 'executed' && (!Number.isFinite(executedQuantity) || executedQuantity <= QUANTITY_EPSILON)) {
+      throw new Error('A Binance não retornou quantidade executada válida para a ordem do bot')
+    }
+
+    const { quoteCurrency } = getPairCurrencies(selectedOpportunity.pair)
+    const liveFee = await extractBinanceFeeBreakdown({
+      fills: liveOrder.fills,
+      quoteCurrency,
+      totalValue: executedTotal,
+    })
+
+    if (localOrderStatus === 'executed') {
+      transaction = await executeOrderForUser({
+        userId: params.userId,
+        pair: selectedOpportunity.pair,
+        type: executionAction,
+        quantity: executedQuantity,
+        requestedQuantity,
+        orderType: 'market',
+        price: executedPrice,
+        totalOverride: executedTotal,
+        feeOverride: liveFee.fee,
+        feeCurrencyOverride: liveFee.feeCurrency,
+        feeRateAppliedOverride: liveFee.feeRateApplied,
+        feeDiscountSourceOverride: liveFee.feeDiscountSource,
+        feeInQuoteOverride: liveFee.feeInQuote,
+        origin: 'bot',
+        botId: bot.id,
+        statusOverride: localOrderStatus,
+        externalOrderId: String(liveOrder.orderId),
+        externalClientOrderId: liveOrder.clientOrderId,
+        externalStatus: liveOrder.status,
+        syncedAt,
+      })
+    } else {
+      transaction = await upsertExchangeOrderSnapshot({
+        userId: params.userId,
+        pair: selectedOpportunity.pair,
+        type: executionAction,
+        origin: 'bot',
+        botId: bot.id,
+        orderType: 'market',
+        requestedQuantity,
+        executedQuantity,
+        price: executedPrice,
+        total: executedTotal,
+        fee: liveFee.fee ?? 0,
+        feeInQuote: liveFee.feeInQuote,
+        feeCurrency: liveFee.feeCurrency || quoteCurrency,
+        feeRateApplied: liveFee.feeRateApplied ?? 0,
+        feeDiscountSource: liveFee.feeDiscountSource,
+        externalOrderId: String(liveOrder.orderId),
+        externalClientOrderId: liveOrder.clientOrderId,
+        externalStatus: liveOrder.status,
+        status: localOrderStatus,
+        syncedAt,
+      })
+
+      executionStatus = 'submitted'
+    }
+
+    const liveBalancesAfter = await getAccountBalances(exchangeCredentials.apiKey, exchangeCredentials.secretKey, { forceRefresh: true })
+    await syncExternalBalances(params.userId, liveBalancesAfter)
+    await recordBalanceHistorySnapshot(params.userId, liveBalancesAfter.map((balance) => ({
+      currency: balance.currency,
+      total: balance.total,
+    }))).catch((snapshotError) => {
+      logger.warn('[bot] Falha ao registrar snapshot após ordem real do bot', {
+        module: 'bot',
+        event: 'bot_cycle_live_balance_snapshot_failed',
+        userId: params.userId,
+        botId: bot.id,
+        error: snapshotError,
+        skipPersistence: true,
+      })
+    })
+
+    if (localOrderStatus === 'executed') {
+      executionReason = isRiskOverride
+        ? `${selectedOpportunity.reason} · ordem real executada na Binance`
+        : 'Executado automaticamente em modo full_auto na Binance'
+    } else if (localOrderStatus === 'partially_filled') {
+      executionReason = 'Ordem enviada para Binance e executada parcialmente; aguardando reconciliação dos próximos fills'
+    } else if (localOrderStatus === 'pending') {
+      executionReason = 'Ordem enviada para Binance e registrada como pendente; o bot vai acompanhar a execução antes de abrir nova posição'
+    } else if (localOrderStatus === 'cancelled') {
+      executionReason = 'A Binance retornou a ordem do bot como cancelada; a posição não foi aberta por completo'
+    } else {
+      executionReason = 'A Binance rejeitou a ordem enviada pelo bot; nenhuma posição nova foi confirmada'
+    }
+
+    if (preparedOrder.adjustments.length > 0) {
+      executionReason = `${executionReason} · ${preparedOrder.adjustments.join(' · ')}`
+    }
+  } else {
+    paperSimulation = paperSimulation ?? buildPaperSimulation({
+      action: executionAction,
+      confidence: selectedOpportunity.confidence,
+      requestedQuantity: plannedQuantity,
+      referencePrice: selectedOpportunity.price,
+    })
+
+    transaction = await executeOrderForUser({
+      userId: params.userId,
+      pair: selectedOpportunity.pair,
+      type: executionAction,
+      quantity: paperSimulation.executedQuantity,
+      requestedQuantity: paperSimulation.requestedQuantity,
+      orderType: 'market',
+      price: paperSimulation.executionPrice,
+      origin: 'bot',
+      botId: bot.id,
+    })
+
+    if (isRiskOverride) {
+      executionReason = `${selectedOpportunity.reason} · ordem executada em modo paper`
+    } else {
+      executionReason = `${executionReason} · slippage ${paperSimulation.slippagePercent.toFixed(2)}% · fill ${Math.round(paperSimulation.simulatedFillPercent * 100)}%`
+    }
+  }
+
+  await persistDecision({
+    executionStatus,
+    reason: executionReason,
+    requestedQuantity: transaction.requestedQuantity ?? transaction.quantity,
+    executedQuantity: transaction.quantity,
+    transactionId: transaction.id,
+    slippagePercent: paperSimulation?.slippagePercent,
+    simulatedLatencyMs: paperSimulation?.simulatedLatencyMs,
+    simulatedFillPercent: paperSimulation?.simulatedFillPercent,
+    decisionPrice: transaction.price,
+    createdAt: transaction.date,
+  })
+
+  logger.info('[bot] Ordem automatizada executada pelo ciclo do bot', {
+    module: 'bot',
+    event: executionMode === 'full_auto'
+      ? (executionStatus === 'executed' ? 'bot_cycle_order_executed_full_auto' : 'bot_cycle_order_submitted_full_auto')
+      : 'bot_cycle_order_executed_paper',
+    userId: params.userId,
+    botId: bot.id,
+    botName: bot.name,
+    pair: selectedOpportunity.pair,
+    action: selectedOpportunity.action,
+    confidence: selectedOpportunity.confidence,
+    quantity: transaction.requestedQuantity ?? transaction.quantity,
+    transactionId: transaction.id,
+    transactionStatus: transaction.status,
+  })
+
+  emitDashboardUpdate(params.userId, {
+    scope: 'bots',
+    reason: executionStatus === 'executed' ? 'bot_cycle_executed' : 'bot_cycle_submitted',
+    botId: bot.id,
+    updatedAt: new Date().toISOString(),
+  })
+
+  return {
+    botId: bot.id,
+    botName: bot.name,
+    generatedAt: new Date().toISOString(),
+    analysis,
+    plans: cyclePlans,
+    execution: {
+      mode: executionMode,
+      status: executionStatus,
+      reason: executionReason,
+      pair: selectedOpportunity.pair,
+      action: selectedOpportunity.action,
+      quantity: transaction.requestedQuantity ?? transaction.quantity,
+      transaction,
+    },
+  }
+}
+
+export async function runBotCycle(botId: string, userId: string): Promise<BotCycleResult | null> {
+  if (processingBots.has(botId)) {
+    return null
+  }
+
+  processingBots.add(botId)
+  startTrace(userId, 'runBotCycle', 'bot')
+
+  try {
+    const bot = await loadBotForCycle(botId, userId)
+
+    if (!bot) {
+      endTrace('runBotCycle', { userId, botId, errorFlag: true })
+      return null
+    }
+
+    const executionMode = ((bot.executionMode || 'paper') as BotExecutionMode)
+    const cycleContext = await buildBotRuntimeCycleContext(botId, userId)
+
+    if (!cycleContext) {
+      const analysis = await analyzeBotInstance(userId, botId)
+      if (!analysis) {
+        endTrace('runBotCycle', { userId, botId, errorFlag: true })
+        return null
+      }
+
+      const modelReadiness = await resolveBotOperationalReadiness(bot.modelUrl)
+      const skipReason = bot.isPaused
+        ? 'Bot pausado; ciclo ignorado'
+        : bot.status !== 'online'
+          ? `Bot em status ${bot.status}; ciclo ignorado`
+          : await hasActiveTrainingSession(userId, bot.id)
+            ? 'Treinamento ativo detectado; execução automática adiada'
+            : modelReadiness.operationalBlockReason ?? 'Bot não elegível para ciclo automático neste momento'
+
+      const result: BotCycleResult = {
+        botId: bot.id,
+        botName: bot.name,
+        generatedAt: new Date().toISOString(),
+        analysis,
+        execution: {
+          mode: executionMode,
+          status: 'skipped',
+          reason: skipReason,
+          pair: analysis.bestOpportunity?.pair,
+          action: analysis.bestOpportunity?.action,
+        },
+      }
+
+      endTrace('runBotCycle', {
+        userId,
+        botId,
+        currentPair: analysis.bestOpportunity?.pair,
+        recommendedAction: analysis.bestOpportunity?.action,
+        confidence: analysis.bestOpportunity?.confidence,
+      })
+      return result
+    }
+
+    const cycleResult = await runPythonBotCycle(cycleContext.payload)
+    const result = await applyBotRuntimeCycleResult({
+      botId,
+      userId,
+      cycleResult,
+      cycleGeneratedAt: cycleContext.generatedAt,
+    })
+
+    if (!result) {
+      endTrace('runBotCycle', { userId, botId, errorFlag: true })
+      return null
+    }
+
+    trace('DEBUG', 'bot', 'runBotCycle', 'Ciclo do bot executado via payload compartilhado do runtime', 0, {
+      userId,
+      botId,
+      currentPair: result.execution.pair,
+      recommendedAction: result.execution.action,
+      confidence: result.analysis.bestOpportunity?.confidence,
+    })
+
+    endTrace('runBotCycle', {
+      userId,
+      botId,
+      currentPair: result.execution.pair,
+      recommendedAction: result.execution.action,
+      confidence: result.analysis.bestOpportunity?.confidence,
+    })
     return result
   } catch (error) {
     logger.error('[bot] Erro ao executar ciclo do bot', {
@@ -1899,26 +2142,28 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
   }
 }
 
-export async function processBotQueueCycle(): Promise<void> {
-  const bots = await prisma.bot.findMany({
-    where: {
-      userId: { not: null },
-      status: 'online',
-      isPaused: false,
-    },
-    select: {
-      id: true,
-      userId: true,
-    },
+export async function processBotRuntimeMaintenanceCycle(): Promise<void> {
+  await processOpenExchangeOrdersCycle()
+  await evaluatePendingBotDecisions().catch((evaluationError) => {
+    logger.warn('[bot] Falha ao avaliar decisões pendentes do runtime externo', {
+      module: 'bot',
+      event: 'bot_runtime_decision_evaluation_failed',
+      error: evaluationError,
+      skipPersistence: true,
+    })
   })
+}
+
+export async function processBotQueueCycle(): Promise<void> {
+  const bots = await listBotRuntimeQueue()
 
   for (const bot of bots) {
-    if (!bot.userId || processingBots.has(bot.id)) {
+    if (processingBots.has(bot.botId)) {
       continue
     }
 
     try {
-      await runBotCycle(bot.id, bot.userId)
+      await runBotCycle(bot.botId, bot.userId)
     } catch {
       // O erro já é logado dentro de runBotCycle.
     }
@@ -1954,16 +2199,8 @@ async function runWorkerCycleSafely(): Promise<void> {
   isCycleRunning = true
 
   try {
-    await processOpenExchangeOrdersCycle()
+    await processBotRuntimeMaintenanceCycle()
     await processBotQueueCycle()
-    await evaluatePendingBotDecisions().catch((evaluationError) => {
-      logger.warn('[bot] Falha ao avaliar decisões pendentes do worker', {
-        module: 'bot',
-        event: 'bot_worker_decision_evaluation_failed',
-        error: evaluationError,
-        skipPersistence: true,
-      })
-    })
   } finally {
     isCycleRunning = false
   }
