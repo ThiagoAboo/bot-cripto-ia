@@ -236,6 +236,28 @@ function resolvePaperResetBalance(): { currency: string; amount: number } {
   }
 }
 
+async function deleteSocialSignalSnapshotsIfSupported(
+  client: Prisma.TransactionClient | typeof prisma,
+  userId: string,
+): Promise<number> {
+  const delegate = (
+    client as unknown as {
+      socialSignalSnapshot?: {
+        deleteMany: (args: { where: { userId: string } }) => Promise<{ count: number }>
+      }
+    }
+  ).socialSignalSnapshot
+  if (!delegate?.deleteMany) {
+    return 0
+  }
+
+  const result = await delegate.deleteMany({
+    where: { userId },
+  })
+
+  return result.count
+}
+
 async function collectResetAssets(
   tx: Prisma.TransactionClient,
   userId: string,
@@ -379,6 +401,7 @@ export async function executeConfigurationReset(
   const deletedRecords = {
     logs: 0,
     traces: 0,
+    socialSignalSnapshots: 0,
     balances: 0,
     balanceHistory: 0,
     transactions: 0,
@@ -391,13 +414,15 @@ export async function executeConfigurationReset(
 
   await prisma.$transaction(async (tx) => {
     if (plan.clearLogsTraces) {
-      const [logs, traces] = await Promise.all([
+      const [logs, traces, socialSignalSnapshots] = await Promise.all([
         tx.log.deleteMany({ where: { userId } }),
         tx.trace.deleteMany({ where: { userId } }),
+        deleteSocialSignalSnapshotsIfSupported(tx, userId).then((count) => ({ count })),
       ])
 
       deletedRecords.logs = logs.count
       deletedRecords.traces = traces.count
+      deletedRecords.socialSignalSnapshots = socialSignalSnapshots.count
     }
 
     if (plan.clearBotDecisions) {
@@ -462,6 +487,10 @@ export async function executeConfigurationReset(
     }
 
     if (plan.resetConfigurations) {
+      if (deletedRecords.socialSignalSnapshots === 0) {
+        deletedRecords.socialSignalSnapshots = await deleteSocialSignalSnapshotsIfSupported(tx, userId)
+      }
+
       const defaultConfiguration = buildDefaultConfigurationData({
         exchange: preloadedAssets.configuration?.exchange ?? 'binance',
         apiKey: preloadedAssets.configuration?.apiKey ?? '',

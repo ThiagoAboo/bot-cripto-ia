@@ -500,7 +500,7 @@ export async function getSocialLatest(req: AuthRequest, res: Response): Promise<
   try {
     const config = await findOrCreateConfiguration(req.userId!)
     const pairDiscovery = parsePairDiscoveryConfig(config.pairDiscovery)
-    const signals = await getLatestSocialSignals(pairDiscovery)
+    const signals = await getLatestSocialSignals(req.userId!, pairDiscovery)
 
     endTrace('getSocialLatest', { userId: req.userId })
     return res.json({
@@ -546,6 +546,7 @@ export async function previewPairDiscovery(req: AuthRequest, res: Response): Pro
     })
     const allowedPairs = validation.data.allowedPairs ?? parseAllowedPairs(config.allowedPairs)
     const preview = await generatePairDiscoveryPreview({
+      userId: req.userId!,
       allowedPairs,
       fees,
       pairDiscovery,
@@ -603,6 +604,7 @@ export async function applyPairDiscovery(req: AuthRequest, res: Response): Promi
     })
     const allowedPairs = validation.data.allowedPairs ?? parseAllowedPairs(config.allowedPairs)
     const preview = await generatePairDiscoveryPreview({
+      userId: req.userId!,
       allowedPairs,
       fees,
       pairDiscovery,

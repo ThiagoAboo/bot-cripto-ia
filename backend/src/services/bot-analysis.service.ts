@@ -1,17 +1,18 @@
 import { prisma } from '../config/database'
-import { getBotInstanceById, buildStrategyId } from './bot-registry.service'
+import { buildStrategyId, getBotInstanceById } from './bot-registry.service'
 import { DEFAULT_PAIR_DISCOVERY_CONFIG, parsePairDiscoveryConfig } from './configuration.service'
-import { getCandles, getTickerPrice } from './binance.service'
-import { getLatestSocialSignals, type SocialSignal } from './pair-discovery.service'
-import { isPythonMlEngineEnabled, predictWithRealModelArtifact } from './python-ml-engine.service'
+import { getInternalApiBaseUrl } from './internal-api-base-url.service'
+import { runPythonBotAnalysis, type PythonBotRuntimeOpportunity } from './python-bot-runtime.service'
 import { emitDashboardUpdate } from './socket.service'
+import { signUserAccessToken } from './auth-token.service'
 import { resolveTrainingModelArtifactPath } from './training-model.service'
 import { logger } from '../utils/logger'
 import { trace } from '../utils/tracer'
+import type { SocialSignal } from './pair-discovery.service'
 
 type BotAnalysisAction = 'buy' | 'sell' | 'hold'
 
-interface RuntimeSpecialistInsight {
+export interface RuntimeSpecialistInsight {
   specialist: string
   action: BotAnalysisAction
   confidence: number
@@ -19,51 +20,13 @@ interface RuntimeSpecialistInsight {
   indicators: Record<string, number | null>
 }
 
-interface RuntimeOpportunity {
+export interface RuntimeOpportunity {
   pair: string
   action: BotAnalysisAction
   confidence: number
   price: number
   reason: string
   specialists: RuntimeSpecialistInsight[]
-}
-
-interface RuntimeAnalysisResult {
-  primarySpecialist: string
-  opportunities: RuntimeOpportunity[]
-  bestOpportunity?: RuntimeOpportunity
-  summary: {
-    analyzedPairs: number
-    actionablePairs: number
-    buySignals: number
-    sellSignals: number
-    holdSignals: number
-  }
-}
-
-interface BotRuntimeModule {
-  createBotAnalysisRuntime: () => {
-    analyzeBot(input: {
-      bot: {
-        id: string
-        name: string
-        strategyType: string
-        strategyId: string
-        indicatorType?: string
-        specialization?: string
-        parameters: Record<string, unknown>
-        minSocialScore?: number
-        minMentions?: number
-      }
-      marketSnapshots: Array<{
-        pair: string
-        currentPrice: number
-        candles: Array<{ timestamp: string; open: number; high: number; low: number; close: number; volume: number }>
-        socialSignal?: SocialSignal
-      }>
-      includeSocialOverlay?: boolean
-    }): RuntimeAnalysisResult
-  }
 }
 
 export interface BotAnalysisResponse {
@@ -76,13 +39,18 @@ export interface BotAnalysisResponse {
   timeframe: string
   generatedAt: string
   analyzedPairs: string[]
-  summary: RuntimeAnalysisResult['summary']
+  summary: {
+    analyzedPairs: number
+    actionablePairs: number
+    buySignals: number
+    sellSignals: number
+    holdSignals: number
+  }
   bestOpportunity?: RuntimeOpportunity
   opportunities: RuntimeOpportunity[]
   socialSignals: SocialSignal[]
 }
 
-const { createBotAnalysisRuntime } = require('../../../bots/src/index.js') as BotRuntimeModule
 const DEFAULT_ALLOWED_PAIRS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT']
 
 function safeJsonParse<T>(value: string | null | undefined, fallback: T): T {
@@ -131,73 +99,38 @@ function resolveTimeframe(parameters: Record<string, unknown>): '1m' | '5m' | '1
   return '1h'
 }
 
-function buildCandidatePairs(params: {
-  allowedPairs: string[]
-  currentPair?: string | null
-  socialSignals: SocialSignal[]
-  limit: number
-}): string[] {
-  const orderedPairs = new Set<string>()
+function resolveMaxPairsToAnalyze(
+  parameters: Record<string, unknown>,
+  overrideLimit?: number,
+): number | undefined {
+  const configuredLimit = typeof parameters.maxPairsToAnalyze === 'number'
+    ? parameters.maxPairsToAnalyze
+    : undefined
+  const candidate = typeof overrideLimit === 'number' && Number.isFinite(overrideLimit)
+    ? overrideLimit
+    : configuredLimit
 
-  if (params.currentPair) {
-    orderedPairs.add(params.currentPair.toUpperCase())
+  if (typeof candidate !== 'number' || !Number.isFinite(candidate) || candidate <= 0) {
+    return undefined
   }
 
-  params.socialSignals.forEach((signal) => {
-    if (params.allowedPairs.includes(signal.pair)) {
-      orderedPairs.add(signal.pair)
-    }
-  })
-
-  params.allowedPairs.forEach((pair) => {
-    orderedPairs.add(pair)
-  })
-
-  return Array.from(orderedPairs).slice(0, params.limit)
+  return Math.min(Math.round(candidate), 500)
 }
 
-function buildRuntimeSummary(opportunities: RuntimeOpportunity[]): RuntimeAnalysisResult['summary'] {
+function normalizeOpportunity(entry: PythonBotRuntimeOpportunity): RuntimeOpportunity {
   return {
-    analyzedPairs: opportunities.length,
-    actionablePairs: opportunities.filter((entry) => entry.action !== 'hold').length,
-    buySignals: opportunities.filter((entry) => entry.action === 'buy').length,
-    sellSignals: opportunities.filter((entry) => entry.action === 'sell').length,
-    holdSignals: opportunities.filter((entry) => entry.action === 'hold').length,
-  }
-}
-
-function buildPythonRuntimeAnalysis(
-  prediction: Awaited<ReturnType<typeof predictWithRealModelArtifact>>,
-  marketSnapshots: Array<{
-    pair: string
-    currentPrice: number
-  }>,
-): RuntimeAnalysisResult {
-  const priceByPair = new Map<string, number>(
-    marketSnapshots.map((snapshot) => [snapshot.pair, snapshot.currentPrice]),
-  )
-  const opportunities: RuntimeOpportunity[] = prediction.opportunities.map((entry) => ({
     pair: entry.pair,
     action: entry.action,
     confidence: entry.confidence,
-    price: priceByPair.get(entry.pair) ?? 0,
+    price: entry.price,
     reason: entry.reason,
-    specialists: [
-      {
-        specialist: prediction.primarySpecialist,
-        action: entry.action,
-        confidence: entry.confidence,
-        reason: entry.reason,
-        indicators: {},
-      },
-    ],
-  }))
-
-  return {
-    primarySpecialist: prediction.primarySpecialist,
-    bestOpportunity: opportunities.find((entry) => entry.action !== 'hold' && entry.confidence >= 55),
-    opportunities,
-    summary: buildRuntimeSummary(opportunities),
+    specialists: entry.specialists.map((specialist) => ({
+      specialist: specialist.specialist,
+      action: specialist.action,
+      confidence: specialist.confidence,
+      reason: specialist.reason,
+      indicators: specialist.indicators,
+    })),
   }
 }
 
@@ -211,14 +144,21 @@ export async function analyzeBotInstance(
     return null
   }
 
-  const runtime = createBotAnalysisRuntime()
-  const configuration = await prisma.configuration.findUnique({
-    where: { userId },
-    select: {
-      allowedPairs: true,
-      pairDiscovery: true,
-    },
-  })
+  const [configuration, user] = await Promise.all([
+    prisma.configuration.findUnique({
+      where: { userId },
+      select: {
+        allowedPairs: true,
+        pairDiscovery: true,
+      },
+    }),
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        email: true,
+      },
+    }),
+  ])
 
   const templateParameters = safeJsonParse<Record<string, unknown>>(bot.template?.defaultParameters, {})
   const instanceParameters = safeJsonParse<Record<string, unknown>>(bot.parameters, {})
@@ -227,128 +167,74 @@ export async function analyzeBotInstance(
     ...instanceParameters,
   }
   const timeframe = resolveTimeframe(parameters)
+  const pairLimit = resolveMaxPairsToAnalyze(parameters, options?.pairLimit)
   const pairDiscoveryConfig = configuration
     ? parsePairDiscoveryConfig(configuration.pairDiscovery)
     : DEFAULT_PAIR_DISCOVERY_CONFIG
-  const socialSignals = await getLatestSocialSignals(pairDiscoveryConfig).catch((error) => {
-    logger.warn('[bot] Falha ao carregar sinais sociais para análise do bot', {
-      module: 'bot',
-      event: 'bot_analysis_social_signal_error',
-      userId,
-      botId,
-      error,
-      skipPersistence: true,
-    })
-
-    return [] as SocialSignal[]
-  })
   const configuredAllowedPairs = normalizePairs(
     safeJsonParse(configuration?.allowedPairs, DEFAULT_ALLOWED_PAIRS),
     DEFAULT_ALLOWED_PAIRS,
   )
   const allowedPairs = resolveAllowedPairs(parameters, configuredAllowedPairs)
-  const candidatePairs = buildCandidatePairs({
-    allowedPairs,
-    currentPair: bot.currentPair,
-    socialSignals,
-    limit: options?.pairLimit ?? 6,
-  })
-  const socialSignalMap = new Map<string, SocialSignal>(socialSignals.map((signal) => [signal.pair, signal]))
-
-  const marketSnapshots = (await Promise.all(candidatePairs.map(async (pair) => {
-    try {
-      const [candles, tickerPrice] = await Promise.all([
-        getCandles(pair, timeframe, 120),
-        getTickerPrice(pair).catch(() => null),
-      ])
-
-      if (candles.length < 20) {
-        return null
-      }
-
-      return {
-        pair,
-        candles,
-        currentPrice: tickerPrice ?? candles[candles.length - 1].close,
-        socialSignal: socialSignalMap.get(pair),
-      }
-    } catch (error) {
-      logger.warn('[bot] Falha ao montar snapshot de mercado para análise', {
-        module: 'bot',
-        event: 'bot_analysis_market_snapshot_error',
-        userId,
-        botId,
-        pair,
-        error,
-        skipPersistence: true,
-      })
-      return null
-    }
-  }))).filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-
   const strategyType = bot.template?.strategyType ?? bot.strategyType
   const strategyId = bot.template?.id ?? buildStrategyId(strategyType)
-  let runtimeAnalysis: RuntimeAnalysisResult
+  const modelArtifactPath = bot.modelUrl
+    ? resolveTrainingModelArtifactPath(bot.modelUrl)
+    : undefined
 
-  if (bot.modelUrl && isPythonMlEngineEnabled()) {
-    try {
-      const prediction = await predictWithRealModelArtifact(
-        resolveTrainingModelArtifactPath(bot.modelUrl),
-        marketSnapshots,
-      )
-      runtimeAnalysis = buildPythonRuntimeAnalysis(prediction, marketSnapshots)
-    } catch (error) {
-      logger.warn('[bot] Falha ao usar inferência Python no bot; fallback heurístico será aplicado', {
-        module: 'bot',
-        event: 'bot_analysis_python_inference_fallback',
-        userId,
-        botId,
-        modelUrl: bot.modelUrl,
-        error,
-        skipPersistence: true,
-      })
-
-      runtimeAnalysis = runtime.analyzeBot({
-        bot: {
-          id: bot.id,
-          name: bot.name,
-          strategyType,
-          strategyId,
-          indicatorType: bot.template?.indicatorType ?? undefined,
-          specialization: bot.template?.specialization ?? undefined,
-          parameters,
-          minMentions: pairDiscoveryConfig.minMentions,
-          minSocialScore: pairDiscoveryConfig.minSocialScore,
-        },
-        marketSnapshots,
-        includeSocialOverlay: socialSignals.length > 0,
-      })
-    }
-  } else {
-    runtimeAnalysis = runtime.analyzeBot({
-      bot: {
-        id: bot.id,
-        name: bot.name,
-        strategyType,
-        strategyId,
-        indicatorType: bot.template?.indicatorType ?? undefined,
-        specialization: bot.template?.specialization ?? undefined,
-        parameters,
-        minMentions: pairDiscoveryConfig.minMentions,
-        minSocialScore: pairDiscoveryConfig.minSocialScore,
-      },
-      marketSnapshots,
-      includeSocialOverlay: socialSignals.length > 0,
+  const runtimeAnalysis = await runPythonBotAnalysis({
+    backend: {
+      baseUrl: getInternalApiBaseUrl(),
+      accessToken: signUserAccessToken({
+        id: userId,
+        email: user?.email ?? '',
+      }),
+      timeoutSeconds: Number(process.env.PYTHON_BOT_RUNTIME_TIMEOUT_SECONDS ?? 15),
+    },
+    bot: {
+      id: bot.id,
+      name: bot.name,
+      strategyType,
+      strategyId,
+      indicatorType: bot.template?.indicatorType ?? undefined,
+      specialization: bot.template?.specialization ?? undefined,
+      parameters,
+      allowedPairs,
+      focusPair: bot.focusPair ?? undefined,
+      currentPair: bot.currentPair ?? undefined,
+      minMentions: pairDiscoveryConfig.minMentions,
+      minSocialScore: pairDiscoveryConfig.minSocialScore,
+      timeframe,
+      modelArtifactPath,
+    },
+    pairLimit,
+    includeSocialOverlay: true,
+  }).catch((error) => {
+    logger.error('[bot] Falha ao executar runtime Python dos bots', {
+      module: 'bot',
+      event: 'bot_analysis_python_runtime_error',
+      userId,
+      botId,
+      error,
+      skipPersistence: true,
     })
-  }
+    throw error
+  })
+
+  const bestOpportunity = runtimeAnalysis.bestOpportunity
+    ? normalizeOpportunity(runtimeAnalysis.bestOpportunity)
+    : undefined
+  const opportunities = runtimeAnalysis.opportunities.map(normalizeOpportunity)
   const generatedAt = new Date().toISOString()
+  const actionableOpportunity = opportunities.find((entry) => entry.action !== 'hold')
 
   await prisma.bot.update({
     where: { id: bot.id },
     data: {
-      currentPair: runtimeAnalysis.bestOpportunity?.pair ?? null,
-      recommendedAction: runtimeAnalysis.bestOpportunity?.action ?? 'hold',
-      confidence: runtimeAnalysis.bestOpportunity?.confidence ?? 0,
+      focusPair: actionableOpportunity?.pair ?? bot.focusPair ?? null,
+      currentPair: bestOpportunity?.pair ?? null,
+      recommendedAction: bestOpportunity?.action ?? 'hold',
+      confidence: bestOpportunity?.confidence ?? 0,
       lastAnalysis: new Date(generatedAt),
       updatedAt: new Date(generatedAt),
     },
@@ -361,12 +247,12 @@ export async function analyzeBotInstance(
     updatedAt: generatedAt,
   })
 
-  trace('DEBUG', 'bot', 'analyzeBotInstance', `Análise do bot ${bot.name} concluída`, 0, {
+  trace('DEBUG', 'bot', 'analyzeBotInstance', `Analise do bot ${bot.name} concluida`, 0, {
     userId,
     botId,
-    currentPair: runtimeAnalysis.bestOpportunity?.pair ?? null,
-    recommendedAction: runtimeAnalysis.bestOpportunity?.action ?? 'hold',
-    confidence: runtimeAnalysis.bestOpportunity?.confidence ?? 0,
+    currentPair: bestOpportunity?.pair ?? null,
+    recommendedAction: bestOpportunity?.action ?? 'hold',
+    confidence: bestOpportunity?.confidence ?? 0,
   })
 
   return {
@@ -376,12 +262,12 @@ export async function analyzeBotInstance(
     templateId: bot.template?.id ?? undefined,
     templateName: bot.template?.name ?? undefined,
     primarySpecialist: runtimeAnalysis.primarySpecialist,
-    timeframe,
+    timeframe: runtimeAnalysis.timeframe,
     generatedAt,
-    analyzedPairs: candidatePairs,
+    analyzedPairs: runtimeAnalysis.analyzedPairs,
     summary: runtimeAnalysis.summary,
-    bestOpportunity: runtimeAnalysis.bestOpportunity,
-    opportunities: runtimeAnalysis.opportunities,
-    socialSignals: socialSignals.slice(0, 5),
+    bestOpportunity,
+    opportunities,
+    socialSignals: runtimeAnalysis.socialSignals.slice(0, 5),
   }
 }

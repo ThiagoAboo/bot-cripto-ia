@@ -20,6 +20,7 @@ const { prisma } = require('../src/config/database')
 const loggerModule = require('../src/utils/logger')
 const tracerModule = require('../src/utils/tracer')
 const marketValuationService = require('../src/services/market-valuation.service')
+const awesomeApiService = require('../src/services/awesomeapi.service')
 const portfolioService = require('../src/services/portfolio.service')
 const socketService = require('../src/services/socket.service')
 const binanceService = require('../src/services/binance.service')
@@ -32,6 +33,8 @@ const configurationBackupService = require('../src/services/configuration-backup
 const botRunnerService = require('../src/services/bot-runner.service')
 const botDecisionService = require('../src/services/bot-decision.service')
 const botGovernancePolicyService = require('../src/services/bot-governance-policy.service')
+const pythonBotRuntimeService = require('../src/services/python-bot-runtime.service')
+const pythonMlEngineService = require('../src/services/python-ml-engine.service')
 const trainingWorkerService = require('../src/services/training-worker.service')
 const trainingDataService = require('../src/services/training-data.service')
 const trainingSessionService = require('../src/services/training-session.service')
@@ -59,6 +62,71 @@ function stub(target, key, implementation) {
   target[key] = implementation
   restores.push(() => {
     target[key] = original
+  })
+}
+
+function stubPythonBotCycle({ analysis, plan, onCall } = {}) {
+  stub(pythonBotRuntimeService, 'runPythonBotCycle', async () => {
+    if (typeof onCall === 'function') {
+      onCall()
+    }
+
+    return {
+      analysis: analysis || {
+        timeframe: '1h',
+        analyzedPairs: [],
+        primarySpecialist: 'python_model',
+        summary: {
+          analyzedPairs: 0,
+          actionablePairs: 0,
+          buySignals: 0,
+          sellSignals: 0,
+          holdSignals: 0,
+        },
+        bestOpportunity: undefined,
+        opportunities: [],
+        socialSignals: [],
+      },
+      plan: plan || {
+        status: 'skipped',
+        reason: 'Nenhuma oportunidade forte o suficiente para execução neste ciclo',
+      },
+    }
+  })
+}
+
+function stubPythonTrainingSessionStream({ onStart, metric, checkpoint, result } = {}) {
+  stub(pythonMlEngineService, 'startPythonTrainingSessionStream', (payload, handlers = {}) => {
+    if (typeof onStart === 'function') {
+      onStart(payload)
+    }
+
+    const completed = (async () => {
+      await Promise.resolve()
+
+      if (metric) {
+        handlers.onMetric?.(metric)
+      }
+
+      if (checkpoint) {
+        handlers.onCheckpoint?.(checkpoint)
+      }
+
+      if (result) {
+        handlers.onResult?.(result)
+      }
+
+      return result ?? {
+        metrics: metric ? [metric] : [],
+      }
+    })()
+
+    return {
+      child: {
+        kill() {},
+      },
+      completed,
+    }
   })
 }
 
@@ -242,6 +310,20 @@ function wait(ms) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms)
   })
+}
+
+async function waitFor(predicate, { timeoutMs = 2000, intervalMs = 20 } = {}) {
+  const startedAt = Date.now()
+
+  while ((Date.now() - startedAt) < timeoutMs) {
+    if (await predicate()) {
+      return
+    }
+
+    await wait(intervalMs)
+  }
+
+  throw new Error(`Condition not satisfied within ${timeoutMs}ms`)
 }
 
 function createTestSocket(token) {
@@ -531,6 +613,65 @@ describe('API contract tests', () => {
     assert.equal(body.data[0].balanceBrl, 50000)
   })
 
+  it('GET /api/dashboard/currencies-balance includes user holdings outside the legacy curated list', async () => {
+    stubAuthenticatedUser()
+    stub(prisma.balance, 'findMany', async () => [
+      { currency: 'AVAX', available: 2, reserved: 0, total: 2 },
+      { currency: 'USDT', available: 10, reserved: 0, total: 10 },
+    ])
+    stub(prisma.transaction, 'findMany', async () => [])
+    stub(marketValuationService, 'getCurrencyRateToBrl', async (currency) => {
+      if (currency === 'AVAX') {
+        return 45
+      }
+
+      if (currency === 'USDT') {
+        return 5
+      }
+
+      return 0
+    })
+
+    const { response, body } = await requestJson('/api/dashboard/currencies-balance', {
+      headers: authHeaders(),
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(body.success, true)
+    assert.equal(body.data.length, 2)
+    assert.equal(body.data[0].currency, 'AVAX')
+    assert.equal(body.data[0].balanceBrl, 90)
+    assert.equal(body.data[1].currency, 'USDT')
+    assert.equal(body.data[1].balanceBrl, 50)
+  })
+
+  it('getCurrencyRateToBrl falls back to USD-BRL when the stablecoin quote is unavailable', async () => {
+    stub(awesomeApiService, 'getRateToBrl', async (currency) => {
+      if (currency === 'USDT') {
+        throw new Error('Cotação indisponível para USDT-BRL')
+      }
+
+      if (currency === 'USD') {
+        return 5
+      }
+
+      throw new Error(`Moeda não esperada: ${currency}`)
+    })
+    stub(binanceService, 'getSymbolPriceInUsdt', async (symbol) => {
+      if (symbol === 'AVAX') {
+        return 10
+      }
+
+      throw new Error(`Ativo não esperado: ${symbol}`)
+    })
+
+    const stableRate = await marketValuationService.getCurrencyRateToBrl('USDT')
+    const assetRate = await marketValuationService.getCurrencyRateToBrl('AVAX')
+
+    assert.equal(stableRate, 5)
+    assert.equal(assetRate, 50)
+  })
+
   it('GET /api/dashboard/performance seeds a fresh snapshot when the latest point is stale even if the portfolio value did not change', async () => {
     stubAuthenticatedUser()
 
@@ -602,6 +743,31 @@ describe('API contract tests', () => {
       close: 11,
       volume: 1000,
     })
+  })
+
+  it('GET /api/exchange/rate derives the rate through the portfolio valuation service used by the bots runtime', async () => {
+    stubAuthenticatedUser()
+    stub(marketValuationService, 'getCurrencyRateToBrl', async (currency) => {
+      if (currency === 'USDT') {
+        return 5
+      }
+
+      if (currency === 'BRL') {
+        return 1
+      }
+
+      return 0
+    })
+
+    const { response, body } = await requestJson('/api/exchange/rate?from=USDT&to=BRL', {
+      headers: authHeaders(),
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(body.success, true)
+    assert.equal(body.data.from, 'USDT')
+    assert.equal(body.data.to, 'BRL')
+    assert.equal(body.data.rate, 5)
   })
 
   it('GET /api/configurations returns fees and pair discovery settings in the configuration contract', async () => {
@@ -2463,6 +2629,39 @@ describe('API contract tests', () => {
       opportunities: [],
       socialSignals: [],
     }))
+    stubPythonBotCycle({
+      analysis: {
+        timeframe: '1h',
+        analyzedPairs: ['BTC/USDT'],
+        primarySpecialist: 'macd_momentum',
+        summary: {
+          analyzedPairs: 1,
+          actionablePairs: 1,
+          buySignals: 1,
+          sellSignals: 0,
+          holdSignals: 0,
+        },
+        bestOpportunity: {
+          pair: 'BTC/USDT',
+          action: 'buy',
+          confidence: 82,
+          price: 127,
+          reason: 'Momentum e MACD alinhados',
+          specialists: [],
+        },
+        opportunities: [],
+        socialSignals: [],
+      },
+      plan: {
+        status: 'execute',
+        reason: 'Executado automaticamente em modo full_auto na Binance',
+        pair: 'BTC/USDT',
+        action: 'buy',
+        confidence: 82,
+        decisionPrice: 127,
+        quantity: 1,
+      },
+    })
     stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
       apiKey: 'live-key',
       secretKey: 'live-secret',
@@ -2683,6 +2882,39 @@ describe('API contract tests', () => {
         socialSignals: [],
       }
     })
+    stubPythonBotCycle({
+      analysis: {
+        timeframe: '1h',
+        analyzedPairs: ['BTC/USDT'],
+        primarySpecialist: 'macd_momentum',
+        summary: {
+          analyzedPairs: 1,
+          actionablePairs: 0,
+          buySignals: 0,
+          sellSignals: 0,
+          holdSignals: 1,
+        },
+        bestOpportunity: {
+          pair: 'BTC/USDT',
+          action: 'hold',
+          confidence: 58,
+          price: 127,
+          reason: 'Sem sinal forte no momento',
+          specialists: [],
+        },
+        opportunities: [],
+        socialSignals: [],
+      },
+      plan: {
+        status: 'skipped',
+        reason: 'Nenhuma oportunidade forte o suficiente para execução neste ciclo',
+        pair: 'BTC/USDT',
+        action: 'hold',
+        confidence: 58,
+        decisionPrice: 127,
+      },
+      onCall: () => callOrder.push('analyze'),
+    })
     stub(botDecisionService, 'resolveBotOperationalReadiness', async (modelUrl) => {
       readinessModelUrls.push(modelUrl)
 
@@ -2767,6 +2999,39 @@ describe('API contract tests', () => {
       opportunities: [],
       socialSignals: [],
     }))
+    stubPythonBotCycle({
+      analysis: {
+        timeframe: '1h',
+        analyzedPairs: ['BTC/USDT'],
+        primarySpecialist: 'macd_momentum',
+        summary: {
+          analyzedPairs: 1,
+          actionablePairs: 1,
+          buySignals: 1,
+          sellSignals: 0,
+          holdSignals: 0,
+        },
+        bestOpportunity: {
+          pair: 'BTC/USDT',
+          action: 'buy',
+          confidence: 79,
+          price: 127,
+          reason: 'Sinal comprador em andamento',
+          specialists: [],
+        },
+        opportunities: [],
+        socialSignals: [],
+      },
+      plan: {
+        status: 'execute',
+        reason: 'Executado automaticamente em modo full_auto na Binance',
+        pair: 'BTC/USDT',
+        action: 'buy',
+        confidence: 79,
+        decisionPrice: 127,
+        quantity: 1,
+      },
+    })
     stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
       apiKey: 'live-key',
       secretKey: 'live-secret',
@@ -3023,6 +3288,39 @@ describe('API contract tests', () => {
       opportunities: [],
       socialSignals: [],
     }))
+    stubPythonBotCycle({
+      analysis: {
+        timeframe: '1h',
+        analyzedPairs: ['BTC/USDT'],
+        primarySpecialist: 'macd_momentum',
+        summary: {
+          analyzedPairs: 1,
+          actionablePairs: 1,
+          buySignals: 1,
+          sellSignals: 0,
+          holdSignals: 0,
+        },
+        bestOpportunity: {
+          pair: 'BTC/USDT',
+          action: 'buy',
+          confidence: 81,
+          price: 10,
+          reason: 'Sinal comprador válido',
+          specialists: [],
+        },
+        opportunities: [],
+        socialSignals: [],
+      },
+      plan: {
+        status: 'execute',
+        reason: 'Executado automaticamente em modo full_auto na Binance',
+        pair: 'BTC/USDT',
+        action: 'buy',
+        confidence: 81,
+        decisionPrice: 10,
+        quantity: 1.2,
+      },
+    })
     stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
       apiKey: 'live-key',
       secretKey: 'live-secret',
@@ -3144,6 +3442,39 @@ describe('API contract tests', () => {
       opportunities: [],
       socialSignals: [],
     }))
+    stubPythonBotCycle({
+      analysis: {
+        timeframe: '1h',
+        analyzedPairs: ['ETH/USDT', 'BTC/USDT'],
+        primarySpecialist: 'rsi_reversion',
+        summary: {
+          analyzedPairs: 2,
+          actionablePairs: 1,
+          buySignals: 1,
+          sellSignals: 0,
+          holdSignals: 1,
+        },
+        bestOpportunity: {
+          pair: 'ETH/USDT',
+          action: 'buy',
+          confidence: 76,
+          price: 100,
+          reason: 'Sinal comprador válido',
+          specialists: [],
+        },
+        opportunities: [],
+        socialSignals: [],
+      },
+      plan: {
+        status: 'skipped',
+        reason: 'Exposição máxima por moeda excedida para ETH/USDT',
+        pair: 'ETH/USDT',
+        action: 'buy',
+        confidence: 76,
+        decisionPrice: 100,
+        quantity: 1,
+      },
+    })
     stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
       maxTradeAmount: 100,
       maxTradeAmountUnit: 'USDT',
@@ -3268,6 +3599,39 @@ describe('API contract tests', () => {
       opportunities: [],
       socialSignals: [],
     }))
+    stubPythonBotCycle({
+      analysis: {
+        timeframe: '1h',
+        analyzedPairs: ['ETH/USDT'],
+        primarySpecialist: 'rsi_reversion',
+        summary: {
+          analyzedPairs: 1,
+          actionablePairs: 1,
+          buySignals: 1,
+          sellSignals: 0,
+          holdSignals: 0,
+        },
+        bestOpportunity: {
+          pair: 'ETH/USDT',
+          action: 'buy',
+          confidence: 78,
+          price: 100,
+          reason: 'Entrada válida por reversão',
+          specialists: [],
+        },
+        opportunities: [],
+        socialSignals: [],
+      },
+      plan: {
+        status: 'suggested',
+        reason: 'Sugestão gerada para revisão manual · teto máximo por posição aplicado em 200.00 USDT · sizing por ATR reduziu a posição para 35% do orçamento base (ATR 10.00%)',
+        pair: 'ETH/USDT',
+        action: 'buy',
+        confidence: 78,
+        decisionPrice: 100,
+        quantity: 0.7,
+      },
+    })
     stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
       maxTradeAmount: 1000,
       maxTradeAmountUnit: 'USDT',
@@ -3392,6 +3756,39 @@ describe('API contract tests', () => {
       opportunities: [],
       socialSignals: [],
     }))
+    stubPythonBotCycle({
+      analysis: {
+        timeframe: '1h',
+        analyzedPairs: ['ETH/USDT', 'BTC/USDT'],
+        primarySpecialist: 'macd_momentum',
+        summary: {
+          analyzedPairs: 2,
+          actionablePairs: 1,
+          buySignals: 1,
+          sellSignals: 0,
+          holdSignals: 1,
+        },
+        bestOpportunity: {
+          pair: 'ETH/USDT',
+          action: 'buy',
+          confidence: 81,
+          price: 100,
+          reason: 'Momentum favorável',
+          specialists: [],
+        },
+        opportunities: [],
+        socialSignals: [],
+      },
+      plan: {
+        status: 'skipped',
+        reason: 'Correlação de 100.0% com BTC/USDT excede o limite de 80%',
+        pair: 'ETH/USDT',
+        action: 'buy',
+        confidence: 81,
+        decisionPrice: 100,
+        quantity: 1,
+      },
+    })
     stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
       maxTradeAmount: 100,
       maxTradeAmountUnit: 'USDT',
@@ -3521,6 +3918,39 @@ describe('API contract tests', () => {
       opportunities: [],
       socialSignals: [],
     }))
+    stubPythonBotCycle({
+      analysis: {
+        timeframe: '1h',
+        analyzedPairs: ['BTC/USDT'],
+        primarySpecialist: 'macd_momentum',
+        summary: {
+          analyzedPairs: 1,
+          actionablePairs: 1,
+          buySignals: 1,
+          sellSignals: 0,
+          holdSignals: 0,
+        },
+        bestOpportunity: {
+          pair: 'BTC/USDT',
+          action: 'buy',
+          confidence: 84,
+          price: 130,
+          reason: 'Sinal comprador válido',
+          specialists: [],
+        },
+        opportunities: [],
+        socialSignals: [],
+      },
+      plan: {
+        status: 'skipped',
+        reason: 'Circuit breaker ativo após 3 perdas consecutivas',
+        pair: 'BTC/USDT',
+        action: 'buy',
+        confidence: 84,
+        decisionPrice: 130,
+        quantity: 1,
+      },
+    })
     stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
       allowedPairs: JSON.stringify(['BTC/USDT']),
     }))
@@ -4697,6 +5127,54 @@ describe('API contract tests', () => {
       bestValLoss: 0.108,
     }))
 
+    stub(trainingDataService, 'collectTrainingData', async () => ({
+      'BTC/USDT': [
+        {
+          timestamp: '2026-03-01T00:00:00.000Z',
+          open: 620000,
+          high: 622000,
+          low: 618000,
+          close: 621000,
+          volume: 145,
+        },
+        {
+          timestamp: '2026-03-01T01:00:00.000Z',
+          open: 621000,
+          high: 625000,
+          low: 620000,
+          close: 624000,
+          volume: 152,
+        },
+      ],
+    }))
+    stubPythonTrainingSessionStream({
+      metric: {
+        epoch: 10,
+        trainLoss: 0.075,
+        valLoss: 0.1,
+        learningRate: 0.001,
+        duration: 3500,
+      },
+      checkpoint: {
+        bestEpoch: 10,
+        bestValLoss: 0.1,
+        runtimeState: {
+          serializer: 'torch',
+          payloadBase64: Buffer.from('checkpoint-state').toString('base64'),
+          epoch: 10,
+          metrics: [
+            {
+              epoch: 10,
+              trainLoss: 0.075,
+              valLoss: 0.1,
+              learningRate: 0.001,
+              duration: 3500,
+            },
+          ],
+        },
+      },
+    })
+
     let updatedSessionPayload = null
     stub(prisma.trainingSession, 'update', async ({ where, data }) => {
       updatedSessionPayload = { where, data }
@@ -4704,6 +5182,7 @@ describe('API contract tests', () => {
     })
 
     await trainingSessionService.processTrainingQueueCycle()
+    await waitFor(() => updatedSessionPayload !== null)
 
     assert.deepEqual(updatedSessionPayload.where, { id: 'session-recover-1' })
     assert.equal(updatedSessionPayload.data.status, 'running')
@@ -4713,6 +5192,14 @@ describe('API contract tests', () => {
     assert.equal(persistedMetrics[9].epoch, 10)
 
     const checkpointFile = path.join(process.env.TRAINING_CHECKPOINT_STORAGE_DIR, 'checkpoint_session-recover-1.json')
+    await waitFor(async () => {
+      try {
+        const checkpoint = JSON.parse(await fs.readFile(checkpointFile, 'utf-8'))
+        return checkpoint.reason === 'periodic' && checkpoint.summary.lastEpoch === 10
+      } catch {
+        return false
+      }
+    })
     const checkpoint = JSON.parse(await fs.readFile(checkpointFile, 'utf-8'))
     assert.equal(checkpoint.reason, 'periodic')
     assert.equal(checkpoint.status, 'running')

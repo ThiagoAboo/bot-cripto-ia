@@ -30,6 +30,7 @@ model User {
   bots            Bot[]
   botDecisions    BotDecision[]
   botModelArtifacts BotModelArtifact[]
+  socialSignalSnapshots SocialSignalSnapshot[]
 }
 
 // ==============================
@@ -102,6 +103,7 @@ model Bot {
   isSystemManaged  Boolean  @default(true)
   status           String   @default("offline")
   isPaused         Boolean  @default(false)
+  focusPair        String?
   currentPair      String?
   lastAnalysis     DateTime?
   recommendedAction String?
@@ -289,6 +291,30 @@ model BotDecision {
 
   @@index([userId, botId, createdAt])
   @@index([userId, evaluationStatus, dueAt])
+}
+
+// ==============================
+// SNAPSHOT DE SINAIS SOCIAIS
+// ==============================
+model SocialSignalSnapshot {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  configKey   String
+  generatedAt DateTime @default(now())
+  symbol      String
+  pair        String
+  score       Float
+  mentions    Int
+  sentiment   String
+  sources     String   @default("[]")
+  references  String   @default("[]")
+  rank        Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@index([userId, generatedAt])
+  @@index([userId, configKey, generatedAt])
+  @@index([userId, pair, generatedAt])
 }
 
 // ==============================

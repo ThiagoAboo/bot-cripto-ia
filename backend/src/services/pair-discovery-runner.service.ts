@@ -107,6 +107,7 @@ async function executePairDiscovery(configuration: ConfigurationSnapshot): Promi
     reserveBnbForFeesEnabled: configuration.reserveBnbForFeesEnabled,
   })
   const preview = await generatePairDiscoveryPreview({
+    userId: configuration.userId,
     allowedPairs: parseAllowedPairs(configuration.allowedPairs),
     fees,
     pairDiscovery,

@@ -49,6 +49,7 @@ export interface BotStatus {
   specialization?: string
   executionMode?: string
   description?: string
+  focusPair?: string
   currentPair?: string
   status: 'online' | 'offline' | 'training' | 'error'
   isPaused: boolean
@@ -112,6 +113,8 @@ export interface BotCycleExecution {
   pair?: string
   action?: 'buy' | 'sell' | 'hold'
   quantity?: number
+  rank?: number
+  source?: 'analysis' | 'risk_override'
   transaction?: {
     id: string
     date: string
@@ -144,6 +147,7 @@ export interface BotCycleResult {
   generatedAt: string
   analysis: BotAnalysis
   execution: BotCycleExecution
+  plans?: BotCycleExecution[]
 }
 
 export interface PerformanceData {

@@ -55,6 +55,8 @@ interface BotEditorFormState {
   minConfidence: string
   useGlobalAllowedPairs: boolean
   allowedPairs: string
+  maxPairsToAnalyze: string
+  maxExecutableOpportunitiesPerCycle: string
   stopLossPercent: string
   takeProfitPercent: string
   circuitBreakerDailyLossPercent: string
@@ -79,6 +81,8 @@ const DEFAULT_FORM_STATE: BotEditorFormState = {
   minConfidence: '',
   useGlobalAllowedPairs: true,
   allowedPairs: '',
+  maxPairsToAnalyze: '',
+  maxExecutableOpportunitiesPerCycle: '',
   stopLossPercent: '',
   takeProfitPercent: '',
   circuitBreakerDailyLossPercent: '',
@@ -125,6 +129,8 @@ function buildFormState(detail?: BotDetail): BotEditorFormState {
     minConfidence: toStringValue(parameters.minConfidence),
     useGlobalAllowedPairs: detail.allowedPairsSource === 'global',
     allowedPairs: detail.effectiveAllowedPairs.join(', '),
+    maxPairsToAnalyze: toStringValue(parameters.maxPairsToAnalyze),
+    maxExecutableOpportunitiesPerCycle: toStringValue(parameters.maxExecutableOpportunitiesPerCycle),
     stopLossPercent: toStringValue(parameters.stopLossPercent),
     takeProfitPercent: toStringValue(parameters.takeProfitPercent),
     circuitBreakerDailyLossPercent: toStringValue(parameters.circuitBreakerDailyLossPercent),
@@ -151,6 +157,8 @@ function buildUpdatePayload(formState: BotEditorFormState) {
       timeframe: formState.timeframe as '1m' | '5m' | '15m' | '1h' | '4h' | '1d',
       minConfidence: parseOptionalNumber(formState.minConfidence),
       allowedPairs: formState.useGlobalAllowedPairs ? [] : parsePairsInput(formState.allowedPairs),
+      maxPairsToAnalyze: parseOptionalNumber(formState.maxPairsToAnalyze, true),
+      maxExecutableOpportunitiesPerCycle: parseOptionalNumber(formState.maxExecutableOpportunitiesPerCycle, true),
       stopLossPercent: parseOptionalNumber(formState.stopLossPercent),
       takeProfitPercent: parseOptionalNumber(formState.takeProfitPercent),
       circuitBreakerDailyLossPercent: parseOptionalNumber(formState.circuitBreakerDailyLossPercent),
@@ -313,9 +321,12 @@ function BotListPanel({
                       <PaperReadinessBadge readiness={bot.paperReadiness} />
                     </div>
 
-                    <div className="mt-3 flex items-center justify-between text-xs" style={{ color: 'var(--text-muted)' }}>
-                      <span>{bot.currentPair ?? 'Sem par ativo'}</span>
-                      <span>{typeof bot.confidence === 'number' ? `${Math.round(bot.confidence)}%` : 'Sem confiança'}</span>
+                    <div className="mt-3 space-y-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                      <div className="flex items-center justify-between gap-3">
+                        <span>Foco: {bot.focusPair ?? 'dinâmico'}</span>
+                        <span>{typeof bot.confidence === 'number' ? `${Math.round(bot.confidence)}%` : 'Sem confiança'}</span>
+                      </div>
+                      <div>Melhor oportunidade: {bot.currentPair ?? 'sem oportunidade relevante'}</div>
                     </div>
                   </button>
                 )
@@ -859,6 +870,8 @@ function CreateBotModal({
   const [status, setStatus] = useState<BotOperationalStatus>('offline')
   const [useGlobalAllowedPairs, setUseGlobalAllowedPairs] = useState(true)
   const [allowedPairs, setAllowedPairs] = useState('')
+  const [maxPairsToAnalyze, setMaxPairsToAnalyze] = useState('')
+  const [maxExecutableOpportunitiesPerCycle, setMaxExecutableOpportunitiesPerCycle] = useState('')
 
   useEffect(() => {
     if (!isOpen || selectedTemplateId || !templates?.length) return
@@ -877,6 +890,8 @@ function CreateBotModal({
     setStatus('offline')
     setUseGlobalAllowedPairs(true)
     setAllowedPairs('')
+    setMaxPairsToAnalyze('')
+    setMaxExecutableOpportunitiesPerCycle('')
     onClose()
   }
 
@@ -899,6 +914,8 @@ function CreateBotModal({
       status,
       parameters: {
         allowedPairs: useGlobalAllowedPairs ? [] : parsePairsInput(allowedPairs),
+        maxPairsToAnalyze: parseOptionalNumber(maxPairsToAnalyze, true),
+        maxExecutableOpportunitiesPerCycle: parseOptionalNumber(maxExecutableOpportunitiesPerCycle, true),
       },
     })
 
@@ -991,6 +1008,30 @@ function CreateBotModal({
                 disabled={useGlobalAllowedPairs}
                 className="min-h-[90px]"
                 placeholder="BTC/USDT, ETH/USDT, SOL/USDT"
+              />
+            </SectionField>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <SectionField
+              label="Máx. pares por ciclo"
+              description="Deixe em branco para analisar toda a lista gerenciada."
+            >
+              <Input
+                value={maxPairsToAnalyze}
+                onChange={(event) => setMaxPairsToAnalyze(event.target.value)}
+                placeholder="Sem limite"
+              />
+            </SectionField>
+
+            <SectionField
+              label="Máx. execuções por ciclo"
+              description="Limita quantas oportunidades podem seguir para execução/sugestão no mesmo ciclo."
+            >
+              <Input
+                value={maxExecutableOpportunitiesPerCycle}
+                onChange={(event) => setMaxExecutableOpportunitiesPerCycle(event.target.value)}
+                placeholder="1"
               />
             </SectionField>
           </div>
@@ -1279,12 +1320,24 @@ export function BotsPage() {
                     <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
                       <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Última análise</p>
                       <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{botDetail.lastAnalysis ? formatDate(botDetail.lastAnalysis) : 'Sem análise'}</p>
-                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{botDetail.currentPair ?? 'Sem par ativo'}</p>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                        {botDetail.currentPair ?? botDetail.focusPair ?? 'Sem par monitorado'}
+                      </p>
+                    </div>
+                    <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Par de foco</p>
+                      <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{botDetail.focusPair ?? 'Dinâmico'}</p>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>prioridade atual de cobertura do bot</p>
+                    </div>
+                    <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Melhor oportunidade</p>
+                      <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{botDetail.currentPair ?? 'Nenhuma forte agora'}</p>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>ação sugerida: {botDetail.recommendedAction ?? 'hold'}</p>
                     </div>
                     <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
                       <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Confiança atual</p>
                       <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{typeof botDetail.confidence === 'number' ? `${Math.round(botDetail.confidence)}%` : 'N/A'}</p>
-                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>ação sugerida: {botDetail.recommendedAction ?? 'hold'}</p>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>ranking da oportunidade líder do ciclo</p>
                     </div>
                     <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
                       <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Pares permitidos</p>
@@ -1426,6 +1479,29 @@ export function BotsPage() {
                         <p className="mt-2" style={{ color: 'var(--text-secondary)' }}>
                           {botDetail.effectiveAllowedPairs.length ? botDetail.effectiveAllowedPairs.join(', ') : 'Nenhum par efetivo disponível.'}
                         </p>
+                      </div>
+
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <SectionField
+                          label="Máx. pares por ciclo"
+                          description="Em branco, o bot percorre toda a lista gerenciada."
+                        >
+                          <Input
+                            value={formState.maxPairsToAnalyze}
+                            onChange={(event) => setFormState((current) => ({ ...current, maxPairsToAnalyze: event.target.value }))}
+                            placeholder="Sem limite"
+                          />
+                        </SectionField>
+                        <SectionField
+                          label="Máx. execuções por ciclo"
+                          description="Quantidade máxima de oportunidades aprovadas por ciclo."
+                        >
+                          <Input
+                            value={formState.maxExecutableOpportunitiesPerCycle}
+                            onChange={(event) => setFormState((current) => ({ ...current, maxExecutableOpportunitiesPerCycle: event.target.value }))}
+                            placeholder="1"
+                          />
+                        </SectionField>
                       </div>
                     </div>
                   </div>

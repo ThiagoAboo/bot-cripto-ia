@@ -1,4 +1,6 @@
 import { prisma } from '../config/database'
+import { syncBotTemplateCatalog } from './bot-template-catalog.service'
+import { logger } from '../utils/logger'
 
 type TemplateRecord = {
   id: string
@@ -23,6 +25,7 @@ type BotRecordWithTemplate = {
   isSystemManaged: boolean
   status: string
   isPaused: boolean
+  focusPair: string | null
   currentPair: string | null
   lastAnalysis: Date | null
   recommendedAction: string | null
@@ -61,6 +64,7 @@ export interface BotInstanceSummary {
   isSystemManaged: boolean
   status: 'online' | 'offline' | 'training' | 'error'
   isPaused: boolean
+  focusPair?: string
   currentPair?: string
   recommendedAction?: 'buy' | 'sell' | 'hold'
   confidence?: number
@@ -153,6 +157,7 @@ function normalizeBotInstance(bot: BotRecordWithTemplate): BotInstanceSummary {
     isSystemManaged: bot.isSystemManaged,
     status,
     isPaused: bot.isPaused,
+    focusPair: bot.focusPair ?? undefined,
     currentPair: bot.currentPair ?? undefined,
     recommendedAction,
     confidence: bot.confidence ?? undefined,
@@ -163,6 +168,15 @@ function normalizeBotInstance(bot: BotRecordWithTemplate): BotInstanceSummary {
 }
 
 export async function listBotTemplates(): Promise<BotTemplateSummary[]> {
+  await syncBotTemplateCatalog().catch((error) => {
+    logger.warn('[bot] Falha ao sincronizar catalogo de templates antes da listagem; mantendo fallback para o catalogo persistido atual', {
+      module: 'bot',
+      event: 'bot_template_catalog_sync_list_fallback',
+      error,
+      skipPersistence: true,
+    })
+  })
+
   const templates = await prisma.botTemplate.findMany({
     where: { isActive: true },
     orderBy: [
@@ -305,6 +319,7 @@ export async function materializeEditableBotForUser(userId: string, botId: strin
       isSystemManaged: false,
       status: sourceBot.status,
       isPaused: sourceBot.isPaused,
+      focusPair: sourceBot.focusPair,
       currentPair: sourceBot.currentPair,
       lastAnalysis: sourceBot.lastAnalysis,
       recommendedAction: sourceBot.recommendedAction,

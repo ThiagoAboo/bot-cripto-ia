@@ -2,6 +2,7 @@ import { Response } from 'express'
 import { AuthRequest } from '../middleware/auth.middleware'
 import { prisma } from '../config/database'
 import { listBotInstances } from '../services/bot-registry.service'
+import { emitLogNew, emitSystemLogNew, emitTraceNew } from '../services/socket.service'
 import { getSystemLogUserId, logger } from '../utils/logger'
 import { startTrace, endTrace } from '../utils/tracer'
 import { z } from 'zod'
@@ -33,6 +34,30 @@ const traceFiltersSchema = z.object({
   search: z.string().optional(),
 })
 
+const createLogSchema = z.object({
+  level: z.enum(['INFO', 'WARN', 'ERROR', 'DEBUG']).default('INFO'),
+  module: z.string().trim().min(1).max(120),
+  message: z.string().trim().min(1).max(4000),
+  details: z.unknown().optional(),
+  timestamp: z.string().datetime().optional(),
+})
+
+const createTraceSchema = z.object({
+  level: z.enum(['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR']).default('TRACE'),
+  module: z.string().trim().min(1).max(120),
+  traceId: z.string().trim().min(1).max(120),
+  parentTraceId: z.string().trim().max(120).optional(),
+  functionName: z.string().trim().min(1).max(240),
+  message: z.string().trim().min(1).max(4000),
+  durationMs: z.number().min(0),
+  botId: z.string().trim().max(120).optional(),
+  currentPair: z.string().trim().max(40).optional(),
+  recommendedAction: z.enum(['buy', 'sell', 'hold']).optional(),
+  confidence: z.number().min(0).max(100).optional(),
+  errorFlag: z.boolean().optional(),
+  timestamp: z.string().datetime().optional(),
+})
+
 function buildLogsWhere(userId: string, systemLogUserId: string | null): Record<string, unknown> {
   if (!systemLogUserId) {
     return { userId }
@@ -55,6 +80,88 @@ function parseDetails(details: string | null): unknown {
     return JSON.parse(details)
   } catch {
     return details
+  }
+}
+
+function serializeOptionalJson(value: unknown): string | null {
+  if (value === undefined) {
+    return null
+  }
+
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return JSON.stringify({
+      serializationError: true,
+      preview: String(value),
+    })
+  }
+}
+
+function compactRecord(record: Record<string, unknown>): Record<string, unknown> | undefined {
+  const entries = Object.entries(record).filter(([, value]) => value !== undefined && value !== null)
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined
+}
+
+function buildRealtimeLogPayload(params: {
+  log: {
+    id: string
+    timestamp: Date
+    level: string
+    module: string
+    message: string
+    details: string | null
+    userId: string
+  }
+  systemLogUserId: string | null
+}) {
+  const parsedDetails = parseDetails(params.log.details)
+  const normalizedDetails = parsedDetails && typeof parsedDetails === 'object' && !Array.isArray(parsedDetails)
+    ? compactRecord(parsedDetails as Record<string, unknown>) ?? parsedDetails
+    : parsedDetails
+
+  return {
+    id: params.log.id,
+    timestamp: params.log.timestamp.toISOString(),
+    level: normalizeLogLevel(params.log.level),
+    module: normalizeModule(params.log.module),
+    message: params.log.message,
+    details: normalizedDetails,
+    isSystem: params.systemLogUserId ? params.log.userId === params.systemLogUserId : false,
+  }
+}
+
+function buildRealtimeTracePayload(trace: {
+  id: string
+  timestamp: Date
+  level: string
+  module: string
+  traceId: string
+  parentTraceId: string | null
+  functionName: string
+  message: string
+  durationMs: number
+  botId: string | null
+  currentPair: string | null
+  recommendedAction: string | null
+  confidence: number | null
+  errorFlag: boolean
+}) {
+  return {
+    id: trace.id,
+    timestamp: trace.timestamp.toISOString(),
+    level: normalizeTraceLevel(trace.level),
+    module: normalizeModule(trace.module),
+    traceId: trace.traceId,
+    parentTraceId: trace.parentTraceId ?? undefined,
+    functionName: trace.functionName,
+    message: trace.message,
+    durationMs: trace.durationMs,
+    botId: trace.botId ?? undefined,
+    currentPair: trace.currentPair ?? undefined,
+    recommendedAction: trace.recommendedAction ?? undefined,
+    confidence: trace.confidence ?? undefined,
+    errorFlag: trace.errorFlag,
   }
 }
 
@@ -229,6 +336,58 @@ export async function getLogs(req: AuthRequest, res: Response) {
   }
 }
 
+export async function createLogEntry(req: AuthRequest, res: Response) {
+  try {
+    const validation = createLogSchema.safeParse(req.body ?? {})
+    if (!validation.success) {
+      return res.status(400).json({
+        success: false,
+        error: validation.error.errors.map((entry) => entry.message).join(', '),
+      })
+    }
+
+    const userId = req.userId!
+    const timestamp = validation.data.timestamp ? new Date(validation.data.timestamp) : new Date()
+    const systemLogUserId = await getSystemLogUserId()
+    const persistedLog = await prisma.log.create({
+      data: {
+        userId,
+        timestamp,
+        level: validation.data.level,
+        module: validation.data.module,
+        message: validation.data.message,
+        details: serializeOptionalJson(validation.data.details),
+      },
+    })
+
+    const realtimePayload = buildRealtimeLogPayload({
+      log: persistedLog,
+      systemLogUserId,
+    })
+
+    if (realtimePayload.isSystem) {
+      emitSystemLogNew(realtimePayload)
+    } else {
+      emitLogNew(userId, realtimePayload)
+    }
+
+    return res.status(201).json({
+      success: true,
+      data: realtimePayload,
+    })
+  } catch (error) {
+    logger.error('[logs] Erro ao criar log externo', {
+      module: 'logs',
+      event: 'create_log_entry_error',
+      userId: req.userId,
+      error,
+      skipPersistence: true,
+    })
+
+    return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
+  }
+}
+
 export async function getTraces(req: AuthRequest, res: Response) {
   startTrace(req.userId!, 'getTraces', 'logs')
 
@@ -331,6 +490,57 @@ export async function getTraces(req: AuthRequest, res: Response) {
   } catch (error) {
     logger.error('Erro ao buscar traces:', error)
     endTrace('getTraces', { errorFlag: true })
+    return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
+  }
+}
+
+export async function createTraceEntry(req: AuthRequest, res: Response) {
+  try {
+    const validation = createTraceSchema.safeParse(req.body ?? {})
+    if (!validation.success) {
+      return res.status(400).json({
+        success: false,
+        error: validation.error.errors.map((entry) => entry.message).join(', '),
+      })
+    }
+
+    const userId = req.userId!
+    const timestamp = validation.data.timestamp ? new Date(validation.data.timestamp) : new Date()
+    const persistedTrace = await prisma.trace.create({
+      data: {
+        userId,
+        timestamp,
+        level: validation.data.level,
+        module: validation.data.module,
+        traceId: validation.data.traceId,
+        parentTraceId: validation.data.parentTraceId ?? null,
+        functionName: validation.data.functionName,
+        message: validation.data.message,
+        durationMs: validation.data.durationMs,
+        botId: validation.data.botId ?? null,
+        currentPair: validation.data.currentPair ?? null,
+        recommendedAction: validation.data.recommendedAction ?? null,
+        confidence: validation.data.confidence ?? null,
+        errorFlag: validation.data.errorFlag ?? validation.data.level === 'ERROR',
+      },
+    })
+
+    const realtimePayload = buildRealtimeTracePayload(persistedTrace)
+    emitTraceNew(userId, realtimePayload)
+
+    return res.status(201).json({
+      success: true,
+      data: realtimePayload,
+    })
+  } catch (error) {
+    logger.error('[logs] Erro ao criar trace externo', {
+      module: 'logs',
+      event: 'create_trace_entry_error',
+      userId: req.userId,
+      error,
+      skipPersistence: true,
+    })
+
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }

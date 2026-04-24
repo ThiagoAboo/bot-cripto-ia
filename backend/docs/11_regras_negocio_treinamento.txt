@@ -24,7 +24,9 @@ REGRAS:
 
 4. Criar sessão com status 'pending'
 
-5. Adicionar à fila de processamento (Bull/Redis)
+5. Enfileirar logicamente a sessão para o worker interno de treinamento
+   - No stack atual isso é feito por polling worker interno
+   - Não há dependência operacional obrigatória de Bull/Redis nesta versão
 
 6. Registrar log INFO: "Sessão de treinamento criada para bot {botName}"
 
@@ -34,7 +36,7 @@ REGRAS:
 RN-TRN-002: Processamento de Treinamento
 -------------------------------------------------------------------------------
 
-Processo assíncrono executado pelo worker
+Processo assíncrono executado pelo worker interno de treinamento
 
 REGRAS:
 
@@ -66,7 +68,7 @@ REGRAS:
      - recall
      - f1Score
      - logLoss
-   - Emitir WebSocket training:metrics a cada época
+   - Emitir eventos Socket.IO/WebSocket `training:metrics` a cada época
    - Registrar log a cada 10 épocas
    - Salvar checkpoint a cada 10 épocas
 

@@ -3,12 +3,12 @@ import { z } from 'zod'
 
 import { prisma } from '../config/database'
 import { AuthRequest } from '../middleware/auth.middleware'
-import { getExchangeRate as getExternalExchangeRate } from '../services/awesomeapi.service'
 import { ExternalApiError } from '../services/external-http.service'
 import {
   cancelSpotOrder,
   getAccountBalances,
   getCandles as getBinanceCandles,
+  getOrderBook as getBinanceOrderBook,
   getSpotOrder,
   getSpotOrderTrades,
   getTickerPrice,
@@ -1534,17 +1534,17 @@ export async function getExchangeRate(req: AuthRequest, res: Response): Promise<
       return res.status(400).json({ success: false, error: 'Parâmetros from e to são obrigatórios' })
     }
 
-    const rate = await getExternalExchangeRate(from, to)
+    const derivedRate = await getAssetPriceInQuote(from, to)
 
     endTrace('getExchangeRate', { userId: req.userId })
     return res.json({
       success: true,
       data: {
-        from: rate.from,
-        to: rate.to,
-        rate: rate.rate,
-        pctChange: rate.pctChange,
-        lastUpdate: rate.lastUpdate,
+        from,
+        to,
+        rate: derivedRate,
+        pctChange: 0,
+        lastUpdate: new Date().toISOString(),
       },
     })
   } catch (error) {
@@ -1556,6 +1556,87 @@ export async function getExchangeRate(req: AuthRequest, res: Response): Promise<
     })
 
     endTrace('getExchangeRate', { userId: req.userId, errorFlag: true })
+
+    if (error instanceof ExternalApiError) {
+      return res.status(502).json({ success: false, error: error.message, code: error.code })
+    }
+
+    return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
+  }
+}
+
+export async function getPrice(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'getPrice', 'transactions')
+
+  try {
+    const pair = String(req.query.pair || '').trim().toUpperCase()
+
+    if (!pair) {
+      endTrace('getPrice', { userId: req.userId, errorFlag: true })
+      return res.status(400).json({ success: false, error: 'Parâmetro pair é obrigatório' })
+    }
+
+    const price = await getTickerPrice(pair)
+
+    endTrace('getPrice', { userId: req.userId })
+    return res.json({
+      success: true,
+      data: {
+        pair,
+        price,
+      },
+    })
+  } catch (error) {
+    logger.error('[transactions] Erro ao buscar preço atual', {
+      module: 'transactions',
+      event: 'get_exchange_price_error',
+      userId: req.userId,
+      error,
+    })
+
+    endTrace('getPrice', { userId: req.userId, errorFlag: true })
+
+    if (error instanceof ExternalApiError) {
+      return res.status(502).json({ success: false, error: error.message, code: error.code })
+    }
+
+    return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
+  }
+}
+
+export async function getOrderBook(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'getOrderBook', 'transactions')
+
+  try {
+    const pair = String(req.query.pair || '').trim().toUpperCase()
+    const limitNum = Math.max(5, Math.min(5000, parseInt(String(req.query.limit || '20'), 10) || 20))
+
+    if (!pair) {
+      endTrace('getOrderBook', { userId: req.userId, errorFlag: true })
+      return res.status(400).json({ success: false, error: 'Parâmetro pair é obrigatório' })
+    }
+
+    const orderBook = await getBinanceOrderBook(pair, limitNum)
+
+    endTrace('getOrderBook', { userId: req.userId })
+    return res.json({
+      success: true,
+      data: {
+        pair,
+        lastUpdateId: orderBook.lastUpdateId,
+        bids: orderBook.bids,
+        asks: orderBook.asks,
+      },
+    })
+  } catch (error) {
+    logger.error('[transactions] Erro ao buscar order book', {
+      module: 'transactions',
+      event: 'get_exchange_orderbook_error',
+      userId: req.userId,
+      error,
+    })
+
+    endTrace('getOrderBook', { userId: req.userId, errorFlag: true })
 
     if (error instanceof ExternalApiError) {
       return res.status(502).json({ success: false, error: error.message, code: error.code })

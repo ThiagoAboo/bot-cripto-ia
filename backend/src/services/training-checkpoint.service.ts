@@ -1,5 +1,6 @@
 import path from 'path'
 import { promises as fs } from 'fs'
+import type { PythonEnginePackage, PythonTrainingEvaluation, PythonTrainingRuntimeState } from './python-ml-engine.service'
 
 interface SaveTrainingCheckpointInput {
   sessionId: string
@@ -11,9 +12,12 @@ interface SaveTrainingCheckpointInput {
   metrics: unknown[]
   bestEpoch?: number | null
   bestValLoss?: number | null
+  runtimeState?: PythonTrainingRuntimeState
+  evaluation?: PythonTrainingEvaluation
+  enginePackage?: PythonEnginePackage
 }
 
-interface TrainingCheckpointArtifact {
+export interface TrainingCheckpointArtifact {
   artifactType: 'bot-crypto-ia-training-checkpoint'
   formatVersion: 1
   savedAt: string
@@ -30,6 +34,9 @@ interface TrainingCheckpointArtifact {
   }
   config: Record<string, unknown>
   metrics: unknown[]
+  runtimeState?: PythonTrainingRuntimeState
+  evaluation?: PythonTrainingEvaluation
+  enginePackage?: PythonEnginePackage
 }
 
 const DEFAULT_STORAGE_DIR = path.resolve(__dirname, '..', '..', 'storage', 'checkpoints')
@@ -85,6 +92,9 @@ export async function saveTrainingCheckpoint(input: SaveTrainingCheckpointInput)
     },
     config: input.config,
     metrics: input.metrics,
+    runtimeState: input.runtimeState,
+    evaluation: input.evaluation,
+    enginePackage: input.enginePackage,
   }
 
   const buffer = Buffer.from(JSON.stringify(artifact, null, 2), 'utf-8')

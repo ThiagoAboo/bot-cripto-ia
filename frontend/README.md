@@ -29,8 +29,8 @@ VERSÃO FINAL
 
 O projeto consiste em uma interface web para um sistema de trading automatizado
 utilizando inteligência artificial. O frontend foi desenvolvido com React +
-TypeScript, utilizando dados mockados inicialmente, mas preparado para consumir
-APIs reais no futuro.
+TypeScript e hoje já opera consumindo as APIs reais do backend, com atualização
+em tempo real via Socket.IO e fallback natural por refetch das queries.
 
 CONCEITO FUNDAMENTAL DOS BOTS:
 
@@ -164,7 +164,8 @@ interface BotStatus {
   name: string                    // Nome do bot (ex: "Scalper V2")
   strategy: string                // Tipo de estratégia
   description?: string            // Descrição da estratégia
-  currentPair?: string            // Moeda sendo analisada (dinâmico)
+  focusPair?: string              // Par que está com prioridade operacional no ciclo
+  currentPair?: string            // Melhor oportunidade detectada no ciclo atual
   status: 'online' | 'offline' | 'training' | 'error'
   isPaused: boolean
   lastAnalysis?: string

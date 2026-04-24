@@ -17,6 +17,8 @@ import {
 } from './services/socket.service'
 import { startBotWorker, stopBotWorker } from './services/bot-runner.service'
 import { startBinanceUserStreamService, stopBinanceUserStreamService } from './services/binance-user-stream.service'
+import { syncBotTemplateCatalog } from './services/bot-template-catalog.service'
+import { setInternalApiBaseUrl } from './services/internal-api-base-url.service'
 import { startPairDiscoveryRunner, stopPairDiscoveryRunner } from './services/pair-discovery-runner.service'
 import { startTrainingWorker, stopTrainingWorker } from './services/training-worker.service'
 import { logger } from './utils/logger'
@@ -319,9 +321,13 @@ app.post('/api/orders/:id/reconcile', authMiddleware, transactionsController.rec
 app.delete('/api/orders/:id/cancel', authMiddleware, transactionsController.cancelOrder)
 app.get('/api/balance', authMiddleware, transactionsController.getBalance)
 app.get('/api/exchange/rate', authMiddleware, transactionsController.getExchangeRate)
+app.get('/api/exchange/price', authMiddleware, transactionsController.getPrice)
+app.get('/api/exchange/orderbook', authMiddleware, transactionsController.getOrderBook)
 app.get('/api/exchange/candles', authMiddleware, transactionsController.getCandles)
 
+app.post('/api/logs', authMiddleware, logsController.createLogEntry)
 app.get('/api/logs', authMiddleware, logsController.getLogs)
+app.post('/api/traces', authMiddleware, logsController.createTraceEntry)
 app.get('/api/traces', authMiddleware, logsController.getTraces)
 app.get('/api/traces/group/:traceId', authMiddleware, logsController.getTraceGroup)
 app.get('/api/logs/export', authMiddleware, logsController.exportLogs)
@@ -398,6 +404,15 @@ export async function startServer(port: number = PORT): Promise<typeof httpServe
           ? address.port
           : port
 
+      setInternalApiBaseUrl(`http://127.0.0.1:${resolvedPort}`)
+      void syncBotTemplateCatalog().catch((error) => {
+        logger.warn('[app] Falha ao sincronizar catalogo de templates de bots na inicializacao', {
+          module: 'app',
+          event: 'bot_template_catalog_sync_error',
+          error,
+          skipPersistence: true,
+        })
+      })
       logServerStartup(resolvedPort)
       if (process.env.TRAINING_WORKER_AUTOSTART !== 'false' && process.env.NODE_ENV !== 'test') {
         startTrainingWorker()

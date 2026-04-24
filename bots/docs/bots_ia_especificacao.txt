@@ -62,6 +62,13 @@ Os bots NÃO acessam APIs externas diretamente. Eles:
 4. ACIONAM execução de ordens via APIs do backend
 5. REGISTRAM traces e logs via APIs do backend
 
+Diretriz arquitetural alvo:
+- a camada `bots/` deve ser executável de forma independente do frontend e do backend
+- o backend não deve conhecer a implementação interna dos bots
+- os bots devem conhecer apenas contratos HTTP/WebSocket do backend
+- enquanto a migração arquitetural não for concluída integralmente, pode existir modo ponte em que o backend aciona o runtime Python local
+- o objetivo final continua sendo `bots -> backend`, e não `backend -> bots`
+
 
 ================================================================================
 2. ARQUITETURA DOS BOTS
@@ -216,6 +223,13 @@ No estado atual do projeto:
 - existe um worker interno no backend que percorre bots `online`
 - o worker usa cooldown por par/ação e threshold mínimo de confiança
 - o frontend também pode disparar um ciclo pontual por bot via dashboard
+
+Direção de evolução obrigatória:
+- o loop contínuo deve migrar para a própria camada `bots/`
+- a camada `bots/` deve nascer preparada para:
+  - analisar múltiplas moedas por bot
+  - gerar múltiplos planos por ciclo
+  - limitar execução por risco/configuração sem perder visibilidade das demais oportunidades
 
 2.5 MÁQUINAS DE ESTADO
 

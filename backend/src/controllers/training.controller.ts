@@ -24,6 +24,7 @@ import {
   startTrainingSessionProcessing,
 } from '../services/training-session.service'
 import { buildTrainingEvaluationSummary } from '../services/training-evaluation.service'
+import { readTrainingCheckpoint } from '../services/training-checkpoint.service'
 import { logger } from '../utils/logger'
 import { endTrace, startTrace, trace } from '../utils/tracer'
 
@@ -673,6 +674,7 @@ export async function saveTrainingModel(req: AuthRequest, res: Response): Promis
     }
 
     const config = JSON.parse(session.config)
+    const checkpoint = await readTrainingCheckpoint(id)
     let metrics = safeJsonParse<any[]>(session.metrics, [])
     let bestEpoch = session.bestEpoch ?? null
     let bestValLoss = session.bestValLoss ?? null
@@ -680,12 +682,20 @@ export async function saveTrainingModel(req: AuthRequest, res: Response): Promis
     let enginePackage: Awaited<ReturnType<typeof trainRealModelPackage>>['enginePackage'] | undefined
 
     if (isPythonMlEngineEnabled()) {
-      const trainingResult = await trainRealModelPackage(config)
-      metrics = trainingResult.metrics
-      bestEpoch = trainingResult.evaluation.bestEpoch ?? null
-      bestValLoss = trainingResult.evaluation.bestValLoss ?? null
-      evaluationOverride = trainingResult.evaluation as unknown as ReturnType<typeof buildTrainingEvaluationSummary>
-      enginePackage = trainingResult.enginePackage
+      if (checkpoint?.enginePackage && checkpoint?.evaluation) {
+        metrics = Array.isArray(checkpoint.metrics) ? checkpoint.metrics : metrics
+        bestEpoch = checkpoint.summary.bestEpoch ?? null
+        bestValLoss = checkpoint.summary.bestValLoss ?? null
+        evaluationOverride = checkpoint.evaluation as unknown as ReturnType<typeof buildTrainingEvaluationSummary>
+        enginePackage = checkpoint.enginePackage
+      } else {
+        const trainingResult = await trainRealModelPackage(config)
+        metrics = trainingResult.metrics
+        bestEpoch = trainingResult.evaluation.bestEpoch ?? null
+        bestValLoss = trainingResult.evaluation.bestValLoss ?? null
+        evaluationOverride = trainingResult.evaluation as unknown as ReturnType<typeof buildTrainingEvaluationSummary>
+        enginePackage = trainingResult.enginePackage
+      }
     }
 
     const artifact = await saveTrainingModelArtifact({

@@ -23,6 +23,8 @@ const editableBotParametersSchema = z.object({
   timeframe: timeframeSchema.optional(),
   minConfidence: z.number().min(0).max(100).optional(),
   allowedPairs: z.array(z.string().min(3).max(24)).max(30).optional(),
+  maxPairsToAnalyze: z.number().int().min(1).max(500).optional(),
+  maxExecutableOpportunitiesPerCycle: z.number().int().min(1).max(20).optional(),
   stopLossPercent: z.number().min(0).max(50).optional(),
   takeProfitPercent: z.number().min(0).max(100).optional(),
   circuitBreakerDailyLossPercent: z.number().min(0).max(100).optional(),
@@ -147,6 +149,7 @@ interface BotDetailSource {
   isSystemManaged: boolean
   status: string
   isPaused: boolean
+  focusPair: string | null
   currentPair: string | null
   lastAnalysis: Date | null
   recommendedAction: string | null
@@ -193,6 +196,7 @@ async function mapBotDetail(bot: BotDetailSource, configurationAllowedPairs: str
     isCustom: bot.userId !== null,
     status: bot.status,
     isPaused: bot.isPaused,
+    focusPair: bot.focusPair ?? undefined,
     currentPair: bot.currentPair ?? undefined,
     lastAnalysis: bot.lastAnalysis?.toISOString(),
     recommendedAction: ['buy', 'sell', 'hold'].includes(bot.recommendedAction ?? '')
@@ -370,15 +374,18 @@ export async function getCurrenciesBalance(req: AuthRequest, res: Response): Pro
   try {
     const userId = req.userId!
     const balances = await prisma.balance.findMany({ where: { userId } })
-    const currencies = ['BTC', 'ETH', 'SOL', 'USDT']
     const { rateMap, usdtBrlRate } = await getBalancesWithRates(balances)
     const result = []
+    const nonZeroBalances = balances
+      .filter((balance) => getPortfolioBalanceAmount(balance) > 0)
+      .sort((left, right) => {
+        const leftValue = getPortfolioBalanceAmount(left) * (rateMap[left.currency] ?? 0)
+        const rightValue = getPortfolioBalanceAmount(right) * (rateMap[right.currency] ?? 0)
+        return rightValue - leftValue
+      })
 
-    for (const currency of currencies) {
-      const balance = balances.find((entry: any) => entry.currency === currency)
-      if (!balance || getPortfolioBalanceAmount(balance) === 0) {
-        continue
-      }
+    for (const balance of nonZeroBalances) {
+      const currency = balance.currency
 
       const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
       const dailyTransactions = await prisma.transaction.findMany({
@@ -523,6 +530,7 @@ export async function getBotsStatus(req: AuthRequest, res: Response): Promise<Re
         executionMode: bot.executionMode,
         isSystemManaged: bot.isSystemManaged,
         description: bot.description,
+        focusPair: bot.focusPair,
         currentPair: bot.currentPair,
         status: bot.status,
         isPaused: bot.isPaused,
@@ -1193,7 +1201,7 @@ export async function getBotAnalysis(req: AuthRequest, res: Response): Promise<R
     const { id } = req.params
     const limit = Number.parseInt(req.query.limit as string, 10)
     const analysis = await analyzeBotInstance(req.userId!, id, {
-      pairLimit: Number.isFinite(limit) && limit > 0 ? limit : 6,
+      pairLimit: Number.isFinite(limit) && limit > 0 ? limit : undefined,
     })
 
     if (!analysis) {

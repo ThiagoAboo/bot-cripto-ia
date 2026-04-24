@@ -1,3 +1,4 @@
+import { prisma } from '../config/database'
 import { getAvailablePairs } from './binance.service'
 import type { FeeSettings, PairDiscoveryConfig } from './configuration.service'
 import { ExternalApiError, fetchWithTimeout, requestJson } from './external-http.service'
@@ -131,6 +132,24 @@ const BEARISH_TERMS = ['bearish', 'selloff', 'dump', 'hack', 'lawsuit', 'outflow
 
 const latestSignalsCache = new Map<string, CacheEntry<SocialSignal[]>>()
 
+function getSocialSignalSnapshotDelegate():
+  | {
+      findFirst: typeof prisma.socialSignalSnapshot.findFirst
+      findMany: typeof prisma.socialSignalSnapshot.findMany
+      createMany: typeof prisma.socialSignalSnapshot.createMany
+    }
+  | null {
+  const delegate = (prisma as typeof prisma & {
+    socialSignalSnapshot?: {
+      findFirst: typeof prisma.socialSignalSnapshot.findFirst
+      findMany: typeof prisma.socialSignalSnapshot.findMany
+      createMany: typeof prisma.socialSignalSnapshot.createMany
+    }
+  }).socialSignalSnapshot
+
+  return delegate ?? null
+}
+
 function parseCsvEnv(value: string | undefined, fallback: string[]): string[] {
   if (!value?.trim()) {
     return fallback
@@ -152,7 +171,16 @@ function normalizePairList(pairs: string[]): string[] {
 }
 
 function getSourceCacheKey(config: PairDiscoveryConfig): string {
-  return JSON.stringify(config.sources)
+  return JSON.stringify({
+    sources: Object.entries(config.sources)
+      .filter(([, enabled]) => enabled)
+      .map(([source]) => source)
+      .sort(),
+  })
+}
+
+function getUserScopedCacheKey(userId: string, config: PairDiscoveryConfig): string {
+  return `${userId}:${getSourceCacheKey(config)}`
 }
 
 function getSourcePriority(quoteAsset: string): number {
@@ -474,16 +502,155 @@ function getEnabledSources(config: PairDiscoveryConfig): SocialSource[] {
     .map(([source]) => source)
 }
 
-export async function getLatestSocialSignals(config: PairDiscoveryConfig): Promise<SocialSignal[]> {
+function parseJsonArray<T>(value: string): T[] {
+  try {
+    const parsed = JSON.parse(value)
+    return Array.isArray(parsed) ? parsed as T[] : []
+  } catch {
+    return []
+  }
+}
+
+function mapSnapshotRowsToSignals(rows: Array<{
+  symbol: string
+  pair: string
+  score: number
+  mentions: number
+  sentiment: string
+  sources: string
+  references: string
+}>): SocialSignal[] {
+  return rows.map((row) => ({
+    symbol: row.symbol,
+    pair: row.pair,
+    score: row.score,
+    mentions: row.mentions,
+    sentiment: row.sentiment as SocialSentiment,
+    sources: parseJsonArray<SocialSource>(row.sources),
+    references: parseJsonArray<SocialSignalReference>(row.references),
+  }))
+}
+
+async function loadPersistedSignals(
+  userId: string,
+  config: PairDiscoveryConfig,
+  maxAgeMs: number,
+): Promise<SocialSignal[] | null> {
+  const delegate = getSocialSignalSnapshotDelegate()
+  if (!delegate) {
+    return null
+  }
+
+  const configKey = getSourceCacheKey(config)
+  const earliestAcceptedDate = new Date(Date.now() - maxAgeMs)
+  const latestSnapshot = await delegate.findFirst({
+    where: {
+      userId,
+      configKey,
+      generatedAt: {
+        gte: earliestAcceptedDate,
+      },
+    },
+    orderBy: [
+      { generatedAt: 'desc' },
+      { rank: 'asc' },
+    ],
+    select: {
+      generatedAt: true,
+    },
+  })
+
+  if (!latestSnapshot?.generatedAt) {
+    return null
+  }
+
+  const rows = await delegate.findMany({
+    where: {
+      userId,
+      configKey,
+      generatedAt: latestSnapshot.generatedAt,
+    },
+    orderBy: [
+      { rank: 'asc' },
+      { score: 'desc' },
+      { pair: 'asc' },
+    ],
+    select: {
+      symbol: true,
+      pair: true,
+      score: true,
+      mentions: true,
+      sentiment: true,
+      sources: true,
+      references: true,
+    },
+  })
+
+  if (rows.length === 0) {
+    return null
+  }
+
+  return mapSnapshotRowsToSignals(rows)
+}
+
+async function persistSocialSignals(
+  userId: string,
+  config: PairDiscoveryConfig,
+  signals: SocialSignal[],
+): Promise<void> {
+  const delegate = getSocialSignalSnapshotDelegate()
+  if (!delegate || signals.length === 0) {
+    return
+  }
+
+  const generatedAt = new Date()
+  const configKey = getSourceCacheKey(config)
+  await delegate.createMany({
+    data: signals.map((signal, index) => ({
+      userId,
+      configKey,
+      generatedAt,
+      symbol: signal.symbol,
+      pair: signal.pair,
+      score: signal.score,
+      mentions: signal.mentions,
+      sentiment: signal.sentiment,
+      sources: JSON.stringify(signal.sources),
+      references: JSON.stringify(signal.references),
+      rank: index + 1,
+    })),
+  })
+}
+
+export async function getLatestSocialSignals(
+  userId: string,
+  config: PairDiscoveryConfig,
+  options: {
+    forceRefresh?: boolean
+    maxAgeMs?: number
+  } = {},
+): Promise<SocialSignal[]> {
   const enabledSources = getEnabledSources(config)
   if (enabledSources.length === 0) {
     return []
   }
 
-  const cacheKey = getSourceCacheKey(config)
+  const cacheKey = getUserScopedCacheKey(userId, config)
+  const maxAgeMs = options.maxAgeMs ?? CACHE_TTL_MS
   const cached = latestSignalsCache.get(cacheKey)
-  if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS) {
+  if (!options.forceRefresh && cached && (Date.now() - cached.timestamp) < maxAgeMs) {
     return cached.value
+  }
+
+  if (!options.forceRefresh) {
+    const persistedSignals = await loadPersistedSignals(userId, config, maxAgeMs)
+    if (persistedSignals) {
+      latestSignalsCache.set(cacheKey, {
+        value: persistedSignals,
+        timestamp: Date.now(),
+      })
+      return persistedSignals
+    }
   }
 
   const [availablePairs, mentionResults] = await Promise.all([
@@ -563,6 +730,16 @@ export async function getLatestSocialSignals(config: PairDiscoveryConfig): Promi
     })
     .slice(0, DEFAULT_SIGNAL_LIMIT)
 
+  await persistSocialSignals(userId, config, signals).catch((error) => {
+    logger.warn('[pair-discovery] Falha ao persistir snapshot social', {
+      module: 'pair-discovery',
+      event: 'pair_discovery_snapshot_persist_error',
+      userId,
+      error,
+      skipPersistence: true,
+    })
+  })
+
   latestSignalsCache.set(cacheKey, {
     value: signals,
     timestamp: Date.now(),
@@ -584,6 +761,7 @@ function buildRemovalReason(signal?: SocialSignal): string {
 }
 
 export async function generatePairDiscoveryPreview(params: {
+  userId: string
   allowedPairs: string[]
   fees: FeeSettings
   pairDiscovery: PairDiscoveryConfig
@@ -595,7 +773,7 @@ export async function generatePairDiscoveryPreview(params: {
     excludedAssets: normalizePairList(params.pairDiscovery.excludedAssets),
   }
 
-  const signals = await getLatestSocialSignals(pairDiscovery)
+  const signals = await getLatestSocialSignals(params.userId, pairDiscovery)
   const sourcesUsed = Array.from(new Set(signals.flatMap((signal) => signal.sources)))
   const currentManagedPairs = pairDiscovery.managedPairs.filter((pair) => allowedPairs.includes(pair))
   const currentManagedSet = new Set(currentManagedPairs)

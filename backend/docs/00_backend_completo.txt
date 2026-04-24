@@ -52,13 +52,25 @@ CONCEITO FUNDAMENTAL:
 | ORM | Prisma | 5.0+ |
 | Autenticação | JWT + bcrypt | - |
 | Validação | Zod | - |
-| WebSocket | Socket.io | 4.6+ |
+| WebSocket | Socket.IO | 4.6+ |
 | Logging | Winston | - |
-| Queue | Bull (Redis) | - |
+| Orquestração assíncrona atual | Workers internos com polling + serviços Socket.IO | - |
+
+OBSERVAÇÃO IMPORTANTE SOBRE A STACK REAL:
+- A implementação atual NÃO usa Bull/Redis como fila principal
+- O backend sobe workers internos a partir do `app.ts`
+- O fluxo assíncrono atual combina:
+  - polling workers para bots, treinamento e descoberta de pares
+  - Socket.IO para atualização em tempo real do frontend
+- Redis pode ser introduzido futuramente como evolução de infraestrutura, mas não faz parte da base operacional atual
 
 
 3. ESTRUTURA DE PASTAS
 ===============================================================================
+
+Observação:
+- A árvore abaixo é referencial e foi parcialmente superada pela implementação atual
+- Na base atual, a orquestração dos workers e parte importante da integração Socket.IO está concentrada em `src/services/` e `src/app.ts`
 
 backend/
 ├── prisma/
@@ -67,7 +79,6 @@ backend/
 ├── src/
 │   ├── config/
 │   │   ├── database.ts
-│   │   ├── redis.ts
 │   │   └── exchange.ts
 │   ├── controllers/
 │   │   ├── auth.controller.ts

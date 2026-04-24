@@ -26,8 +26,13 @@ import {
   autoPromoteRecommendedBotModel,
   resolveBotFullAutoEligibility,
 } from './bot-governance-policy.service'
+import { buildStrategyId } from './bot-registry.service'
+import { signUserAccessToken } from './auth-token.service'
+import { getInternalApiBaseUrl } from './internal-api-base-url.service'
 import { getCurrencyRateToBrl } from './market-valuation.service'
 import { recordBalanceHistorySnapshot } from './portfolio.service'
+import { resolveTrainingModelArtifactPath } from './training-model.service'
+import { runPythonBotCycle } from './python-bot-runtime.service'
 import { emitDashboardUpdate } from './socket.service'
 import { logger } from '../utils/logger'
 import { endTrace, startTrace, trace } from '../utils/tracer'
@@ -42,6 +47,8 @@ export interface BotCycleExecution {
   action?: 'buy' | 'sell' | 'hold'
   quantity?: number
   transaction?: ExecutedOrderPayload
+  rank?: number
+  source?: 'analysis' | 'risk_override'
 }
 
 export interface BotCycleResult {
@@ -50,6 +57,7 @@ export interface BotCycleResult {
   generatedAt: string
   analysis: BotAnalysisResponse
   execution: BotCycleExecution
+  plans?: BotCycleExecution[]
 }
 
 interface TradePlan {
@@ -198,6 +206,10 @@ function buildPaperSimulation(params: {
   }
 }
 
+function normalizePlanStatus(status: 'skipped' | 'suggested' | 'execute'): BotCycleExecution['status'] {
+  return status === 'execute' ? 'executed' : status
+}
+
 function safeNumber(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
 }
@@ -238,6 +250,18 @@ function resolveTimeframe(parameters: Record<string, unknown>): '1m' | '5m' | '1
   }
 
   return '1h'
+}
+
+function resolveMaxPairsToAnalyze(parameters: Record<string, unknown>): number | undefined {
+  const configuredLimit = typeof parameters.maxPairsToAnalyze === 'number'
+    ? parameters.maxPairsToAnalyze
+    : undefined
+
+  if (typeof configuredLimit !== 'number' || !Number.isFinite(configuredLimit) || configuredLimit <= 0) {
+    return undefined
+  }
+
+  return Math.min(Math.round(configuredLimit), 500)
 }
 
 function calculateAtrRatio(
@@ -847,9 +871,10 @@ async function extractBinanceFeeBreakdown(params: {
   }
 }
 
-async function hasActiveTrainingSession(botId: string): Promise<boolean> {
+async function hasActiveTrainingSession(userId: string, botId: string): Promise<boolean> {
   const activeSession = await prisma.trainingSession.findFirst({
     where: {
+      userId,
       botId,
       status: { in: ['pending', 'running', 'paused'] },
     },
@@ -1028,7 +1053,7 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
       return result
     }
 
-    if (await hasActiveTrainingSession(bot.id)) {
+    if (await hasActiveTrainingSession(userId, bot.id)) {
       const analysis = await analyzeBotInstance(userId, botId)
       if (!analysis) {
         endTrace('runBotCycle', { userId, botId, errorFlag: true })
@@ -1073,15 +1098,15 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
       })
     }
 
-    const analysis = await analyzeBotInstance(userId, botId)
-    if (!analysis) {
-      endTrace('runBotCycle', { userId, botId, errorFlag: true })
-      return null
-    }
-
     const executionMode = ((bot.executionMode || 'paper') as BotExecutionMode)
     const modelReadiness = await resolveBotOperationalReadiness(bot.modelUrl)
     if (!modelReadiness.modelReady) {
+      const analysis = await analyzeBotInstance(userId, botId)
+      if (!analysis) {
+        endTrace('runBotCycle', { userId, botId, errorFlag: true })
+        return null
+      }
+
       const result: BotCycleResult = {
         botId: bot.id,
         botName: bot.name,
@@ -1126,20 +1151,297 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
         takeProfitPercent: true,
       },
     })
-    const configuredAllowedPairs = normalizePairs(safeJsonParse(configuration?.allowedPairs, analysis.analyzedPairs))
+    const configuredAllowedPairs = normalizePairs(safeJsonParse(configuration?.allowedPairs, []))
     const allowedPairs = resolveEffectiveAllowedPairs(parameters, configuredAllowedPairs)
+    const effectiveAllowedPairs = allowedPairs.length > 0 ? allowedPairs : configuredAllowedPairs
     const riskConfig = resolveRiskConfig(parameters, configuration)
-    const riskDecision = await evaluateRiskDecision({
-      userId,
-      botId: bot.id,
-      allowedPairs: allowedPairs.length > 0 ? allowedPairs : analysis.analyzedPairs,
-      riskConfig,
-    })
     const minimumConfidence = typeof parameters.minConfidence === 'number'
       ? parameters.minConfidence
       : DEFAULT_MIN_CONFIDENCE
-    const selectedOpportunity = riskDecision.overrideOpportunity ?? analysis.bestOpportunity
-    const isRiskOverride = Boolean(riskDecision.overrideOpportunity)
+    let exchangeCredentials: Awaited<ReturnType<typeof getUserExchangeCredentials>> = null
+    let fullAutoBuyBlockReason: string | undefined
+    let openExchangeOrder: {
+      pair: string
+      status: string
+      requestedQuantity: number | null
+      quantity: number
+      externalStatus: string | null
+    } | null = null
+
+    if (executionMode === 'full_auto') {
+      exchangeCredentials = await getUserExchangeCredentials(userId)
+      const fullAutoEligibility = await resolveBotFullAutoEligibility({
+        userId,
+        botId: bot.id,
+        currentBotModelUrl: bot.modelUrl,
+      })
+      if (!fullAutoEligibility.eligible) {
+        fullAutoBuyBlockReason = fullAutoEligibility.blockers[0]
+          ?? 'O champion atual ainda não atende aos critérios mínimos para abrir novas posições em full_auto.'
+      }
+
+      if (exchangeCredentials) {
+        await reconcileOpenOrdersForUserSafely(userId)
+        openExchangeOrder = await prisma.transaction.findFirst({
+          where: {
+            userId,
+            botId: bot.id,
+            externalOrderId: { not: null },
+            status: { in: ['pending', 'partially_filled'] },
+          },
+          orderBy: [
+            { syncedAt: 'desc' },
+            { date: 'desc' },
+          ],
+          select: {
+            pair: true,
+            status: true,
+            requestedQuantity: true,
+            quantity: true,
+            externalStatus: true,
+          },
+        })
+
+        const liveBalancesBefore = await getAccountBalances(exchangeCredentials.apiKey, exchangeCredentials.secretKey, { forceRefresh: true })
+        await syncExternalBalances(userId, liveBalancesBefore)
+      }
+    }
+
+    const [balances, recentSellTransactions, recentExecutions, exposureSnapshot, openPositionsRaw, user] = await Promise.all([
+      prisma.balance.findMany({
+        where: { userId },
+        select: {
+          currency: true,
+          available: true,
+          reserved: true,
+          total: true,
+        },
+      }),
+      prisma.transaction.findMany({
+        where: {
+          userId,
+          botId: bot.id,
+          status: 'executed',
+          type: 'sell',
+          profitBrl: { not: null },
+        },
+        orderBy: { date: 'desc' },
+        take: Math.max(riskConfig.maxConsecutiveLosses, 25),
+        select: {
+          date: true,
+          profitBrl: true,
+        },
+      }),
+      prisma.transaction.findMany({
+        where: {
+          userId,
+          botId: bot.id,
+          status: 'executed',
+        },
+        orderBy: { date: 'desc' },
+        take: 50,
+        select: {
+          pair: true,
+          type: true,
+          date: true,
+        },
+      }),
+      getPortfolioExposureSnapshot(userId).catch(() => ({
+        totalPortfolioBrl: 0,
+        totalExposureBrl: 0,
+        openPositionsCount: 0,
+        pairExposureBrl: new Map<string, number>(),
+      })),
+      Promise.all((effectiveAllowedPairs.length > 0 ? effectiveAllowedPairs : configuredAllowedPairs).map(async (pair) => {
+        try {
+          const currentPrice = await getTickerPrice(pair)
+          const position = await getOpenPositionSnapshot(userId, pair, currentPrice)
+          if (!position) {
+            return null
+          }
+
+          return {
+            ...position,
+            exposureBrl: 0,
+          }
+        } catch {
+          return null
+        }
+      })),
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          email: true,
+        },
+      }).catch(() => null),
+    ])
+
+    const openPositions = openPositionsRaw
+      .filter((position): position is (OpenPositionSnapshot & { exposureBrl: number }) => position !== null)
+      .map((position) => ({
+        ...position,
+        exposureBrl: exposureSnapshot.pairExposureBrl.get(position.pair) ?? 0,
+      }))
+
+    const strategyType = bot.template?.strategyType ?? bot.strategyType
+    const strategyId = bot.template?.id ?? buildStrategyId(strategyType)
+    const cycleGeneratedAt = new Date().toISOString()
+    const pairLimit = resolveMaxPairsToAnalyze(parameters)
+    const cycleResult = await runPythonBotCycle({
+      backend: {
+        baseUrl: getInternalApiBaseUrl(),
+        accessToken: signUserAccessToken({
+          id: userId,
+          email: user?.email ?? '',
+        }),
+        timeoutSeconds: Number(process.env.PYTHON_BOT_RUNTIME_TIMEOUT_SECONDS ?? 15),
+      },
+      bot: {
+        id: bot.id,
+        name: bot.name,
+        strategyType,
+        strategyId,
+        indicatorType: bot.template?.indicatorType ?? undefined,
+        specialization: bot.template?.specialization ?? undefined,
+        parameters,
+        allowedPairs: effectiveAllowedPairs.length > 0 ? effectiveAllowedPairs : ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
+        focusPair: bot.focusPair ?? undefined,
+        currentPair: bot.currentPair ?? undefined,
+        minMentions: typeof parameters.minMentions === 'number' ? parameters.minMentions : undefined,
+        minSocialScore: typeof parameters.minSocialScore === 'number' ? parameters.minSocialScore : undefined,
+        timeframe,
+        modelArtifactPath: bot.modelUrl ? resolveTrainingModelArtifactPath(bot.modelUrl) : undefined,
+      },
+      pairLimit,
+      includeSocialOverlay: true,
+      cycle: {
+        executionMode,
+        minimumConfidence,
+        maxTradeAmount: configuration?.maxTradeAmount ?? 1000,
+        maxTradeAmountUnit: configuration?.maxTradeAmountUnit ?? 'USDT',
+        riskConfig: { ...riskConfig },
+        balances,
+        openPositions,
+        portfolio: {
+          totalPortfolioBrl: exposureSnapshot.totalPortfolioBrl,
+          totalExposureBrl: exposureSnapshot.totalExposureBrl,
+          openPositionsCount: exposureSnapshot.openPositionsCount,
+        },
+        recentSellTransactions: recentSellTransactions.map((transaction) => ({
+          date: transaction.date.toISOString(),
+          profitBrl: transaction.profitBrl ?? 0,
+        })),
+        recentExecutions: recentExecutions
+          .filter((transaction) => transaction.type === 'buy' || transaction.type === 'sell')
+          .map((transaction) => ({
+            pair: transaction.pair,
+            action: transaction.type as 'buy' | 'sell',
+            executedAt: transaction.date.toISOString(),
+          })),
+        tradeCooldownMs: BOT_TRADE_COOLDOWN_MS,
+        fullAutoBuyBlockReason,
+        exchangeCredentialsReady: Boolean(exchangeCredentials),
+        openExchangeOrder: openExchangeOrder
+          ? {
+              pair: openExchangeOrder.pair,
+              status: openExchangeOrder.status,
+              requestedQuantity: openExchangeOrder.requestedQuantity ?? undefined,
+              quantity: openExchangeOrder.quantity ?? undefined,
+              externalStatus: openExchangeOrder.externalStatus ?? undefined,
+            }
+          : null,
+      },
+    })
+
+    const analysis: BotAnalysisResponse = {
+      botId: bot.id,
+      botName: bot.name,
+      strategyId,
+      templateId: bot.template?.id ?? undefined,
+      templateName: bot.template?.name ?? undefined,
+      primarySpecialist: cycleResult.analysis.primarySpecialist,
+      timeframe: cycleResult.analysis.timeframe,
+      generatedAt: cycleGeneratedAt,
+      analyzedPairs: cycleResult.analysis.analyzedPairs,
+      summary: cycleResult.analysis.summary,
+      bestOpportunity: cycleResult.analysis.bestOpportunity ? {
+        pair: cycleResult.analysis.bestOpportunity.pair,
+        action: cycleResult.analysis.bestOpportunity.action,
+        confidence: cycleResult.analysis.bestOpportunity.confidence,
+        price: cycleResult.analysis.bestOpportunity.price,
+        reason: cycleResult.analysis.bestOpportunity.reason,
+        specialists: cycleResult.analysis.bestOpportunity.specialists.map((specialist) => ({
+          specialist: specialist.specialist,
+          action: specialist.action,
+          confidence: specialist.confidence,
+          reason: specialist.reason,
+          indicators: specialist.indicators,
+        })),
+      } : undefined,
+      opportunities: cycleResult.analysis.opportunities.map((opportunity) => ({
+        pair: opportunity.pair,
+        action: opportunity.action,
+        confidence: opportunity.confidence,
+        price: opportunity.price,
+        reason: opportunity.reason,
+        specialists: opportunity.specialists.map((specialist) => ({
+          specialist: specialist.specialist,
+          action: specialist.action,
+          confidence: specialist.confidence,
+          reason: specialist.reason,
+          indicators: specialist.indicators,
+        })),
+      })),
+      socialSignals: cycleResult.analysis.socialSignals.slice(0, 5),
+    }
+    const cyclePlans: BotCycleExecution[] = (cycleResult.plans ?? []).map((plan) => ({
+      mode: executionMode,
+      status: normalizePlanStatus(plan.status),
+      reason: plan.reason,
+      pair: plan.pair,
+      action: plan.action as 'buy' | 'sell' | 'hold' | undefined,
+      quantity: plan.quantity,
+      rank: plan.rank,
+      source: plan.source,
+    }))
+    const primaryPlannedOpportunity = cyclePlans.find((plan) => plan.status !== 'skipped')
+      ?? cyclePlans[0]
+      ?? undefined
+    const actionableOpportunity = analysis.opportunities.find((opportunity) => opportunity.action !== 'hold')
+
+    await prisma.bot.update({
+      where: { id: bot.id },
+      data: {
+        focusPair: primaryPlannedOpportunity?.pair ?? actionableOpportunity?.pair ?? bot.focusPair ?? null,
+        currentPair: analysis.bestOpportunity?.pair ?? null,
+        recommendedAction: analysis.bestOpportunity?.action ?? 'hold',
+        confidence: analysis.bestOpportunity?.confidence ?? 0,
+        lastAnalysis: new Date(cycleGeneratedAt),
+        updatedAt: new Date(cycleGeneratedAt),
+      },
+    }).catch(() => undefined)
+
+    emitDashboardUpdate(userId, {
+      scope: 'bots',
+      reason: 'bot_analysis_refreshed',
+      botId: bot.id,
+      updatedAt: cycleGeneratedAt,
+    })
+
+    const selectedOpportunity = (
+      cycleResult.plan.pair
+      && cycleResult.plan.action
+      && typeof cycleResult.plan.decisionPrice === 'number'
+      && typeof cycleResult.plan.confidence === 'number'
+    ) ? {
+      pair: cycleResult.plan.pair,
+      action: cycleResult.plan.action,
+      confidence: cycleResult.plan.confidence,
+      price: cycleResult.plan.decisionPrice,
+      reason: cycleResult.plan.reason,
+    } : analysis.bestOpportunity
+    const plannedQuantity = cycleResult.plan.quantity
+    const isRiskOverride = Boolean(cycleResult.plan.isRiskOverride)
     const decisionTimestamp = new Date()
     const persistDecision = async (input: {
       executionStatus: BotCycleExecution['status']
@@ -1173,21 +1475,18 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
         return
       }
 
-      const safeDecisionPrice = decisionPrice
-      const safeConfidence = confidence
-
       try {
         await recordBotDecision({
           userId,
           botId: bot.id,
           pair,
           action,
-          confidence: safeConfidence,
+          confidence,
           reason: input.reason,
           timeframe,
           executionMode,
           executionStatus: input.executionStatus,
-          decisionPrice: safeDecisionPrice,
+          decisionPrice,
           requestedQuantity: input.requestedQuantity,
           executedQuantity: input.executedQuantity,
           transactionId: input.transactionId,
@@ -1216,366 +1515,133 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
       }
     }
 
-    if (riskDecision.skipReason) {
+    if (cycleResult.plan.status === 'skipped') {
       await persistDecision({
         executionStatus: 'skipped',
-        reason: riskDecision.skipReason,
+        reason: cycleResult.plan.reason,
+        requestedQuantity: plannedQuantity,
+        pair: cycleResult.plan.pair,
+        action: cycleResult.plan.action,
+        confidence: cycleResult.plan.confidence,
+        decisionPrice: cycleResult.plan.decisionPrice,
       })
 
       const result: BotCycleResult = {
         botId: bot.id,
         botName: bot.name,
-        generatedAt: new Date().toISOString(),
+        generatedAt: cycleGeneratedAt,
         analysis,
+        plans: cyclePlans,
         execution: {
           mode: executionMode,
           status: 'skipped',
-          reason: riskDecision.skipReason,
+          reason: cycleResult.plan.reason,
+          pair: cycleResult.plan.pair,
+          action: cycleResult.plan.action,
+          quantity: plannedQuantity,
         },
       }
 
-      logger.warn('[bot] Circuit breaker bloqueou o ciclo do bot', {
-        module: 'bot',
-        event: 'bot_cycle_risk_guard_skip',
+      endTrace('runBotCycle', {
         userId,
-        botId: bot.id,
-        botName: bot.name,
-        reason: riskDecision.skipReason,
+        botId,
+        currentPair: cycleResult.plan.pair,
+        recommendedAction: cycleResult.plan.action,
+        confidence: cycleResult.plan.confidence,
       })
-
-      endTrace('runBotCycle', { userId, botId })
       return result
     }
 
-    if (!selectedOpportunity || selectedOpportunity.action === 'hold') {
-      await persistDecision({
-        executionStatus: 'skipped',
-        reason: 'Nenhuma oportunidade forte o suficiente para execução neste ciclo',
-        action: selectedOpportunity?.action ?? 'hold',
-      })
-
-      const result: BotCycleResult = {
-        botId: bot.id,
-        botName: bot.name,
-        generatedAt: new Date().toISOString(),
-        analysis,
-        execution: {
-          mode: executionMode,
-          status: 'skipped',
-          reason: 'Nenhuma oportunidade forte o suficiente para execução neste ciclo',
-        },
-      }
-
-      logger.info('[bot] Ciclo finalizado sem oportunidade executável', {
-        module: 'bot',
-        event: 'bot_cycle_no_action',
-        userId,
-        botId: bot.id,
-        botName: bot.name,
-      })
-
-      endTrace('runBotCycle', { userId, botId })
-      return result
-    }
-
-    if (!isRiskOverride && selectedOpportunity.confidence < minimumConfidence) {
-      const reason = `Confiança ${selectedOpportunity.confidence}% abaixo do mínimo configurado (${minimumConfidence}%)`
-      await persistDecision({
-        executionStatus: 'skipped',
-        reason,
-      })
-
-      const result: BotCycleResult = {
-        botId: bot.id,
-        botName: bot.name,
-        generatedAt: new Date().toISOString(),
-        analysis,
-        execution: {
-          mode: executionMode,
-          status: 'skipped',
-          reason,
-          pair: selectedOpportunity.pair,
-          action: selectedOpportunity.action,
-        },
-      }
-
-      endTrace('runBotCycle', { userId, botId })
-      return result
-    }
-
-    if (!isRiskOverride && await isInCooldown(userId, bot.id, selectedOpportunity.pair, selectedOpportunity.action)) {
-      const reason = 'Cooldown ativo para evitar repetição da mesma ordem no mesmo par'
-      await persistDecision({
-        executionStatus: 'skipped',
-        reason,
-      })
-
-      const result: BotCycleResult = {
-        botId: bot.id,
-        botName: bot.name,
-        generatedAt: new Date().toISOString(),
-        analysis,
-        execution: {
-          mode: executionMode,
-          status: 'skipped',
-          reason,
-          pair: selectedOpportunity.pair,
-          action: selectedOpportunity.action,
-        },
-      }
-
-      endTrace('runBotCycle', { userId, botId })
-      return result
-    }
-
-    if (executionMode === 'full_auto' && selectedOpportunity.action === 'buy') {
-      const fullAutoEligibility = await resolveBotFullAutoEligibility({
-        userId,
-        botId: bot.id,
-        currentBotModelUrl: bot.modelUrl,
-      })
-
-      if (!fullAutoEligibility.eligible) {
-        const reason = fullAutoEligibility.blockers[0]
-          ?? 'O champion atual ainda não atende aos critérios mínimos para abrir novas posições em full_auto.'
-        await persistDecision({
-          executionStatus: 'skipped',
-          reason,
-        })
-
-        const result: BotCycleResult = {
-          botId: bot.id,
-          botName: bot.name,
-          generatedAt: new Date().toISOString(),
-          analysis,
-          execution: {
-            mode: executionMode,
-            status: 'skipped',
-            reason,
-            pair: selectedOpportunity.pair,
-            action: selectedOpportunity.action,
-          },
-        }
-
-        logger.warn('[bot] Compra bloqueada por governança do modelo em full_auto', {
-          module: 'bot',
-          event: 'bot_cycle_full_auto_governance_blocked',
-          userId,
-          botId: bot.id,
-          modelUrl: bot.modelUrl,
-          blocker: reason,
-        })
-
-        endTrace('runBotCycle', { userId, botId, currentPair: selectedOpportunity.pair, recommendedAction: selectedOpportunity.action, confidence: selectedOpportunity.confidence })
-        return result
-      }
-    }
-
-    let exchangeCredentials: Awaited<ReturnType<typeof getUserExchangeCredentials>> = null
-    if (executionMode === 'full_auto') {
-      exchangeCredentials = await getUserExchangeCredentials(userId)
-      if (!exchangeCredentials) {
-        const reason = 'Credenciais da Binance não configuradas para modo full_auto'
-        await persistDecision({
-          executionStatus: 'skipped',
-          reason,
-        })
-
-        const result: BotCycleResult = {
-          botId: bot.id,
-          botName: bot.name,
-          generatedAt: new Date().toISOString(),
-          analysis,
-        execution: {
-          mode: executionMode,
-          status: 'skipped',
-          reason,
-          pair: selectedOpportunity.pair,
-          action: selectedOpportunity.action,
-        },
-        }
-
-        endTrace('runBotCycle', { userId, botId })
-        return result
-      }
-
-      await reconcileOpenOrdersForUserSafely(userId)
-
-      const openExchangeOrder = await prisma.transaction.findFirst({
-        where: {
-          userId,
-          botId: bot.id,
-          externalOrderId: { not: null },
-          status: { in: ['pending', 'partially_filled'] },
-        },
-        orderBy: [
-          { syncedAt: 'desc' },
-          { date: 'desc' },
-        ],
-        select: {
-          id: true,
-          pair: true,
-          status: true,
-          requestedQuantity: true,
-          quantity: true,
-          externalStatus: true,
-        },
-      })
-
-      if (openExchangeOrder) {
-        const reason = `Ainda existe uma ordem ${openExchangeOrder.status === 'partially_filled' ? 'parcialmente executada' : 'pendente'} em ${openExchangeOrder.pair}; o bot vai aguardar a reconciliação antes de abrir nova posição`
-        await persistDecision({
-          executionStatus: 'skipped',
-          reason,
-          requestedQuantity: openExchangeOrder.requestedQuantity || openExchangeOrder.quantity || undefined,
-        })
-
-        const result: BotCycleResult = {
-          botId: bot.id,
-          botName: bot.name,
-          generatedAt: new Date().toISOString(),
-          analysis,
-        execution: {
-          mode: executionMode,
-          status: 'skipped',
-          reason,
-          pair: openExchangeOrder.pair,
-          action: selectedOpportunity.action,
-          quantity: openExchangeOrder.requestedQuantity || openExchangeOrder.quantity || undefined,
-          },
-        }
-
-        endTrace('runBotCycle', { userId, botId, currentPair: openExchangeOrder.pair, recommendedAction: selectedOpportunity.action, confidence: selectedOpportunity.confidence })
-        return result
-      }
-
-      const liveBalancesBefore = await getAccountBalances(exchangeCredentials.apiKey, exchangeCredentials.secretKey, { forceRefresh: true })
-      await syncExternalBalances(userId, liveBalancesBefore)
-    }
-
-    const tradePlan = await buildTradePlan({
-      userId,
-      pair: selectedOpportunity.pair,
-      action: selectedOpportunity.action,
-      executionMode,
-      price: selectedOpportunity.price,
-      maxTradeAmount: configuration?.maxTradeAmount ?? 1000,
-      maxTradeAmountUnit: configuration?.maxTradeAmountUnit ?? 'USDT',
-      riskConfig,
-      timeframe,
-    })
-
-    if (!tradePlan.shouldExecute || !tradePlan.quantity) {
-      await persistDecision({
-        executionStatus: 'skipped',
-        reason: tradePlan.reason,
-      })
-
-      const result: BotCycleResult = {
-        botId: bot.id,
-        botName: bot.name,
-        generatedAt: new Date().toISOString(),
-        analysis,
-        execution: {
-          mode: executionMode,
-          status: 'skipped',
-          reason: tradePlan.reason,
-          pair: selectedOpportunity.pair,
-          action: selectedOpportunity.action,
-        },
-      }
-
-      endTrace('runBotCycle', { userId, botId })
-      return result
-    }
-
-    if (!isRiskOverride) {
-      const portfolioRiskReason = await evaluatePortfolioRiskGuard({
-        userId,
-        pair: selectedOpportunity.pair,
-        action: selectedOpportunity.action,
-        quantity: tradePlan.quantity,
-        price: selectedOpportunity.price,
-        riskConfig,
-        timeframe,
-      })
-
-      if (portfolioRiskReason) {
-        await persistDecision({
-          executionStatus: 'skipped',
-          reason: portfolioRiskReason,
-          requestedQuantity: tradePlan.quantity,
-        })
-
-        const result: BotCycleResult = {
-          botId: bot.id,
-          botName: bot.name,
-          generatedAt: new Date().toISOString(),
-          analysis,
-          execution: {
-            mode: executionMode,
-            status: 'skipped',
-            reason: portfolioRiskReason,
-            pair: selectedOpportunity.pair,
-            action: selectedOpportunity.action,
-            quantity: tradePlan.quantity,
-          },
-        }
-
-        endTrace('runBotCycle', { userId, botId, currentPair: selectedOpportunity.pair, recommendedAction: selectedOpportunity.action, confidence: selectedOpportunity.confidence })
-        return result
-      }
-    }
-
-    if (executionMode === 'semi_auto') {
+    if (cycleResult.plan.status === 'suggested') {
       await persistDecision({
         executionStatus: 'suggested',
-        reason: isRiskOverride ? selectedOpportunity.reason : tradePlan.reason,
-        requestedQuantity: tradePlan.quantity,
-      })
-
-      logger.info('[bot] Sinal gerado para revisão manual', {
-        module: 'bot',
-        event: 'bot_signal_suggested',
-        userId,
-        botId: bot.id,
-        botName: bot.name,
-        pair: selectedOpportunity.pair,
-        action: selectedOpportunity.action,
-        confidence: selectedOpportunity.confidence,
-        quantity: tradePlan.quantity,
+        reason: cycleResult.plan.reason,
+        requestedQuantity: plannedQuantity,
+        pair: cycleResult.plan.pair,
+        action: cycleResult.plan.action,
+        confidence: cycleResult.plan.confidence,
+        decisionPrice: cycleResult.plan.decisionPrice,
       })
 
       const result: BotCycleResult = {
         botId: bot.id,
         botName: bot.name,
-        generatedAt: new Date().toISOString(),
+        generatedAt: cycleGeneratedAt,
         analysis,
+        plans: cyclePlans,
         execution: {
           mode: executionMode,
           status: 'suggested',
-          reason: isRiskOverride ? selectedOpportunity.reason : tradePlan.reason,
-          pair: selectedOpportunity.pair,
-          action: selectedOpportunity.action,
-          quantity: tradePlan.quantity,
+          reason: cycleResult.plan.reason,
+          pair: cycleResult.plan.pair,
+          action: cycleResult.plan.action,
+          quantity: plannedQuantity,
         },
       }
 
-      endTrace('runBotCycle', { userId, botId, currentPair: selectedOpportunity.pair, recommendedAction: selectedOpportunity.action, confidence: selectedOpportunity.confidence })
+      endTrace('runBotCycle', {
+        userId,
+        botId,
+        currentPair: cycleResult.plan.pair,
+        recommendedAction: cycleResult.plan.action,
+        confidence: cycleResult.plan.confidence,
+      })
       return result
     }
 
+    if (
+      !selectedOpportunity
+      || !selectedOpportunity.pair
+      || !selectedOpportunity.action
+      || typeof selectedOpportunity.price !== 'number'
+      || !Number.isFinite(selectedOpportunity.price)
+      || selectedOpportunity.price <= QUANTITY_EPSILON
+      || typeof plannedQuantity !== 'number'
+      || !Number.isFinite(plannedQuantity)
+      || plannedQuantity <= QUANTITY_EPSILON
+    ) {
+      await persistDecision({
+        executionStatus: 'skipped',
+        reason: 'O runtime Python não retornou um plano de execução válido',
+      })
+
+      const result: BotCycleResult = {
+        botId: bot.id,
+        botName: bot.name,
+        generatedAt: cycleGeneratedAt,
+        analysis,
+        plans: cyclePlans,
+        execution: {
+          mode: executionMode,
+          status: 'skipped',
+          reason: 'O runtime Python não retornou um plano de execução válido',
+        },
+      }
+
+      endTrace('runBotCycle', { userId, botId, errorFlag: true })
+      return result
+    }
+
+    const executionAction = selectedOpportunity.action as 'buy' | 'sell'
+
     let transaction: ExecutedOrderPayload
     let executionStatus: BotCycleExecution['status'] = 'executed'
-    let executionReason = executionMode === 'full_auto'
-      ? 'Executado automaticamente em modo full_auto na Binance'
-      : 'Executado automaticamente em modo paper'
-    let paperSimulation: ReturnType<typeof buildPaperSimulation> | null = null
+    let executionReason = cycleResult.plan.reason
+    let paperSimulation = cycleResult.plan.paperSimulation
+      ? {
+          requestedQuantity: cycleResult.plan.paperSimulation.requestedQuantity,
+          executedQuantity: cycleResult.plan.paperSimulation.executedQuantity,
+          executionPrice: cycleResult.plan.paperSimulation.executionPrice,
+          slippagePercent: cycleResult.plan.paperSimulation.slippagePercent,
+          simulatedLatencyMs: cycleResult.plan.paperSimulation.simulatedLatencyMs,
+          simulatedFillPercent: cycleResult.plan.paperSimulation.simulatedFillPercent,
+        }
+      : null
 
     if (executionMode === 'full_auto' && exchangeCredentials) {
       const preparedOrder = await prepareSpotOrderRequest({
         pair: selectedOpportunity.pair,
-        quantity: tradePlan.quantity,
+        quantity: plannedQuantity,
         orderType: 'MARKET',
         referencePrice: selectedOpportunity.price,
       })
@@ -1585,7 +1651,7 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
         await persistDecision({
           executionStatus: 'skipped',
           reason,
-          requestedQuantity: tradePlan.quantity,
+          requestedQuantity: plannedQuantity,
         })
 
         const result: BotCycleResult = {
@@ -1593,13 +1659,14 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
           botName: bot.name,
           generatedAt: new Date().toISOString(),
           analysis,
-        execution: {
-          mode: executionMode,
-          status: 'skipped',
-          reason,
-          pair: selectedOpportunity.pair,
-          action: selectedOpportunity.action,
-        },
+          plans: cyclePlans,
+          execution: {
+            mode: executionMode,
+            status: 'skipped',
+            reason,
+            pair: selectedOpportunity.pair,
+            action: selectedOpportunity.action,
+          },
         }
 
         logger.warn('[bot] Ordem bloqueada pelos filtros da Binance', {
@@ -1609,7 +1676,7 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
           botId: bot.id,
           pair: selectedOpportunity.pair,
           action: selectedOpportunity.action,
-          quantity: tradePlan.quantity,
+          quantity: plannedQuantity,
           reason: preparedOrder.rejectionReason,
           adjustments: preparedOrder.adjustments,
         })
@@ -1624,7 +1691,7 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
         quantity: preparedOrder.quantity,
       })
 
-      const requestedQuantity = roundQuantity(Number(liveOrder.origQty || preparedOrder.quantity || tradePlan.quantity))
+      const requestedQuantity = roundQuantity(Number(liveOrder.origQty || preparedOrder.quantity || plannedQuantity))
       const executedQuantity = roundQuantity(Number(liveOrder.executedQty || 0))
       const executedTotal = Number(liveOrder.cummulativeQuoteQty || (executedQuantity * selectedOpportunity.price))
       const executedPrice = executedQuantity > QUANTITY_EPSILON && executedTotal > QUANTITY_EPSILON
@@ -1648,7 +1715,7 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
         transaction = await executeOrderForUser({
           userId,
           pair: selectedOpportunity.pair,
-          type: selectedOpportunity.action,
+          type: executionAction,
           quantity: executedQuantity,
           requestedQuantity,
           orderType: 'market',
@@ -1671,7 +1738,7 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
         transaction = await upsertExchangeOrderSnapshot({
           userId,
           pair: selectedOpportunity.pair,
-          type: selectedOpportunity.action,
+          type: executionAction,
           origin: 'bot',
           botId: bot.id,
           orderType: 'market',
@@ -1728,17 +1795,17 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
         executionReason = `${executionReason} · ${preparedOrder.adjustments.join(' · ')}`
       }
     } else {
-      paperSimulation = buildPaperSimulation({
-        action: selectedOpportunity.action,
+      paperSimulation = paperSimulation ?? buildPaperSimulation({
+        action: executionAction,
         confidence: selectedOpportunity.confidence,
-        requestedQuantity: tradePlan.quantity,
+        requestedQuantity: plannedQuantity,
         referencePrice: selectedOpportunity.price,
       })
 
       transaction = await executeOrderForUser({
         userId,
         pair: selectedOpportunity.pair,
-        type: selectedOpportunity.action,
+        type: executionAction,
         quantity: paperSimulation.executedQuantity,
         requestedQuantity: paperSimulation.requestedQuantity,
         orderType: 'market',
@@ -1795,6 +1862,7 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
       botName: bot.name,
       generatedAt: new Date().toISOString(),
       analysis,
+      plans: cyclePlans,
       execution: {
         mode: executionMode,
         status: executionStatus,

@@ -319,6 +319,24 @@ def build_evaluation(metrics: Sequence[Dict[str, Any]], config: Dict[str, Any], 
     }
 
 
+def should_stop_early(metrics: Sequence[Dict[str, Any]], config: Dict[str, Any]) -> bool:
+    early_stopping = (config.get("hyperparameters") or {}).get("earlyStopping") or {}
+    if not early_stopping or not early_stopping.get("enabled"):
+        return False
+
+    patience = max(2, int(round(to_float(early_stopping.get("patience"), 10))))
+    if len(metrics) <= patience:
+        return False
+
+    previous_metrics = list(metrics[:-patience])
+    if not previous_metrics:
+        return False
+
+    best_previous_val_loss = min(to_float(metric.get("valLoss"), float("inf")) for metric in previous_metrics)
+    recent_metrics = metrics[-patience:]
+    return all(to_float(metric.get("valLoss"), float("inf")) >= best_previous_val_loss for metric in recent_metrics)
+
+
 def serialize_joblib_payload(payload: Dict[str, Any]) -> str:
     buffer = io.BytesIO()
     joblib.dump(payload, buffer)
@@ -328,6 +346,26 @@ def serialize_joblib_payload(payload: Dict[str, Any]) -> str:
 def deserialize_joblib_payload(payload_base64: str) -> Dict[str, Any]:
     buffer = io.BytesIO(base64.b64decode(payload_base64.encode("utf-8")))
     return joblib.load(buffer)
+
+
+def serialize_torch_payload(payload: Dict[str, Any]) -> str:
+    if torch is None:
+        raise RuntimeError("Torch não está disponível para serialização")
+    buffer = io.BytesIO()
+    torch.save(payload, buffer)
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+
+def deserialize_torch_payload(payload_base64: str) -> Dict[str, Any]:
+    if torch is None:
+        raise RuntimeError("Torch não está disponível para desserialização")
+    buffer = io.BytesIO(base64.b64decode(payload_base64.encode("utf-8")))
+    return torch.load(buffer, map_location="cpu", weights_only=False)
+
+
+def emit_event(event: Dict[str, Any]) -> None:
+    sys.stdout.write(json.dumps(event, ensure_ascii=True) + "\n")
+    sys.stdout.flush()
 
 
 if nn is not None:
@@ -613,6 +651,297 @@ def train_pipeline(config: Dict[str, Any], datasets: Dict[str, Sequence[Dict[str
     }
 
 
+def emit_training_metric(metric: Dict[str, Any], total_epochs: int) -> None:
+    emit_event({
+        "type": "metric",
+        "metric": metric,
+    })
+
+    epoch = int(metric.get("epoch", 0))
+    if epoch == 1 or epoch % 10 == 0 or epoch >= total_epochs:
+        emit_event({
+            "type": "log",
+            "level": "INFO",
+            "message": f"Epoca {epoch} concluida. Train loss {metric.get('trainLoss')}, val loss {metric.get('valLoss')}",
+            "epoch": epoch,
+        })
+
+
+def emit_training_checkpoint(runtime_state: Dict[str, Any], metrics: Sequence[Dict[str, Any]]) -> None:
+    best_metric = min(metrics, key=lambda item: (to_float(item.get("valLoss"), float("inf")), -to_float(item.get("f1Score"), 0.0))) if metrics else None
+    emit_event({
+        "type": "checkpoint",
+        "runtimeState": runtime_state,
+        "bestEpoch": int(best_metric.get("epoch")) if best_metric else None,
+        "bestValLoss": float(best_metric.get("valLoss")) if best_metric else None,
+    })
+
+
+def run_train_session(payload: Dict[str, Any]) -> Dict[str, Any]:
+    config = payload.get("config") or {}
+    datasets = payload.get("datasets") or {}
+    resume_state = payload.get("runtimeState") or {}
+    architecture = str(config.get("architecture", "linear_regression"))
+
+    emit_event({
+        "type": "log",
+        "level": "INFO",
+        "message": f"Iniciando treinamento real {architecture.upper()}",
+    })
+
+    if architecture in {"lstm", "cnn", "transformer"}:
+        samples = build_sequence_samples(datasets, config)
+    else:
+        samples = build_tabular_samples(datasets, config)
+
+    if len(samples) < 12:
+        raise ValueError("Dados insuficientes para treinar um modelo real")
+
+    train_samples, valid_samples = split_samples(samples, get_validation_split(config))
+    train_x, train_y = encode_samples(train_samples)
+    valid_x, valid_y = encode_samples(valid_samples)
+    total_epochs = get_epochs(config)
+
+    if architecture == "linear_regression":
+        scaler = StandardScaler()
+        train_scaled = scaler.fit_transform(train_x)
+        valid_scaled = scaler.transform(valid_x)
+        model = SGDClassifier(
+            loss="log_loss",
+            learning_rate="constant",
+            eta0=get_learning_rate(config),
+            alpha=0.0005,
+            random_state=int(round(to_float(get_hyper(config, "randomState", 42), 42))),
+        )
+        metrics: List[Dict[str, Any]] = []
+        start_epoch = 0
+
+        if resume_state.get("serializer") == "joblib" and resume_state.get("payloadBase64"):
+            checkpoint_payload = deserialize_joblib_payload(str(resume_state.get("payloadBase64")))
+            model = checkpoint_payload.get("model", model)
+            scaler = checkpoint_payload.get("scaler", scaler)
+            train_scaled = scaler.transform(train_x)
+            valid_scaled = scaler.transform(valid_x)
+            metrics = list(resume_state.get("metrics") or [])
+            start_epoch = int(round(to_float(resume_state.get("epoch"), 0)))
+
+        for epoch in range(start_epoch + 1, total_epochs + 1):
+            model.partial_fit(train_scaled, train_y, classes=np.array([0, 1, 2], dtype=np.int64))
+            train_probs = model.predict_proba(train_scaled)
+            valid_probs = model.predict_proba(valid_scaled)
+            metric = summarize_metrics(train_y, train_probs, valid_y, valid_probs, epoch, get_learning_rate(config))
+            metrics.append(metric)
+            emit_training_metric(metric, total_epochs)
+            runtime_state = {
+                "serializer": "joblib",
+                "payloadBase64": serialize_joblib_payload({
+                    "model": model,
+                    "scaler": scaler,
+                }),
+                "epoch": epoch,
+                "metrics": metrics,
+            }
+            emit_training_checkpoint(runtime_state, metrics)
+            if should_stop_early(metrics, config):
+                emit_event({
+                    "type": "log",
+                    "level": "WARN",
+                    "message": f"Early stopping acionado na epoca {epoch}",
+                    "epoch": epoch,
+                })
+                break
+
+        final_valid_probs = model.predict_proba(valid_scaled)
+        result = {
+            "metrics": metrics,
+            "evaluation": build_evaluation(metrics, config, valid_y, final_valid_probs),
+            "enginePackage": build_engine_package(config, {
+                "model": model,
+                "scaler": scaler,
+            }),
+        }
+        emit_event({"type": "result", "result": result})
+        return result
+
+    if architecture == "random_forest":
+        total_estimators = max(32, int(round(to_float(get_hyper(config, "nEstimators", 100), 100))))
+        max_depth_value = int(round(to_float(get_hyper(config, "maxDepth", 10), 10)))
+        max_depth = max_depth_value if max_depth_value > 0 else None
+        step = max(1, total_estimators // total_epochs)
+        model = RandomForestClassifier(
+            n_estimators=step,
+            warm_start=True,
+            random_state=int(round(to_float(get_hyper(config, "randomState", 42), 42))),
+            max_depth=max_depth,
+            min_samples_leaf=2,
+        )
+        metrics = []
+        start_epoch = 0
+
+        if resume_state.get("serializer") == "joblib" and resume_state.get("payloadBase64"):
+            checkpoint_payload = deserialize_joblib_payload(str(resume_state.get("payloadBase64")))
+            model = checkpoint_payload.get("model", model)
+            metrics = list(resume_state.get("metrics") or [])
+            start_epoch = int(round(to_float(resume_state.get("epoch"), 0)))
+
+        for epoch in range(start_epoch + 1, total_epochs + 1):
+            model.n_estimators = min(total_estimators, step * epoch)
+            model.fit(train_x, train_y)
+            train_probs = model.predict_proba(train_x)
+            valid_probs = model.predict_proba(valid_x)
+            metric = summarize_metrics(train_y, train_probs, valid_y, valid_probs, epoch, get_learning_rate(config))
+            metrics.append(metric)
+            emit_training_metric(metric, total_epochs)
+            runtime_state = {
+                "serializer": "joblib",
+                "payloadBase64": serialize_joblib_payload({
+                    "model": model,
+                }),
+                "epoch": epoch,
+                "metrics": metrics,
+            }
+            emit_training_checkpoint(runtime_state, metrics)
+            if should_stop_early(metrics, config):
+                emit_event({
+                    "type": "log",
+                    "level": "WARN",
+                    "message": f"Early stopping acionado na epoca {epoch}",
+                    "epoch": epoch,
+                })
+                break
+
+        final_valid_probs = model.predict_proba(valid_x)
+        result = {
+            "metrics": metrics,
+            "evaluation": build_evaluation(metrics, config, valid_y, final_valid_probs),
+            "enginePackage": build_engine_package(config, {
+                "model": model,
+                "scaler": None,
+            }),
+        }
+        emit_event({"type": "result", "result": result})
+        return result
+
+    if architecture in {"lstm", "cnn", "transformer"}:
+        if torch is None or nn is None:
+            flattened_payload = {
+                "config": {**config, "architecture": "linear_regression"},
+                "datasets": datasets,
+                "runtimeState": resume_state,
+            }
+            return run_train_session(flattened_payload)
+
+        input_size = train_x.shape[-1]
+        if architecture == "cnn":
+            model = CnnClassifier(input_size)
+        elif architecture == "transformer":
+            model = TransformerClassifier(input_size)
+        else:
+            model = LstmClassifier(input_size)
+
+        train_mean = train_x.mean(axis=(0, 1), keepdims=True)
+        train_std = train_x.std(axis=(0, 1), keepdims=True)
+        train_std[train_std < EPSILON] = 1.0
+        optimizer = torch.optim.Adam(model.parameters(), lr=get_learning_rate(config))
+        criterion = nn.CrossEntropyLoss()
+        metrics = []
+        start_epoch = 0
+
+        if resume_state.get("serializer") == "torch" and resume_state.get("payloadBase64"):
+            checkpoint_payload = deserialize_torch_payload(str(resume_state.get("payloadBase64")))
+            train_mean = checkpoint_payload.get("mean", train_mean)
+            train_std = checkpoint_payload.get("std", train_std)
+            model.load_state_dict(checkpoint_payload["state_dict"])
+            optimizer.load_state_dict(checkpoint_payload["optimizer_state_dict"])
+            metrics = list(resume_state.get("metrics") or [])
+            start_epoch = int(round(to_float(resume_state.get("epoch"), 0)))
+
+        train_normalized = (train_x - train_mean) / train_std
+        valid_normalized = (valid_x - train_mean) / train_std
+        device = torch.device("cpu")
+        model.to(device)
+        x_train_tensor = torch.tensor(train_normalized, dtype=torch.float32, device=device)
+        y_train_tensor = torch.tensor(train_y, dtype=torch.long, device=device)
+        x_valid_tensor = torch.tensor(valid_normalized, dtype=torch.float32, device=device)
+        batch_size = max(8, int(round(to_float(get_hyper(config, "batchSize", 32), 32))))
+
+        for epoch in range(start_epoch + 1, total_epochs + 1):
+            model.train()
+            permutation = torch.randperm(x_train_tensor.size(0))
+            for start in range(0, x_train_tensor.size(0), batch_size):
+                batch_indices = permutation[start:start + batch_size]
+                batch_x = x_train_tensor[batch_indices]
+                batch_y = y_train_tensor[batch_indices]
+                optimizer.zero_grad()
+                logits = model(batch_x)
+                loss = criterion(logits, batch_y)
+                loss.backward()
+                optimizer.step()
+
+            model.eval()
+            with torch.no_grad():
+                train_probs = torch.softmax(model(x_train_tensor), dim=1).cpu().numpy()
+                valid_probs = torch.softmax(model(x_valid_tensor), dim=1).cpu().numpy()
+
+            metric = summarize_metrics(train_y, train_probs, valid_y, valid_probs, epoch, get_learning_rate(config))
+            metrics.append(metric)
+            emit_training_metric(metric, total_epochs)
+            runtime_state = {
+                "serializer": "torch",
+                "payloadBase64": serialize_torch_payload({
+                    "architecture": architecture,
+                    "state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "input_size": input_size,
+                    "sequence_length": train_x.shape[1],
+                    "mean": train_mean.astype(np.float32),
+                    "std": train_std.astype(np.float32),
+                }),
+                "epoch": epoch,
+                "metrics": metrics,
+            }
+            emit_training_checkpoint(runtime_state, metrics)
+            if should_stop_early(metrics, config):
+                emit_event({
+                    "type": "log",
+                    "level": "WARN",
+                    "message": f"Early stopping acionado na epoca {epoch}",
+                    "epoch": epoch,
+                })
+                break
+
+        with torch.no_grad():
+            final_valid_probs = torch.softmax(model(x_valid_tensor), dim=1).cpu().numpy()
+
+        result = {
+            "metrics": metrics,
+            "evaluation": build_evaluation(metrics, config, valid_y, final_valid_probs),
+            "enginePackage": build_engine_package(config, {
+                "architecture": architecture,
+                "state_dict": model.state_dict(),
+                "input_size": input_size,
+                "sequence_length": train_x.shape[1],
+                "mean": train_mean.astype(np.float32),
+                "std": train_std.astype(np.float32),
+            }),
+        }
+        emit_event({"type": "result", "result": result})
+        return result
+
+    if architecture == "xgboost":
+        emit_event({
+            "type": "log",
+            "level": "WARN",
+            "message": "Retomada incremental para XGBoost ainda não está disponível; o treinamento será reexecutado integralmente.",
+        })
+
+    result = train_pipeline(config, datasets)
+    for metric in result.get("metrics", []) or []:
+        emit_training_metric(metric, total_epochs)
+    emit_event({"type": "result", "result": result})
+    return result
+
+
 def load_engine_package_from_artifact(artifact_path: str) -> Dict[str, Any]:
     with open(artifact_path, "r", encoding="utf-8") as handle:
         artifact = json.load(handle)
@@ -859,6 +1188,9 @@ def main() -> None:
     payload = read_payload()
     if command == "train":
         result = train_pipeline(payload.get("config") or {}, payload.get("datasets") or {})
+    elif command == "train_session":
+        run_train_session(payload)
+        return
     elif command == "backtest":
         result = run_backtest(payload)
     elif command == "predict":

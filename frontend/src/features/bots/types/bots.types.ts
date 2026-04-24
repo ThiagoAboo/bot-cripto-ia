@@ -15,6 +15,7 @@ export interface BotListItem {
   executionMode?: BotExecutionMode
   isSystemManaged?: boolean
   description?: string
+  focusPair?: string
   currentPair?: string
   status: 'online' | 'offline' | 'training' | 'error'
   isPaused: boolean
@@ -56,6 +57,7 @@ export interface BotDetail {
   isCustom: boolean
   status: string
   isPaused: boolean
+  focusPair?: string
   currentPair?: string
   lastAnalysis?: string
   recommendedAction?: 'buy' | 'sell' | 'hold'

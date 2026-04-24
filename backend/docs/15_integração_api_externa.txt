@@ -47,6 +47,11 @@ O backend do Bot Crypto IA se integra com APIs externas para:
 | AwesomeAPI    | Cotação USD/BRL, EUR/BRL, BTC/BRL             | 60s                | Média      |
 | Webhook       | Notificações externas (Discord, Telegram)     | Por evento         | Baixa      |
 
+OBSERVAÇÃO OPERACIONAL DA VERSÃO ATUAL:
+- A coordenação assíncrona do backend ocorre por workers internos com polling
+- O frontend recebe atualizações em tempo real via Socket.IO
+- Bull/Redis não compõe a infraestrutura obrigatória desta versão operacional
+
 
 2. BINANCE API - INTEGRAÇÃO COMPLETA
 ===============================================================================

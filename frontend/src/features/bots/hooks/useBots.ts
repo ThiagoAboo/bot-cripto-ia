@@ -134,18 +134,23 @@ export function useRunBotCycle() {
     mutationFn: botsService.runBotCycle,
     onSuccess: (result) => {
       invalidateBotSurfaces(queryClient, result.botId)
+      const evaluatedPlans = result.plans?.length ?? 0
+      const approvedPlans = result.plans?.filter((plan) => plan.status !== 'skipped').length ?? 0
+      const cycleSuffix = evaluatedPlans > 0
+        ? ` (${approvedPlans}/${evaluatedPlans} oportunidades aprovadas)`
+        : ''
 
       if (result.execution.status === 'executed') {
-        toast.success(result.execution.reason || 'Ciclo executado com ordem gerada')
+        toast.success((result.execution.reason || 'Ciclo executado com ordem gerada') + cycleSuffix)
         return
       }
 
       if (result.execution.status === 'suggested') {
-        toast.success(result.execution.reason || 'Ciclo executado em modo semi-auto')
+        toast.success((result.execution.reason || 'Ciclo executado em modo semi-auto') + cycleSuffix)
         return
       }
 
-      toast.success(result.execution.reason || 'Ciclo do bot executado')
+      toast.success((result.execution.reason || 'Ciclo do bot executado') + cycleSuffix)
     },
     onError: () => {
       toast.error('Erro ao executar ciclo do bot')

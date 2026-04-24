@@ -81,6 +81,13 @@ export interface PythonTrainingResult {
   enginePackage: PythonEnginePackage
 }
 
+export interface PythonTrainingRuntimeState {
+  serializer: 'joblib' | 'torch'
+  payloadBase64: string
+  epoch: number
+  metrics: PythonTrainingMetric[]
+}
+
 export interface PythonBacktestResult {
   sessionId: string
   testPeriod: { startDate: string; endDate: string }
@@ -259,6 +266,125 @@ async function runPythonEngine<T>(command: 'train' | 'backtest' | 'predict', pay
     child.stdin.write(JSON.stringify(payload))
     child.stdin.end()
   })
+}
+
+export function startPythonTrainingSessionStream(
+  payload: {
+    config: TrainingConfig
+    datasets: Awaited<ReturnType<typeof collectTrainingData>>
+    runtimeState?: PythonTrainingRuntimeState
+  },
+  handlers: {
+    onLog?: (entry: { level: 'INFO' | 'WARN' | 'ERROR'; message: string; epoch?: number }) => void
+    onMetric?: (metric: PythonTrainingMetric) => void
+    onCheckpoint?: (entry: {
+      runtimeState: PythonTrainingRuntimeState
+      bestEpoch?: number | null
+      bestValLoss?: number | null
+    }) => void
+    onResult?: (result: PythonTrainingResult) => void
+  } = {},
+): {
+  child: ReturnType<typeof spawn>
+  completed: Promise<PythonTrainingResult>
+} {
+  const executable = resolvePythonExecutable()
+  const scriptPath = resolvePythonEngineScriptPath()
+  const child = spawn(executable, [scriptPath, 'train_session'], {
+    cwd: path.resolve(__dirname, '..', '..'),
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+  })
+
+  let stdoutBuffer = ''
+  let stderr = ''
+  let settled = false
+
+  const completed = new Promise<PythonTrainingResult>((resolve, reject) => {
+    const handleLine = (line: string) => {
+      const trimmed = line.trim()
+      if (!trimmed) {
+        return
+      }
+
+      let parsed: any
+      try {
+        parsed = JSON.parse(trimmed)
+      } catch (error) {
+        reject(new Error(`Invalid JSON line from python training session: ${String(error)}\nLINE: ${trimmed}\nSTDERR: ${stderr}`))
+        return
+      }
+
+      if (parsed?.type === 'log') {
+        handlers.onLog?.({
+          level: parsed.level === 'WARN' || parsed.level === 'ERROR' ? parsed.level : 'INFO',
+          message: String(parsed.message || ''),
+          epoch: typeof parsed.epoch === 'number' ? parsed.epoch : undefined,
+        })
+        return
+      }
+
+      if (parsed?.type === 'metric' && parsed.metric) {
+        handlers.onMetric?.(parsed.metric as PythonTrainingMetric)
+        return
+      }
+
+      if (parsed?.type === 'checkpoint' && parsed.runtimeState) {
+        handlers.onCheckpoint?.({
+          runtimeState: parsed.runtimeState as PythonTrainingRuntimeState,
+          bestEpoch: typeof parsed.bestEpoch === 'number' ? parsed.bestEpoch : null,
+          bestValLoss: typeof parsed.bestValLoss === 'number' ? parsed.bestValLoss : null,
+        })
+        return
+      }
+
+      if (parsed?.type === 'result' && parsed.result) {
+        handlers.onResult?.(parsed.result as PythonTrainingResult)
+        settled = true
+        resolve(parsed.result as PythonTrainingResult)
+      }
+    }
+
+    child.stdout.on('data', (chunk) => {
+      stdoutBuffer += chunk.toString()
+      let newlineIndex = stdoutBuffer.indexOf('\n')
+      while (newlineIndex >= 0) {
+        const line = stdoutBuffer.slice(0, newlineIndex)
+        stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1)
+        handleLine(line)
+        newlineIndex = stdoutBuffer.indexOf('\n')
+      }
+    })
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString()
+    })
+
+    child.on('error', (error) => {
+      reject(error)
+    })
+
+    child.on('close', (code) => {
+      if (stdoutBuffer.trim()) {
+        handleLine(stdoutBuffer)
+        stdoutBuffer = ''
+      }
+
+      if (settled) {
+        return
+      }
+
+      reject(new Error(stderr || `Python training session exited with code ${code}`))
+    })
+  })
+
+  child.stdin.write(JSON.stringify(payload))
+  child.stdin.end()
+
+  return {
+    child,
+    completed,
+  }
 }
 
 export async function trainRealModelPackage(config: TrainingConfig): Promise<PythonTrainingResult> {

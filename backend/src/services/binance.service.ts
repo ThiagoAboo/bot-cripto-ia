@@ -18,6 +18,12 @@ interface BinanceTickerPriceResponse {
   price: string
 }
 
+interface BinanceOrderBookResponse {
+  lastUpdateId: number
+  bids: Array<[string, string]>
+  asks: Array<[string, string]>
+}
+
 interface BinanceServerTimeResponse {
   serverTime: number
 }
@@ -167,6 +173,12 @@ export interface BinanceSpotTradingRules {
   maxNotional?: number
 }
 
+export interface BinanceOrderBookSnapshot {
+  lastUpdateId: number
+  bids: Array<[number, number]>
+  asks: Array<[number, number]>
+}
+
 export interface PreparedSpotOrderRequest {
   isValid: boolean
   quantity?: number
@@ -184,6 +196,7 @@ const DEFAULT_BINANCE_TIMEOUT = Number(process.env.BINANCE_TIMEOUT ?? 30000)
 const DEFAULT_RECV_WINDOW = Number(process.env.BINANCE_RECV_WINDOW ?? 5000)
 const CACHE_TTL_PRICE = Number(process.env.CACHE_TTL_PRICE ?? 5000)
 const CACHE_TTL_CANDLES = Number(process.env.CACHE_TTL_CANDLES ?? 300000)
+const CACHE_TTL_ORDERBOOK = Number(process.env.CACHE_TTL_ORDERBOOK ?? 3000)
 const CACHE_TTL_PAIRS = Number(process.env.CACHE_TTL_PAIRS ?? 3600000)
 const CACHE_TTL_BALANCE = 30000
 const BINANCE_BASE_URL = process.env.BINANCE_TESTNET === 'true'
@@ -192,6 +205,7 @@ const BINANCE_BASE_URL = process.env.BINANCE_TESTNET === 'true'
 
 const priceCache = new Map<string, CacheEntry<number>>()
 const candlesCache = new Map<string, CacheEntry<Array<{ timestamp: string; open: number; high: number; low: number; close: number; volume: number }>>>()
+const orderBookCache = new Map<string, CacheEntry<BinanceOrderBookSnapshot>>()
 const pairsCache = new Map<string, CacheEntry<string[]>>()
 const exchangeInfoCache = new Map<string, CacheEntry<BinanceExchangeInfoResponse>>()
 const accountCache = new Map<string, CacheEntry<BinanceAccountResponse>>()
@@ -430,6 +444,17 @@ function normalizeInterval(interval: string): string {
   return supported.has(interval) ? interval : normalized
 }
 
+function normalizeOrderBookLimit(limit: number): number {
+  const supportedLimits = [5, 10, 20, 50, 100, 500, 1000, 5000]
+  const normalized = Math.max(5, Math.min(5000, Math.round(Number(limit) || 20)))
+
+  if (supportedLimits.includes(normalized)) {
+    return normalized
+  }
+
+  return supportedLimits.find((candidate) => candidate >= normalized) ?? 5000
+}
+
 export async function getServerTime(): Promise<number> {
   const response = await publicRequest<BinanceServerTimeResponse>('/api/v3/time', {}, { weight: 1 })
   return response.serverTime
@@ -656,6 +681,36 @@ export async function getTickerPrice(pair: string): Promise<number> {
   }
 
   return setCacheValue(priceCache, cacheKey, price)
+}
+
+export async function getOrderBook(
+  pair: string,
+  limit: number = 20,
+): Promise<BinanceOrderBookSnapshot> {
+  const symbol = normalizePair(pair)
+  const normalizedLimit = normalizeOrderBookLimit(limit)
+  const cacheKey = `orderbook:${symbol}:${normalizedLimit}`
+  const cached = getCacheValue(orderBookCache, cacheKey, CACHE_TTL_ORDERBOOK)
+  if (cached) {
+    return cached
+  }
+
+  const data = await publicRequest<BinanceOrderBookResponse>('/api/v3/depth', {
+    symbol,
+    limit: normalizedLimit,
+  }, { weight: normalizedLimit >= 500 ? 25 : 5 })
+
+  const snapshot: BinanceOrderBookSnapshot = {
+    lastUpdateId: data.lastUpdateId,
+    bids: (data.bids ?? [])
+      .map(([price, quantity]) => [Number(price), Number(quantity)] as [number, number])
+      .filter(([price, quantity]) => Number.isFinite(price) && price > 0 && Number.isFinite(quantity) && quantity >= 0),
+    asks: (data.asks ?? [])
+      .map(([price, quantity]) => [Number(price), Number(quantity)] as [number, number])
+      .filter(([price, quantity]) => Number.isFinite(price) && price > 0 && Number.isFinite(quantity) && quantity >= 0),
+  }
+
+  return setCacheValue(orderBookCache, cacheKey, snapshot)
 }
 
 export async function getCandles(
