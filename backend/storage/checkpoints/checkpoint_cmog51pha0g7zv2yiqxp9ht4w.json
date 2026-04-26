@@ -1,0 +1,66 @@
+{
+  "artifactType": "bot-crypto-ia-training-checkpoint",
+  "formatVersion": 1,
+  "savedAt": "2026-04-26T19:10:54.578Z",
+  "sessionId": "cmog51pha0g7zv2yiqxp9ht4w",
+  "userId": "cmog0eg0p0000jkp0m98vncad",
+  "botId": "cmog4ffdn0ewev2yi19w4n71g",
+  "status": "cancelled",
+  "reason": "cancelled",
+  "summary": {
+    "bestEpoch": null,
+    "bestValLoss": null,
+    "totalEpochs": 0,
+    "lastEpoch": 0
+  },
+  "config": {
+    "botId": "cmog4ffdn0ewev2yi19w4n71g",
+    "strategyId": "template_ema_trend",
+    "architecture": "xgboost",
+    "modelVersion": "v1.0.0",
+    "dataSource": "exchange",
+    "trainingPeriod": {
+      "startDate": "2026-01-01",
+      "endDate": "2026-04-26"
+    },
+    "includedPairs": [
+      "BTC/USDT",
+      "ETH/USDT",
+      "BNB/USDT",
+      "SOL/USDT",
+      "AVAX/USDT"
+    ],
+    "indicators": [
+      "EMA"
+    ],
+    "timeframe": "1h",
+    "hyperparameters": {
+      "hiddenLayers": 2,
+      "neuronsPerLayer": [
+        64,
+        32
+      ],
+      "dropoutRate": 0.2,
+      "activation": "sigmoid",
+      "batchSize": 32,
+      "epochs": 100,
+      "learningRate": 0.001,
+      "optimizer": "sgd",
+      "lossFunction": "mae",
+      "validationSplit": 20,
+      "earlyStopping": {
+        "enabled": true,
+        "patience": 10
+      },
+      "sequenceLength": 48,
+      "forecastHorizonCandles": 5,
+      "buyThresholdPercent": 0.3,
+      "sellThresholdPercent": -0.3,
+      "walkForwardFolds": 3,
+      "nEstimators": 100,
+      "maxDepth": 10,
+      "randomState": 42
+    }
+  },
+  "metrics": []
+}

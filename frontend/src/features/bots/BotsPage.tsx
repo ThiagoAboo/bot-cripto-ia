@@ -19,6 +19,7 @@ import { formatCurrency, formatDate, formatNumber, formatPercent, getProfitColor
 import {
   BOTS_QUERY_KEYS,
   useBotDetail,
+  useExportBotHomologationPack,
   useBotHistory,
   useBotHomologationReport,
   useBotModels,
@@ -668,19 +669,25 @@ function BotHistoryPanel({ history, isLoading }: { history?: BotHistory; isLoadi
 }
 
 function BotHomologationPanel({
+  botName,
   report,
   isLoading,
   startDate,
   endDate,
   onStartDateChange,
   onEndDateChange,
+  onExportPack,
+  isExportingPack,
 }: {
+  botName?: string
   report?: BotHomologationReport
   isLoading: boolean
   startDate: string
   endDate: string
   onStartDateChange: (value: string) => void
   onEndDateChange: (value: string) => void
+  onExportPack: () => void
+  isExportingPack: boolean
 }) {
   return (
     <Card>
@@ -699,6 +706,10 @@ function BotHomologationPanel({
             <SectionField label="Fim">
               <Input type="date" value={endDate} onChange={(event) => onEndDateChange(event.target.value)} />
             </SectionField>
+            <Button variant="secondary" onClick={onExportPack} isLoading={isExportingPack} disabled={isLoading || !report}>
+              <Save className="h-4 w-4" />
+              Exportar pacote
+            </Button>
             <VerdictBadge report={report} />
           </div>
         </div>
@@ -712,6 +723,11 @@ function BotHomologationPanel({
           </div>
         ) : report ? (
           <div className="space-y-6">
+            {botName && (
+              <div className="rounded-2xl border px-4 py-3 text-sm" style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}>
+                Pacote de exportacao inclui o resumo consolidado e os traces essenciais desta janela para o bot <span style={{ color: 'var(--text-primary)' }}>{botName}</span>.
+              </div>
+            )}
             <div
               className="rounded-3xl border p-5"
               style={{
@@ -1401,6 +1417,7 @@ export function BotsPage() {
   const createBotMutation = useCreateBot()
   const updateBotMutation = useUpdateBot()
   const deleteBotMutation = useDeleteBot()
+  const exportHomologationPackMutation = useExportBotHomologationPack()
   const runBotCycleMutation = useRunBotCycle()
   const pauseBotMutation = usePauseBot()
   const resumeBotMutation = useResumeBot()
@@ -1985,12 +2002,28 @@ export function BotsPage() {
           )}
 
           <BotHomologationPanel
+            botName={botDetail?.name}
             report={botHomologationReport}
             isLoading={isLoadingHomologationReport}
             startDate={homologationStartDate}
             endDate={homologationEndDate}
             onStartDateChange={setHomologationStartDate}
             onEndDateChange={setHomologationEndDate}
+            onExportPack={() => {
+              if (!botDetail) {
+                return
+              }
+
+              void exportHomologationPackMutation.mutateAsync({
+                botId: botDetail.id,
+                botName: botDetail.name,
+                params: {
+                  startDate: toIsoBoundary(homologationStartDate, 'start'),
+                  endDate: toIsoBoundary(homologationEndDate, 'end'),
+                },
+              })
+            }}
+            isExportingPack={exportHomologationPackMutation.isPending}
           />
 
           <BotHistoryPanel history={botHistory} isLoading={isLoadingHistory} />

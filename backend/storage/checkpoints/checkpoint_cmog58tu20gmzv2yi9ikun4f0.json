@@ -1,0 +1,65 @@
+{
+  "artifactType": "bot-crypto-ia-training-checkpoint",
+  "formatVersion": 1,
+  "savedAt": "2026-04-26T19:13:11.830Z",
+  "sessionId": "cmog58tu20gmzv2yi9ikun4f0",
+  "userId": "cmog0eg0p0000jkp0m98vncad",
+  "botId": "cmog4f24z0etrv2yielfadu5y",
+  "status": "cancelled",
+  "reason": "cancelled",
+  "summary": {
+    "bestEpoch": null,
+    "bestValLoss": null,
+    "totalEpochs": 0,
+    "lastEpoch": 0
+  },
+  "config": {
+    "botId": "cmog4f24z0etrv2yielfadu5y",
+    "strategyId": "template_rsi_reversion",
+    "architecture": "lstm",
+    "modelVersion": "v1.0.0",
+    "dataSource": "exchange",
+    "trainingPeriod": {
+      "startDate": "2026-01-26",
+      "endDate": "2026-04-26"
+    },
+    "includedPairs": [
+      "BTC/USDT",
+      "ETH/USDT"
+    ],
+    "indicators": [
+      "RSI",
+      "MACD"
+    ],
+    "timeframe": "1h",
+    "hyperparameters": {
+      "hiddenLayers": 2,
+      "neuronsPerLayer": [
+        64,
+        32,
+        16
+      ],
+      "dropoutRate": 0.2,
+      "activation": "relu",
+      "batchSize": 32,
+      "epochs": 100,
+      "learningRate": 0.001,
+      "optimizer": "adam",
+      "lossFunction": "mse",
+      "validationSplit": 20,
+      "earlyStopping": {
+        "enabled": true,
+        "patience": 10
+      },
+      "sequenceLength": 48,
+      "forecastHorizonCandles": 5,
+      "buyThresholdPercent": 0.3,
+      "sellThresholdPercent": -0.3,
+      "walkForwardFolds": 3,
+      "nEstimators": 100,
+      "maxDepth": 10,
+      "randomState": 42
+    }
+  },
+  "metrics": []
+}

@@ -1,3 +1,5 @@
+import type { TraceAnalysisExportPack } from '../../logs/types/logs.types'
+
 export type BotExecutionMode = 'paper' | 'semi_auto' | 'full_auto'
 export type BotOperationalStatus = 'online' | 'offline'
 
@@ -409,6 +411,29 @@ export interface BotHomologationReport {
     timestamp: string
     totalBrl: number
   }>
+}
+
+export interface BotHomologationTracePackage {
+  key: string
+  label: string
+  payload: TraceAnalysisExportPack
+}
+
+export interface BotHomologationAnalysisPack {
+  exportType: 'bot_homologation_pack_v1'
+  generatedAt: string
+  bot: {
+    id: string
+    name: string
+  }
+  report: BotHomologationReport
+  tracePackages: {
+    incidents: TraceAnalysisExportPack
+    executionResult: TraceAnalysisExportPack
+    blocked: BotHomologationTracePackage[]
+    context: BotHomologationTracePackage[]
+    runtime: BotHomologationTracePackage[]
+  }
 }
 
 export interface BotWorkerStatus {

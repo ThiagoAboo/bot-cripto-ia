@@ -32,6 +32,20 @@ O backend ja bloqueia `full_auto` quando o bot nao tem champion sincronizado, qu
 
 ## Subida local
 
+### Opcao 0. Carga completa do zero
+
+```powershell
+.\bootstrap_operacional.ps1
+```
+
+O script:
+- limpa banco, volumes e artefatos persistidos de treino/checkpoints
+- executa o `init.ps1`
+- reinicializa a carteira `paper` com capital limpo
+- garante os bots em `paper` e `online`
+- roda treino inicial, backtest e salva o melhor candidato por bot
+- grava um resumo em `bootstrap-operacional-report.json`
+
 ### Opcao 1. Script unico
 
 ```powershell

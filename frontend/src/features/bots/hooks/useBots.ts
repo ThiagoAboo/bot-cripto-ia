@@ -12,6 +12,24 @@ export const BOTS_QUERY_KEYS = {
   workerStatus: ['bots', 'worker-status'],
 }
 
+function sanitizeFilenameSegment(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'bot'
+}
+
+function downloadJsonFile(filename: string, payload: unknown): void {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
 function invalidateBotSurfaces(queryClient: ReturnType<typeof useQueryClient>, botId?: string) {
   void queryClient.invalidateQueries({ queryKey: BOTS_QUERY_KEYS.list })
   void queryClient.invalidateQueries({ queryKey: BOTS_QUERY_KEYS.templates })
@@ -74,6 +92,34 @@ export function useBotHomologationReport(
     queryFn: () => botsService.getBotHomologationReport(botId!, params),
     refetchInterval: 15000,
     staleTime: 5000,
+  })
+}
+
+export function useExportBotHomologationPack() {
+  return useMutation({
+    mutationFn: ({
+      botId,
+      botName,
+      params,
+    }: {
+      botId: string
+      botName: string
+      params?: { startDate?: string; endDate?: string }
+    }) => botsService.getBotHomologationAnalysisPack(botId, botName, params),
+    onSuccess: (pack, variables) => {
+      const filename = [
+        'homologacao',
+        sanitizeFilenameSegment(variables.botName),
+        (variables.params?.startDate ?? 'inicio').slice(0, 10),
+        (variables.params?.endDate ?? 'fim').slice(0, 10),
+      ].join('_') + '.json'
+
+      downloadJsonFile(filename, pack)
+      toast.success('Pacote completo de homologacao exportado')
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Erro ao exportar pacote de homologacao')
+    },
   })
 }
 

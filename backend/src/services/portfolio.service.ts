@@ -50,7 +50,7 @@ export async function calculatePortfolioTotalBrl(balances: BalanceForSnapshot[])
 
   const uniqueCurrencies = Array.from(new Set(balances.map((balance) => balance.currency)))
   const rateEntries = await Promise.all(uniqueCurrencies.map(async (currency) => {
-    const rate = await getCurrencyRateToBrl(currency).catch(() => 0)
+    const rate = await getCurrencyRateToBrl(currency)
     return [currency, rate] as const
   }))
 
@@ -78,7 +78,26 @@ export async function recordBalanceHistorySnapshot(
     },
   })
 
-  const totalBrl = await calculatePortfolioTotalBrl(effectiveBalances)
+  let totalBrl: number
+
+  try {
+    totalBrl = await calculatePortfolioTotalBrl(effectiveBalances)
+  } catch {
+    const lastSnapshot = await prisma.balanceHistory.findFirst({
+      where: { userId },
+      orderBy: { timestamp: 'desc' },
+    })
+
+    if (lastSnapshot) {
+      return {
+        created: false,
+        totalBrl: lastSnapshot.totalBrl,
+      }
+    }
+
+    throw new Error('Nao foi possivel calcular o valor da carteira em BRL sem um snapshot anterior valido')
+  }
+
   return persistBalanceHistorySnapshot(userId, totalBrl)
 }
 

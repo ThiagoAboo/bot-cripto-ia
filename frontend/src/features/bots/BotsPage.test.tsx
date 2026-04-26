@@ -11,6 +11,7 @@ const {
   archiveBotModelMutateAsync,
   createBotMutateAsync,
   deleteBotMutateAsync,
+  exportHomologationPackMutateAsync,
   invalidateQueries,
   pauseBotMutateAsync,
   promoteBotModelMutateAsync,
@@ -503,6 +504,7 @@ const {
   archiveBotModelMutateAsync: vi.fn(),
   createBotMutateAsync: vi.fn(),
   deleteBotMutateAsync: vi.fn(),
+  exportHomologationPackMutateAsync: vi.fn(),
   invalidateQueries: vi.fn(),
   pauseBotMutateAsync: vi.fn(),
   promoteBotModelMutateAsync: vi.fn(),
@@ -586,13 +588,17 @@ vi.mock('./hooks/useBots', () => ({
     mutateAsync: updateBotMutateAsync,
     isPending: false,
   }),
-  useDeleteBot: () => ({
-    mutateAsync: deleteBotMutateAsync,
-    isPending: false,
-  }),
-  useRunBotCycle: () => ({
-    mutateAsync: runBotCycleMutateAsync,
-    isPending: false,
+    useDeleteBot: () => ({
+      mutateAsync: deleteBotMutateAsync,
+      isPending: false,
+    }),
+    useExportBotHomologationPack: () => ({
+      mutateAsync: exportHomologationPackMutateAsync,
+      isPending: false,
+    }),
+    useRunBotCycle: () => ({
+      mutateAsync: runBotCycleMutateAsync,
+      isPending: false,
   }),
   usePauseBot: () => ({
     mutateAsync: pauseBotMutateAsync,
@@ -616,10 +622,11 @@ import BotsPage from './BotsPage'
 
 describe('BotsPage', () => {
   beforeEach(() => {
-    archiveBotModelMutateAsync.mockReset()
-    createBotMutateAsync.mockReset()
-    deleteBotMutateAsync.mockReset()
-    invalidateQueries.mockReset()
+      archiveBotModelMutateAsync.mockReset()
+      createBotMutateAsync.mockReset()
+      deleteBotMutateAsync.mockReset()
+      exportHomologationPackMutateAsync.mockReset()
+      invalidateQueries.mockReset()
     pauseBotMutateAsync.mockReset()
     promoteBotModelMutateAsync.mockReset()
     resumeBotMutateAsync.mockReset()

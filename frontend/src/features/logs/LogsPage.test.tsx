@@ -84,6 +84,10 @@ vi.mock('./hooks/useLogs', () => ({
     mutate: vi.fn(),
     isPending: false,
   }),
+  useCopyTracesForAnalysis: () => ({
+    mutate: vi.fn(),
+    isPending: false,
+  }),
   useAvailableBots: () => ({
     data: [],
   }),

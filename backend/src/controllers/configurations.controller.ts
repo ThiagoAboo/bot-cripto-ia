@@ -132,6 +132,10 @@ const configurationResetSchema = z.object({
     'configurations',
     'all',
   ] satisfies [ConfigurationResetScope, ...ConfigurationResetScope[]]),
+  paperBalance: z.object({
+    currency: z.string().trim().min(1).max(10),
+    amount: z.number().min(0).max(1_000_000_000),
+  }).optional(),
 })
 
 const configurationBackupRestoreSchema = z.object({
@@ -723,7 +727,9 @@ export async function runConfigurationReset(req: AuthRequest, res: Response): Pr
     }
 
     const userId = req.userId!
-    const result = await executeConfigurationReset(userId, validation.data.scope)
+    const result = await executeConfigurationReset(userId, validation.data.scope, {
+      paperBalance: validation.data.paperBalance,
+    })
     const refreshedConfig = await findOrCreateConfiguration(userId)
 
     logger.warn('[configurations] Operação de reset executada', {

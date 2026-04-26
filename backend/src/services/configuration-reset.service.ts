@@ -42,6 +42,13 @@ export interface ConfigurationResetResult {
   }
 }
 
+export interface ConfigurationResetOptions {
+  paperBalance?: {
+    currency: string
+    amount: number
+  }
+}
+
 type ResetPlan = {
   clearLogsTraces: boolean
   clearCash: boolean
@@ -226,7 +233,14 @@ function readNumberEnv(name: string, fallback: number): number {
   return Number.isFinite(value) ? value : fallback
 }
 
-function resolvePaperResetBalance(): { currency: string; amount: number } {
+function resolvePaperResetBalance(override?: ConfigurationResetOptions['paperBalance']): { currency: string; amount: number } {
+  if (override) {
+    return {
+      currency: override.currency.trim().toUpperCase() || 'USDT',
+      amount: Math.max(0, override.amount),
+    }
+  }
+
   const currency = (process.env.PAPER_RESET_CURRENCY || 'USDT').trim().toUpperCase() || 'USDT'
   const amount = Math.max(0, readNumberEnv('PAPER_RESET_INITIAL_CAPITAL', 10000))
 
@@ -393,6 +407,7 @@ function buildSummary(result: Omit<ConfigurationResetResult, 'summary' | 'execut
 export async function executeConfigurationReset(
   userId: string,
   scope: ConfigurationResetScope,
+  options?: ConfigurationResetOptions,
 ): Promise<ConfigurationResetResult> {
   const plan = resolveResetPlan(scope)
   const includeTrainingAssets = plan.clearTrainings || plan.deleteUserBots
@@ -510,7 +525,7 @@ export async function executeConfigurationReset(
     }
 
     if (plan.reinitializePaperWallet) {
-      const paperBalance = resolvePaperResetBalance()
+        const paperBalance = resolvePaperResetBalance(options?.paperBalance)
       await tx.balance.upsert({
         where: {
           userId_currency: {
@@ -542,7 +557,7 @@ export async function executeConfigurationReset(
         checkpointFiles: 0,
       }
 
-  const paperBalance = plan.reinitializePaperWallet ? resolvePaperResetBalance() : undefined
+  const paperBalance = plan.reinitializePaperWallet ? resolvePaperResetBalance(options?.paperBalance) : undefined
 
   if (paperBalance) {
     await recordBalanceHistorySnapshot(userId, [{
