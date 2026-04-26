@@ -8,11 +8,7 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
     pool: 'forks',
-    poolOptions: {
-      forks: {
-        singleFork: true,
-      },
-    },
+    fileParallelism: false,
     hookTimeout: 10000,
     testTimeout: 10000,
   },
@@ -51,11 +47,30 @@ export default defineConfig({
     },
     rollupOptions: {
       output: {
-        manualChunks: {
-          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-          'query-vendor': ['@tanstack/react-query'],
-          'chart-vendor': ['recharts', 'lightweight-charts'],
-          'form-vendor': ['react-hook-form', 'zod', '@hookform/resolvers'],
+        manualChunks(id) {
+          if (id.includes('node_modules/recharts') || id.includes('node_modules/d3-')) {
+            return 'recharts-vendor'
+          }
+
+          if (id.includes('node_modules/lightweight-charts')) {
+            return 'trading-chart-vendor'
+          }
+
+          if (id.includes('node_modules/react-hook-form') || id.includes('node_modules/zod') || id.includes('node_modules/@hookform/resolvers')) {
+            return 'form-vendor'
+          }
+
+          if (id.includes('node_modules/@tanstack/react-query')) {
+            return 'query-vendor'
+          }
+
+          if (
+            id.includes('node_modules/react/') ||
+            id.includes('node_modules/react-dom/') ||
+            id.includes('node_modules/react-router-dom/')
+          ) {
+            return 'react-vendor'
+          }
         },
       },
     },

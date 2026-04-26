@@ -219,6 +219,8 @@ export interface BotHistoryTrace {
   traceId: string
   functionName: string
   message: string
+  stage?: string
+  snapshot?: unknown
   durationMs: number
   currentPair?: string
   recommendedAction?: 'buy' | 'sell' | 'hold'
@@ -311,6 +313,102 @@ export interface BotHistory {
   decisions: BotHistoryDecision[]
   decisionSummary: BotDecisionSummary
   paperReadiness: BotPaperReadiness
+}
+
+export interface BotHomologationFinding {
+  severity: 'info' | 'warning' | 'critical'
+  title: string
+  detail: string
+}
+
+export interface BotHomologationTraceEntry {
+  id: string
+  timestamp: string
+  level: string
+  module: string
+  traceId: string
+  functionName: string
+  message: string
+  stage?: string
+  durationMs: number
+  currentPair?: string
+  recommendedAction?: string
+  confidence?: number
+  errorFlag: boolean
+  snapshot?: unknown
+}
+
+export interface BotHomologationPairBreakdown {
+  pair: string
+  decisions: number
+  evaluatedDecisions: number
+  executedTransactions: number
+  errorTraces: number
+  accuracyPercent: number
+  averageStrategyReturnPercent: number
+  averageEdgePercent: number
+  profitBrl: number
+}
+
+export interface BotHomologationReport {
+  botId: string
+  generatedAt: string
+  period: {
+    startDate: string
+    endDate: string
+    days: number
+  }
+  verdict: {
+    status: 'approved' | 'attention' | 'blocked'
+    approvedForFullAuto: boolean
+    summary: string
+    blockers: string[]
+  }
+  decisionSummary: BotDecisionSummary
+  paperReadiness: BotPaperReadiness
+  fullAutoEligibility: BotFullAutoEligibility
+  executionSummary: {
+    totalTransactions: number
+    executedTransactions: number
+    submittedTransactions: number
+    profitableSells: number
+    losingSells: number
+    averageProfitPercent: number
+    totalProfitBrl: number
+    averageSlippagePercent: number
+    averageSimulatedLatencyMs: number
+    averageSimulatedFillPercent: number
+    executionStatusBreakdown: Record<string, number>
+    executionModeBreakdown: Record<string, number>
+  }
+  operationalSummary: {
+    totalTraces: number
+    errorTraces: number
+    snapshotCoveragePercent: number
+    averageTraceDurationMs: number
+    slowestFunctions: Array<{
+      functionName: string
+      module: string
+      count: number
+      averageDurationMs: number
+      maxDurationMs: number
+      errorCount: number
+    }>
+    stageBreakdown: Array<{
+      stage: string
+      count: number
+      errorCount: number
+      averageDurationMs: number
+    }>
+  }
+  pairBreakdown: BotHomologationPairBreakdown[]
+  findings: BotHomologationFinding[]
+  recentIncidents: BotHomologationTraceEntry[]
+  recentSnapshots: BotHomologationTraceEntry[]
+  balanceTimeline: Array<{
+    timestamp: string
+    totalBrl: number
+  }>
 }
 
 export interface BotWorkerStatus {

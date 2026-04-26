@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useWebSocket } from '../../app/providers/WebSocketProvider'
 import { useTotalBalance, useCurrenciesBalance, useRecentTransactions, useBotsStatus, usePauseBot, useResumeBot, useBotAnalysis, useRunBotCycle } from './hooks/useDashboardData'
@@ -6,10 +6,26 @@ import { DASHBOARD_QUERY_KEYS } from './hooks/useDashboardData'
 import { usePerformanceData } from './hooks/usePerformanceData'
 import { TotalBalanceCard } from './components/TotalBalanceCard'
 import { CurrencyBalanceCard } from './components/CurrencyBalanceCard'
-import { PerformanceChart } from './components/PerformanceChart'
 import { RecentTransactionsTable } from './components/RecentTransactionsTable'
 import { BotsStatusList } from './components/BotsStatusList'
 import { BotInsightsCard } from './components/BotInsightsCard'
+import { Skeleton } from '../../shared/components/ui/Skeleton'
+
+const PerformanceChart = lazy(async () => {
+  const module = await import('./components/PerformanceChart')
+  return { default: module.PerformanceChart }
+})
+
+function PerformanceChartFallback() {
+  return (
+    <div className="rounded-3xl border p-6" style={{ backgroundColor: 'var(--surface-1)', borderColor: 'var(--border-color)' }}>
+      <div className="mb-6">
+        <Skeleton className="h-7 w-64" />
+      </div>
+      <Skeleton className="h-[320px] w-full" />
+    </div>
+  )
+}
 
 export function DashboardPage() {
   const queryClient = useQueryClient()
@@ -104,12 +120,14 @@ export function DashboardPage() {
         </div>
       </div>
 
-      <PerformanceChart
-        data={performanceData}
-        isLoading={isLoadingPerformance}
-        selectedPeriod={selectedPeriod}
-        onPeriodChange={onPeriodChange}
-      />
+      <Suspense fallback={<PerformanceChartFallback />}>
+        <PerformanceChart
+          data={performanceData}
+          isLoading={isLoadingPerformance}
+          selectedPeriod={selectedPeriod}
+          onPeriodChange={onPeriodChange}
+        />
+      </Suspense>
 
       <div className="grid grid-cols-1 gap-6 2xl:grid-cols-4">
         <div className="2xl:col-span-2">

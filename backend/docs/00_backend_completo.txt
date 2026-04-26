@@ -449,7 +449,7 @@ model Trace {
 | subscribe:orders | Receber atualizações de ordens |
 | subscribe:logs | Receber novos logs |
 | subscribe:traces | Receber novos traces |
-| subscribe:training:{id} | Receber atualizações de treinamento |
+| subscribe:training | Receber atualizações de treinamento para um `sessionId` enviado no payload |
 | unsubscribe:* | Cancelar inscrição |
 
 6.2 SERVIDOR -> CLIENTE (Notificações)

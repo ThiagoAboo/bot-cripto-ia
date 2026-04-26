@@ -76,6 +76,35 @@ export function useExportTraces() {
   })
 }
 
+export function useCopyTracesForAnalysis() {
+  return useMutation({
+    mutationFn: (filters: TraceFilters) => logsService.exportTracesForAnalysis(filters),
+    onSuccess: async (payload) => {
+      const text = JSON.stringify(payload, null, 2)
+
+      try {
+        await navigator.clipboard.writeText(text)
+        toast.success('Pacote de traces copiado para análise')
+        return
+      } catch {
+        const blob = new Blob([text], { type: 'application/json;charset=utf-8' })
+        const url = window.URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `trace_analysis_pack_${new Date().toISOString()}.json`
+        document.body.appendChild(a)
+        a.click()
+        window.URL.revokeObjectURL(url)
+        document.body.removeChild(a)
+        toast.success('Pacote de traces gerado em arquivo JSON')
+      }
+    },
+    onError: () => {
+      toast.error('Erro ao gerar pacote de análise dos traces')
+    },
+  })
+}
+
 export function useAvailableBots() {
   return useQuery({
     queryKey: LOGS_QUERY_KEYS.bots,

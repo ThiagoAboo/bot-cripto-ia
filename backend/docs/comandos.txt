@@ -1,18 +1,35 @@
-# Parar os containers
-docker-compose down -v
+# Comandos operacionais do backend
 
-# Remover a pasta node_modules e reinstalar (opcional)
-rm -rf node_modules
+## Opcao recomendada: bootstrap completo do projeto
+
+```powershell
+cd D:\Projetos\bot-cripto-ia
+.\init.ps1
+```
+
+## Subida manual do backend
+
+```powershell
+cd D:\Projetos\bot-cripto-ia\backend
 npm install
-
-# Gerar Prisma client
 npx prisma generate
-
-# Executar novamente
-docker-compose up -d --build
-
-# Executar migrations
-npx prisma migrate dev --name init
-
-# Popular o banco
+npm run prisma:deploy
 npm run seed
+npm run dev
+```
+
+## Subida com Docker Compose
+
+```powershell
+cd D:\Projetos\bot-cripto-ia
+docker compose up --build
+```
+
+## Comandos uteis de manutencao
+
+```powershell
+cd D:\Projetos\bot-cripto-ia\backend
+npm run test:run
+npm run build
+npx prisma migrate status
+```

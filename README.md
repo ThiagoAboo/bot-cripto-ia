@@ -3,28 +3,52 @@
 Stack operacional para trading de cripto com:
 - `frontend/`: painel React + Vite
 - `backend/`: API Express + Prisma + PostgreSQL + Socket.IO
-- `bots/`: camada Python independente para análise e decisão
+- `bots/`: runtime Python externo para analise e decisao
 
 ## Arquitetura atual
 
-O fluxo principal agora é:
+Fluxo principal:
 
-1. o `backend` consolida contexto operacional, carteira, risco e mercado
+1. o `backend` consolida contexto operacional, carteira, risco, governanca e mercado
 2. a camada `bots` consome a fila via `/api/bot-runtime/*`
-3. o runtime Python analisa múltiplas moedas por bot e devolve o resultado
-4. o `backend` aplica a decisão, executa ordem `paper` ou `full_auto`, persiste FIFO/PnL/logs/traces e atualiza o dashboard
+3. o runtime Python avalia multiplos pares por bot e devolve o ciclo sugerido
+4. o `backend` aplica a decisao, executa ordem em `paper`, `semi_auto` ou `full_auto`, persiste FIFO/PnL/logs/traces e atualiza o painel
 
-O backend ainda mantém worker interno como fallback, mas o modo recomendado é `bots -> backend`.
+O worker interno do backend ainda existe como fallback, mas o modo recomendado hoje e `bots -> backend`.
 
-## Pré-requisitos
+## Modos operacionais
+
+- `paper`: executa na carteira local do sistema
+- `semi_auto`: calcula a oportunidade, mas nao envia ordem
+- `full_auto`: envia ordem real para a Binance e so deve ser usado quando o champion atual ja estiver aprovado no placar de validacao em `paper`
+
+O backend ja bloqueia `full_auto` quando o bot nao tem champion sincronizado, quando o modelo nao esta pronto operacionalmente ou quando o `paperReadiness` ainda nao atingiu os criterios minimos.
+
+## Pre-requisitos
 
 - Node.js 20+
 - Python 3.11+
-- PostgreSQL 15+
+- Docker Desktop ou PostgreSQL 15+ local
 
 ## Subida local
 
-### 1. Backend
+### Opcao 1. Script unico
+
+```powershell
+.\init.ps1
+```
+
+O script:
+- detecta `docker compose` ou `docker-compose`
+- builda `backend`, `bots` e `frontend`
+- sobe `postgres`
+- aplica `prisma migrate deploy`
+- executa `npm run seed`
+- sobe `backend`, `bots`, `frontend` e `adminer`
+
+### Opcao 2. Manual
+
+#### Backend
 
 ```powershell
 cd backend
@@ -35,7 +59,7 @@ npm run seed
 npm run dev
 ```
 
-### 2. Frontend
+#### Frontend
 
 ```powershell
 cd frontend
@@ -43,7 +67,7 @@ npm install
 npm run dev
 ```
 
-### 3. Bots
+#### Bots
 
 ```powershell
 cd bots\python
@@ -53,7 +77,7 @@ set BOT_RUNTIME_SHARED_SECRET=dev-bot-runtime-secret
 python service.py
 ```
 
-## Variáveis importantes
+## Variaveis importantes
 
 No `backend/.env`:
 
@@ -74,36 +98,74 @@ BOT_RUNTIME_SHARED_SECRET=dev-bot-runtime-secret
 BOT_RUNTIME_LOOP_INTERVAL_MS=15000
 ```
 
+No `frontend/.env`:
+
+```env
+VITE_API_URL=http://localhost:3001/api
+VITE_WS_URL=http://localhost:3001
+```
+
 ## Docker
 
 ```powershell
 docker compose up --build
 ```
 
-Serviços:
+Servicos:
 - `postgres`
 - `backend`
 - `bots`
 - `frontend`
 - `adminer`
 
-## Smoke test mínimo
+## Testes
+
+```powershell
+cd backend
+npm run test:run
+
+cd ..\frontend
+npm run test:run
+
+cd ..\bots\python
+python -m unittest discover tests -v
+```
+
+## Smoke test minimo
 
 1. acessar o frontend
 2. entrar com `admin@botcrypto.com / admin123`
 3. verificar `GET /health/ready`
 4. confirmar `GET /api/dashboard/bots/worker-status`
-5. deixar bots em `paper`
-6. acompanhar descoberta de pares -> decisão -> ordem -> dashboard -> logs/traces
+5. abrir a tela `/bots`
+6. deixar os bots em `paper`
+7. acompanhar descoberta de pares -> decisao -> ordem -> dashboard -> logs/traces
 
-## Estado recomendado de uso
+## Frontend atual
 
-- usar primeiro em `paper`
-- validar por alguns dias a qualidade dos sinais
-- só depois considerar `full_auto`
+Rotas principais:
+- `/dashboard`
+- `/bots`
+- `/transacoes`
+- `/treinamento`
+- `/configuracoes`
+- `/logs`
+- `/perfil`
 
-## Documentação complementar
+Realtime:
+- Socket.IO autenticado por token
+- eventos `subscribe:*` para dashboard, orders, logs, traces e training
+- o frontend usa os eventos como gatilho de sincronizacao e refetch
 
+## Documentacao complementar
+
+- [CHECKLIST_HOMOLOGACAO.md](CHECKLIST_HOMOLOGACAO.md)
 - [frontend/README.md](frontend/README.md)
 - [backend/docs/00_backend_completo.txt](backend/docs/00_backend_completo.txt)
+- [backend/docs/02_dashboard.txt](backend/docs/02_dashboard.txt)
+- [backend/docs/03_configuracoes.txt](backend/docs/03_configuracoes.txt)
+- [backend/docs/08_websocket.txt](backend/docs/08_websocket.txt)
+- [backend/docs/01_autenticacao.txt](backend/docs/01_autenticacao.txt)
+- [backend/docs/07_perfil.txt](backend/docs/07_perfil.txt)
 - [bots/docs/bots_ia_especificacao.txt](bots/docs/bots_ia_especificacao.txt)
+- [BACKLOG_PRIORIZADO.md](BACKLOG_PRIORIZADO.md)

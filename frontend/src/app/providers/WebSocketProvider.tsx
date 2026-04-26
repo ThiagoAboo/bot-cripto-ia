@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { io, Socket } from 'socket.io-client'
 
 interface WebSocketContextType {
@@ -22,7 +22,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
   const [isEnabled] = useState(WS_ENABLED)
   const socketRef = useRef<Socket | null>(null)
 
-  const connect = () => {
+  const connect = useCallback(() => {
     if (!isEnabled) {
       console.log('WebSocket desabilitado')
       return
@@ -63,15 +63,15 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     })
 
     socketRef.current = socket
-  }
+  }, [isEnabled])
 
-  const disconnect = () => {
+  const disconnect = useCallback(() => {
     if (socketRef.current) {
       socketRef.current.disconnect()
       socketRef.current = null
       setIsConnected(false)
     }
-  }
+  }, [])
 
   const emit = (event: string, data: any) => {
     if (!isEnabled) return
@@ -103,7 +103,7 @@ export function WebSocketProvider({ children }: { children: React.ReactNode }) {
     return () => {
       disconnect()
     }
-  }, [])
+  }, [connect, disconnect])
 
   return (
     <WebSocketContext.Provider

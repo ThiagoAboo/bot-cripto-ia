@@ -16,7 +16,6 @@ const {
           name: string
           email: string
           preferences: {
-            notificationsEnabled: boolean
             theme: 'dark' | 'light'
           }
           createdAt: string
@@ -76,7 +75,6 @@ describe('ProfilePage', () => {
       name: 'Thiago Vieira',
       email: 'thiago@example.com',
       preferences: {
-        notificationsEnabled: false,
         theme: 'dark',
       },
       createdAt: '2026-04-01T12:00:00.000Z',

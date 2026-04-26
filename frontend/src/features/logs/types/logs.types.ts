@@ -1,7 +1,7 @@
 // Tipos específicos da tela de Log / Trace Geral
 
 export type LogLevel = 'INFO' | 'WARN' | 'ERROR'
-export type TraceLevel = 'DEBUG' | 'TRACE'
+export type TraceLevel = 'DEBUG' | 'TRACE' | 'INFO' | 'WARN' | 'ERROR'
 export type LogModule = 
   | 'dashboard' 
   | 'configurations' 
@@ -31,6 +31,8 @@ export interface TraceEntry {
   parentTraceId?: string
   functionName: string
   message: string
+  stage?: string
+  snapshot?: unknown
   durationMs: number
   botId?: string
   botName?: string
@@ -49,6 +51,40 @@ export interface TraceGroup {
   hasError: boolean
   botId?: string
   botName?: string
+}
+
+export interface TraceAnalysisExportPack {
+  exportType: 'trace_analysis_pack_v1'
+  generatedAt: string
+  filters: {
+    levels: string[]
+    modules: string[]
+    traceId: string | null
+    functionName: string | null
+    botId: string | null
+    currentPair: string | null
+    recommendedAction: 'buy' | 'sell' | 'hold' | null
+    stage: string | null
+    minDurationMs: number | null
+    onlyErrors: boolean
+    startDate: string | null
+    endDate: string | null
+    search: string | null
+  }
+  summary: {
+    totalTraces: number
+    errorTraces: number
+    uniqueTraceIds: number
+    snapshotTraces: number
+    stages: Array<{
+      stage: string
+      count: number
+      errorCount: number
+    }>
+    firstTimestamp: string | null
+    lastTimestamp: string | null
+  }
+  traces: TraceEntry[]
 }
 
 export interface LogFilters {
@@ -70,6 +106,7 @@ export interface TraceFilters {
   traceId?: string
   functionName?: string
   botId?: string
+  stage?: string
   currentPair?: string
   recommendedAction?: 'buy' | 'sell' | 'hold'
   minDurationMs?: number

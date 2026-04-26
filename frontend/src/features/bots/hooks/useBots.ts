@@ -6,6 +6,7 @@ export const BOTS_QUERY_KEYS = {
   list: ['bots', 'list'],
   detail: (botId: string) => ['bots', 'detail', botId],
   history: (botId: string) => ['bots', 'history', botId],
+  homologationReport: (botId: string, startDate?: string, endDate?: string) => ['bots', 'homologation-report', botId, startDate ?? 'default', endDate ?? 'default'],
   models: (botId: string) => ['bots', 'models', botId],
   templates: ['bots', 'templates'],
   workerStatus: ['bots', 'worker-status'],
@@ -21,6 +22,7 @@ function invalidateBotSurfaces(queryClient: ReturnType<typeof useQueryClient>, b
   if (botId) {
     void queryClient.invalidateQueries({ queryKey: BOTS_QUERY_KEYS.detail(botId) })
     void queryClient.invalidateQueries({ queryKey: BOTS_QUERY_KEYS.history(botId) })
+    void queryClient.invalidateQueries({ queryKey: ['bots', 'homologation-report', botId] })
     void queryClient.invalidateQueries({ queryKey: BOTS_QUERY_KEYS.models(botId) })
   }
 }
@@ -57,6 +59,19 @@ export function useBotHistory(botId?: string) {
     enabled: Boolean(botId),
     queryKey: BOTS_QUERY_KEYS.history(botId ?? 'none'),
     queryFn: () => botsService.getBotHistory(botId!),
+    refetchInterval: 15000,
+    staleTime: 5000,
+  })
+}
+
+export function useBotHomologationReport(
+  botId?: string,
+  params?: { startDate?: string; endDate?: string },
+) {
+  return useQuery({
+    enabled: Boolean(botId),
+    queryKey: BOTS_QUERY_KEYS.homologationReport(botId ?? 'none', params?.startDate, params?.endDate),
+    queryFn: () => botsService.getBotHomologationReport(botId!, params),
     refetchInterval: 15000,
     staleTime: 5000,
   })

@@ -33,7 +33,7 @@ export function StrategiesConfigCard({ data, onChange }: StrategiesConfigCardPro
 
   const renderParameters = (strategy: StrategyConfig) => {
     switch (strategy.strategyType) {
-      case 'scalper':
+      case 'scalper': {
         const scalperParams = strategy.parameters as ScalperParams
         return (
           <div className="grid grid-cols-2 gap-3 mt-3">
@@ -70,8 +70,9 @@ export function StrategiesConfigCard({ data, onChange }: StrategiesConfigCardPro
             </div>
           </div>
         )
+      }
 
-      case 'momentum':
+      case 'momentum': {
         const momentumParams = strategy.parameters as MomentumParams
         return (
           <div className="grid grid-cols-2 gap-3 mt-3">
@@ -105,8 +106,9 @@ export function StrategiesConfigCard({ data, onChange }: StrategiesConfigCardPro
             </div>
           </div>
         )
+      }
 
-      case 'trend_follower':
+      case 'trend_follower': {
         const trendParams = strategy.parameters as TrendFollowerParams
         return (
           <div className="grid grid-cols-2 gap-3 mt-3">
@@ -139,8 +141,9 @@ export function StrategiesConfigCard({ data, onChange }: StrategiesConfigCardPro
             </div>
           </div>
         )
+      }
 
-      case 'mean_reversion':
+      case 'mean_reversion': {
         const reversionParams = strategy.parameters as MeanReversionParams
         return (
           <div className="grid grid-cols-2 gap-3 mt-3">
@@ -183,8 +186,9 @@ export function StrategiesConfigCard({ data, onChange }: StrategiesConfigCardPro
             </div>
           </div>
         )
+      }
 
-      case 'arbitrage':
+      case 'arbitrage': {
         const arbitrageParams = strategy.parameters as ArbitrageParams
         return (
           <div className="grid grid-cols-2 gap-3 mt-3">
@@ -209,6 +213,7 @@ export function StrategiesConfigCard({ data, onChange }: StrategiesConfigCardPro
             </div>
           </div>
         )
+      }
 
       default:
         return null

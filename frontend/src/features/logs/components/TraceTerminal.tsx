@@ -15,6 +15,14 @@ interface TraceTerminalProps {
   onLoadMore: () => void
 }
 
+function getTraceLevelClass(level: TraceEntry['level']): string {
+  if (level === 'ERROR') return 'bg-error/20 text-error'
+  if (level === 'WARN') return 'bg-warning/20 text-warning'
+  if (level === 'INFO') return 'bg-primary-500/20 text-primary-300'
+  if (level === 'DEBUG') return 'bg-purple-500/20 text-purple-400'
+  return 'bg-gray-500/20 text-gray-400'
+}
+
 function TraceGroupItem({ traceId }: { traceId: string }) {
   const [expanded, setExpanded] = useState(false)
   const { data: group, isLoading } = useTraceGroup(traceId)
@@ -74,13 +82,15 @@ function TraceGroupItem({ traceId }: { traceId: string }) {
                   <div className="flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-gray-500 text-xs">{formatDate(trace.timestamp, 'time')}</span>
-                      <span className={cn(
-                        'text-xs font-mono px-1.5 py-0.5 rounded',
-                        trace.level === 'DEBUG' ? 'bg-purple-500/20 text-purple-400' : 'bg-gray-500/20 text-gray-400'
-                      )}>
+                      <span className={cn('text-xs font-mono px-1.5 py-0.5 rounded', getTraceLevelClass(trace.level))}>
                         {trace.level}
                       </span>
                       <span className="text-cyan-400 text-xs font-mono">{trace.functionName}</span>
+                      {trace.stage && (
+                        <span className="rounded bg-primary-500/15 px-1.5 py-0.5 text-xs text-primary-300">
+                          {trace.stage}
+                        </span>
+                      )}
                       {trace.currentPair && (
                         <span className="flex items-center gap-1 text-xs text-gray-400">
                           <Target className="w-3 h-3" />
@@ -102,6 +112,14 @@ function TraceGroupItem({ traceId }: { traceId: string }) {
                     <p className="text-gray-300 text-sm mt-1">{trace.message}</p>
                     {trace.durationMs > 0 && (
                       <p className="text-gray-500 text-xs mt-1">⏱️ Duração: {trace.durationMs}ms</p>
+                    )}
+                    {trace.snapshot !== undefined && (
+                      <details className="mt-2 rounded-lg border border-dark-300 bg-dark-400/30 p-2">
+                        <summary className="cursor-pointer text-xs text-gray-400">Snapshot estruturado</summary>
+                        <pre className="mt-2 whitespace-pre-wrap text-xs text-gray-300">
+                          {JSON.stringify(trace.snapshot, null, 2)}
+                        </pre>
+                      </details>
                     )}
                   </div>
                 </div>

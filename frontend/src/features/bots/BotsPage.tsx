@@ -20,6 +20,7 @@ import {
   BOTS_QUERY_KEYS,
   useBotDetail,
   useBotHistory,
+  useBotHomologationReport,
   useBotModels,
   useBotTemplates,
   useBots,
@@ -37,6 +38,7 @@ import type {
   BotDetail,
   BotExecutionMode,
   BotHistory,
+  BotHomologationReport,
   BotListItem,
   BotModelArtifact,
   BotModelGovernanceSummary,
@@ -249,6 +251,36 @@ function MetricCard({ icon: Icon, title, value, caption }: { icon: typeof Bot; t
       </CardContent>
     </Card>
   )
+}
+
+function toInputDate(value: Date): string {
+  return value.toISOString().slice(0, 10)
+}
+
+function toIsoBoundary(date: string, boundary: 'start' | 'end'): string | undefined {
+  if (!date) {
+    return undefined
+  }
+
+  return boundary === 'start'
+    ? `${date}T00:00:00.000Z`
+    : `${date}T23:59:59.999Z`
+}
+
+function VerdictBadge({ report }: { report?: BotHomologationReport }) {
+  if (!report) {
+    return <Badge variant="default">Sem relatório</Badge>
+  }
+
+  if (report.verdict.status === 'approved') {
+    return <Badge variant="success">Homologado</Badge>
+  }
+
+  if (report.verdict.status === 'attention') {
+    return <Badge variant="warning">Em atenção</Badge>
+  }
+
+  return <Badge variant="error">Bloqueado</Badge>
 }
 
 function BotListPanel({
@@ -629,6 +661,280 @@ function BotHistoryPanel({ history, isLoading }: { history?: BotHistory; isLoadi
             </TabsContent>
             </Tabs>
           </>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function BotHomologationPanel({
+  report,
+  isLoading,
+  startDate,
+  endDate,
+  onStartDateChange,
+  onEndDateChange,
+}: {
+  report?: BotHomologationReport
+  isLoading: boolean
+  startDate: string
+  endDate: string
+  onStartDateChange: (value: string) => void
+  onEndDateChange: (value: string) => void
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <CardTitle>Homologação Assistida</CardTitle>
+            <CardDescription>
+              Relatório consolidado de paper, execução, traces e bloqueios para validar o comportamento do bot.
+            </CardDescription>
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <SectionField label="Início">
+              <Input type="date" value={startDate} onChange={(event) => onStartDateChange(event.target.value)} />
+            </SectionField>
+            <SectionField label="Fim">
+              <Input type="date" value={endDate} onChange={(event) => onEndDateChange(event.target.value)} />
+            </SectionField>
+            <VerdictBadge report={report} />
+          </div>
+        </div>
+      </CardHeader>
+
+      <CardContent>
+        {isLoading ? (
+          <div className="space-y-4">
+            <Skeleton className="h-24 rounded-2xl" />
+            <Skeleton className="h-72 rounded-2xl" />
+          </div>
+        ) : report ? (
+          <div className="space-y-6">
+            <div
+              className="rounded-3xl border p-5"
+              style={{
+                borderColor: report.verdict.status === 'approved'
+                  ? 'var(--success-500)'
+                  : report.verdict.status === 'attention'
+                    ? 'var(--warning-500)'
+                    : 'var(--danger-500)',
+                backgroundColor: report.verdict.status === 'approved'
+                  ? 'color-mix(in srgb, var(--success-500) 12%, transparent)'
+                  : report.verdict.status === 'attention'
+                    ? 'color-mix(in srgb, var(--warning-500) 12%, transparent)'
+                    : 'color-mix(in srgb, var(--danger-500) 12%, transparent)',
+              }}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <VerdictBadge report={report} />
+                <Badge variant={report.fullAutoEligibility.eligible ? 'success' : 'warning'}>
+                  {report.fullAutoEligibility.eligible ? 'full_auto elegível' : 'full_auto bloqueado'}
+                </Badge>
+                <Badge variant="default">{report.period.days} dia(s)</Badge>
+              </div>
+              <p className="mt-3 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                {report.verdict.summary}
+              </p>
+              {report.verdict.blockers.length > 0 && (
+                <div className="mt-3 space-y-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  {report.verdict.blockers.map((blocker) => (
+                    <p key={blocker}>- {blocker}</p>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Sinais avaliados</p>
+                <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>
+                  {report.paperReadiness.evaluatedSignals}/{report.paperReadiness.minimumEvaluatedSignals}
+                </p>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>prontos para decisão de paper</p>
+              </div>
+              <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Acurácia online</p>
+                <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{formatPercent(report.paperReadiness.accuracyPercent)}</p>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>meta mínima {formatPercent(report.paperReadiness.minimumAccuracyPercent)}</p>
+              </div>
+              <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>PnL consolidado</p>
+                <p className={`mt-2 font-semibold ${getProfitColor(report.executionSummary.totalProfitBrl)}`}>{formatCurrency(report.executionSummary.totalProfitBrl)}</p>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  médio {formatPercent(report.executionSummary.averageProfitPercent)}
+                </p>
+              </div>
+              <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Traces com erro</p>
+                <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>
+                  {report.operationalSummary.errorTraces}/{report.operationalSummary.totalTraces}
+                </p>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  snapshots em {formatPercent(report.operationalSummary.snapshotCoveragePercent)}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-6 xl:grid-cols-2">
+              <div className="rounded-3xl border p-5" style={{ borderColor: 'var(--border-color)' }}>
+                <h3 className="font-semibold" style={{ color: 'var(--text-primary)' }}>Achados da homologação</h3>
+                <div className="mt-4 space-y-3">
+                  {report.findings.map((finding) => (
+                    <div key={`${finding.severity}-${finding.title}-${finding.detail}`} className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant={finding.severity === 'critical' ? 'error' : finding.severity === 'warning' ? 'warning' : 'default'}>
+                          {finding.severity}
+                        </Badge>
+                        <span className="font-medium" style={{ color: 'var(--text-primary)' }}>{finding.title}</span>
+                      </div>
+                      <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>{finding.detail}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-3xl border p-5" style={{ borderColor: 'var(--border-color)' }}>
+                <h3 className="font-semibold" style={{ color: 'var(--text-primary)' }}>Resumo operacional</h3>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                    <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Execuções reais/paper</p>
+                    <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{report.executionSummary.executedTransactions}</p>
+                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>enviadas/pedentes {report.executionSummary.submittedTransactions}</p>
+                  </div>
+                  <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                    <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Drawdown observado</p>
+                    <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{formatPercent(report.paperReadiness.maxObservedDrawdownPercent)}</p>
+                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>limite {formatPercent(report.paperReadiness.maximumDrawdownPercent)}</p>
+                  </div>
+                  <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                    <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Slippage médio</p>
+                    <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{formatPercent(report.executionSummary.averageSlippagePercent)}</p>
+                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>latência {formatNumber(report.executionSummary.averageSimulatedLatencyMs, 0)} ms</p>
+                  </div>
+                  <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                    <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Sequência de erros</p>
+                    <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{report.paperReadiness.maxConsecutiveIncorrect}</p>
+                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>limite {report.paperReadiness.maximumConsecutiveIncorrect}</p>
+                  </div>
+                </div>
+
+                <div className="mt-5">
+                  <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Funções mais lentas</p>
+                  <div className="mt-3 space-y-2 text-sm">
+                    {report.operationalSummary.slowestFunctions.slice(0, 4).map((entry) => (
+                      <div key={`${entry.module}-${entry.functionName}`} className="flex items-center justify-between gap-3 rounded-2xl border px-4 py-3" style={{ borderColor: 'var(--border-color)' }}>
+                        <div>
+                          <p className="font-medium" style={{ color: 'var(--text-primary)' }}>{entry.functionName}</p>
+                          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{entry.module} · {entry.count} ocorrência(s)</p>
+                        </div>
+                        <div className="text-right">
+                          <p style={{ color: 'var(--text-primary)' }}>{formatNumber(entry.averageDurationMs, 0)} ms</p>
+                          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>máx {formatNumber(entry.maxDurationMs, 0)} ms</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <Tabs defaultValue="pairs">
+              <TabsList>
+                <TabsTrigger value="pairs">Pares</TabsTrigger>
+                <TabsTrigger value="incidents">Incidentes</TabsTrigger>
+                <TabsTrigger value="snapshots">Snapshots</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="pairs">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Par</TableHead>
+                      <TableHead>Sinais</TableHead>
+                      <TableHead>Acurácia</TableHead>
+                      <TableHead>Retorno</TableHead>
+                      <TableHead>Edge</TableHead>
+                      <TableHead>PnL</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {report.pairBreakdown.length
+                      ? report.pairBreakdown.slice(0, 8).map((entry) => (
+                          <TableRow key={entry.pair}>
+                            <TableCell>{entry.pair}</TableCell>
+                            <TableCell>{entry.decisions}</TableCell>
+                            <TableCell>{formatPercent(entry.accuracyPercent)}</TableCell>
+                            <TableCell className={getProfitColor(entry.averageStrategyReturnPercent)}>{formatPercent(entry.averageStrategyReturnPercent)}</TableCell>
+                            <TableCell className={getProfitColor(entry.averageEdgePercent)}>{formatPercent(entry.averageEdgePercent)}</TableCell>
+                            <TableCell className={getProfitColor(entry.profitBrl)}>{formatCurrency(entry.profitBrl)}</TableCell>
+                          </TableRow>
+                        ))
+                      : (
+                          <TableRow>
+                            <TableCell colSpan={6} className="text-center" style={{ color: 'var(--text-muted)' }}>
+                              Ainda não há dados por par nesta janela.
+                            </TableCell>
+                          </TableRow>
+                        )}
+                  </TableBody>
+                </Table>
+              </TabsContent>
+
+              <TabsContent value="incidents">
+                <div className="space-y-3">
+                  {report.recentIncidents.length
+                    ? report.recentIncidents.map((incident) => (
+                        <div key={incident.id} className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant="error">{incident.level}</Badge>
+                            {incident.stage && <Badge variant="default">{incident.stage}</Badge>}
+                            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{formatDate(incident.timestamp)}</span>
+                          </div>
+                          <p className="mt-2 font-medium" style={{ color: 'var(--text-primary)' }}>{incident.message}</p>
+                          <p className="mt-1 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                            {incident.functionName} · {incident.currentPair ?? 'sem par'} · {formatNumber(incident.durationMs, 0)} ms
+                          </p>
+                        </div>
+                      ))
+                    : (
+                        <div className="rounded-2xl border p-4 text-sm" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
+                          Nenhum incidente recente nesta janela.
+                        </div>
+                      )}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="snapshots">
+                <div className="space-y-4">
+                  {report.recentSnapshots.length
+                    ? report.recentSnapshots.slice(0, 6).map((entry) => (
+                        <div key={entry.id} className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant={entry.errorFlag ? 'error' : 'default'}>{entry.errorFlag ? 'Erro' : entry.level}</Badge>
+                            {entry.stage && <Badge variant="primary">{entry.stage}</Badge>}
+                            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>{formatDate(entry.timestamp)}</span>
+                          </div>
+                          <p className="mt-2 font-medium" style={{ color: 'var(--text-primary)' }}>{entry.message}</p>
+                          <pre className="mt-3 overflow-auto whitespace-pre-wrap rounded-2xl border p-4 text-xs" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
+                            {JSON.stringify(entry.snapshot ?? {}, null, 2)}
+                          </pre>
+                        </div>
+                      ))
+                    : (
+                        <div className="rounded-2xl border p-4 text-sm" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
+                          Ainda não há snapshots estruturados para esta janela.
+                        </div>
+                      )}
+                </div>
+              </TabsContent>
+            </Tabs>
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-dashed p-8 text-center" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
+            Nenhum relatório disponível para o período selecionado.
+          </div>
         )}
       </CardContent>
     </Card>
@@ -1074,12 +1380,22 @@ export function BotsPage() {
   const [selectedBotId, setSelectedBotId] = useState('')
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
   const [formState, setFormState] = useState<BotEditorFormState>(DEFAULT_FORM_STATE)
+  const [homologationStartDate, setHomologationStartDate] = useState(() => {
+    const date = new Date()
+    date.setDate(date.getDate() - 14)
+    return toInputDate(date)
+  })
+  const [homologationEndDate, setHomologationEndDate] = useState(() => toInputDate(new Date()))
 
   const { data: bots, isLoading: isLoadingBots } = useBots()
   const { data: templates, isLoading: isLoadingTemplates } = useBotTemplates()
   const { data: workerStatus } = useBotWorkerStatus()
   const { data: botDetail, isLoading: isLoadingDetail } = useBotDetail(selectedBotId)
   const { data: botHistory, isLoading: isLoadingHistory } = useBotHistory(selectedBotId)
+  const { data: botHomologationReport, isLoading: isLoadingHomologationReport } = useBotHomologationReport(selectedBotId, {
+    startDate: toIsoBoundary(homologationStartDate, 'start'),
+    endDate: toIsoBoundary(homologationEndDate, 'end'),
+  })
   const { data: botModels, isLoading: isLoadingModels } = useBotModels(selectedBotId)
 
   const createBotMutation = useCreateBot()
@@ -1118,6 +1434,7 @@ export function BotsPage() {
       if (selectedBotId) {
         void queryClient.invalidateQueries({ queryKey: BOTS_QUERY_KEYS.detail(selectedBotId) })
         void queryClient.invalidateQueries({ queryKey: BOTS_QUERY_KEYS.history(selectedBotId) })
+        void queryClient.invalidateQueries({ queryKey: ['bots', 'homologation-report', selectedBotId] })
       }
     }
 
@@ -1666,6 +1983,15 @@ export function BotsPage() {
               }}
             />
           )}
+
+          <BotHomologationPanel
+            report={botHomologationReport}
+            isLoading={isLoadingHomologationReport}
+            startDate={homologationStartDate}
+            endDate={homologationEndDate}
+            onStartDateChange={setHomologationStartDate}
+            onEndDateChange={setHomologationEndDate}
+          />
 
           <BotHistoryPanel history={botHistory} isLoading={isLoadingHistory} />
         </div>

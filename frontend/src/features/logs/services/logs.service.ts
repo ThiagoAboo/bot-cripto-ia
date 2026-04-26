@@ -2,6 +2,7 @@ import { apiClient } from '../../../shared/services/api.client'
 import type { 
   LogEntry, 
   TraceEntry, 
+  TraceAnalysisExportPack,
   TraceGroup, 
   LogFilters, 
   TraceFilters 
@@ -30,6 +31,7 @@ export const logsService = {
     if (filters.traceId) params.append('traceId', filters.traceId)
     if (filters.functionName) params.append('functionName', filters.functionName)
     if (filters.botId) params.append('botId', filters.botId)
+    if (filters.stage) params.append('stage', filters.stage)
     if (filters.currentPair) params.append('currentPair', filters.currentPair)
     if (filters.recommendedAction) params.append('recommendedAction', filters.recommendedAction)
     if (filters.minDurationMs) params.append('minDurationMs', filters.minDurationMs.toString())
@@ -66,6 +68,7 @@ export const logsService = {
     if (filters.traceId) params.append('traceId', filters.traceId)
     if (filters.functionName) params.append('functionName', filters.functionName)
     if (filters.botId) params.append('botId', filters.botId)
+    if (filters.stage) params.append('stage', filters.stage)
     if (filters.startDate) params.append('startDate', filters.startDate)
     if (filters.endDate) params.append('endDate', filters.endDate)
     if (filters.search) params.append('search', filters.search)
@@ -74,6 +77,25 @@ export const logsService = {
       responseType: 'blob'
     })
     return response
+  },
+
+  async exportTracesForAnalysis(filters: TraceFilters): Promise<TraceAnalysisExportPack> {
+    const params = new URLSearchParams()
+    if (filters.levels && filters.levels.length > 0) params.append('levels', filters.levels.join(','))
+    if (filters.modules && filters.modules.length > 0) params.append('modules', filters.modules.join(','))
+    if (filters.traceId) params.append('traceId', filters.traceId)
+    if (filters.functionName) params.append('functionName', filters.functionName)
+    if (filters.botId) params.append('botId', filters.botId)
+    if (filters.stage) params.append('stage', filters.stage)
+    if (filters.currentPair) params.append('currentPair', filters.currentPair)
+    if (filters.recommendedAction) params.append('recommendedAction', filters.recommendedAction)
+    if (filters.minDurationMs) params.append('minDurationMs', filters.minDurationMs.toString())
+    if (filters.onlyErrors) params.append('onlyErrors', 'true')
+    if (filters.startDate) params.append('startDate', filters.startDate)
+    if (filters.endDate) params.append('endDate', filters.endDate)
+    if (filters.search) params.append('search', filters.search)
+
+    return apiClient.getData(`/traces/export-analysis?${params.toString()}`)
   },
 
   async getAvailableBots(): Promise<{ id: string; name: string }[]> {

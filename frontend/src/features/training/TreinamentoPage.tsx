@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import {
   useAvailableBots,
   useStrategies,
@@ -16,7 +16,6 @@ import {
 import { ModelSelector } from './components/ModelSelector'
 import { DatasetConfig } from './components/DatasetConfig'
 import { HyperparametersForm } from './components/HyperparametersForm'
-import { MetricsChart } from './components/MetricsChart'
 import { TrainingLogTerminal } from './components/TrainingLogTerminal'
 import { BacktestSummaryCard } from './components/BacktestSummaryCard'
 import { Button } from '../../shared/components/ui/Button'
@@ -25,6 +24,22 @@ import { History, Brain, AlertCircle, Play, Pause, Square, Download, Save, TestT
 import toast from 'react-hot-toast'
 import { useWebSocket } from '../../app/providers/WebSocketProvider'
 import type { TrainingConfig, Architecture, DataSource, Timeframe, TrainingSession, BacktestResult } from './types/training.types'
+
+const MetricsChart = lazy(async () => {
+  const module = await import('./components/MetricsChart')
+  return { default: module.MetricsChart }
+})
+
+function MetricsChartFallback() {
+  return (
+    <div className="rounded-3xl border p-6" style={{ backgroundColor: 'var(--surface-1)', borderColor: 'var(--border-color)' }}>
+      <div className="mb-6">
+        <Skeleton className="h-7 w-64" />
+      </div>
+      <Skeleton className="h-[350px] w-full" />
+    </div>
+  )
+}
 
 export default function TreinamentoPage() {
   const { data: availableBots, isLoading: isLoadingBots } = useAvailableBots()
@@ -388,11 +403,13 @@ export default function TreinamentoPage() {
         {backtestResult && activeSession && backtestResult.sessionId === activeSession.id && (
           <BacktestSummaryCard result={backtestResult} />
         )}
-        <MetricsChart
-          metrics={activeSession?.metrics || []}
-          isLoading={Boolean(activeSessionId) && isLoadingActiveSession}
-          evaluation={activeSession?.evaluation}
-        />
+        <Suspense fallback={<MetricsChartFallback />}>
+          <MetricsChart
+            metrics={activeSession?.metrics || []}
+            isLoading={Boolean(activeSessionId) && isLoadingActiveSession}
+            evaluation={activeSession?.evaluation}
+          />
+        </Suspense>
         <TrainingLogTerminal
           logs={activeSession?.logs || []}
           isLoading={Boolean(activeSessionId) && isLoadingActiveSession}

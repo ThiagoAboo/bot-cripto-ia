@@ -1,9 +1,8 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import { useWebSocket } from '../../app/providers/WebSocketProvider'
 import { CurrencySelector } from './components/CurrencySelector'
-import { PairChart } from './components/PairChart'
 import { AvailableBalance } from './components/AvailableBalance'
 import { ManualOrderForm } from './components/ManualOrderForm'
 import { TransactionFilters } from './components/TransactionFilters'
@@ -21,6 +20,15 @@ import { transactionsService } from './services/transactions.service'
 import { Skeleton } from '../../shared/components/ui/Skeleton'
 import { formatDate } from '../../shared/utils/formatters'
 import type { OrderFilters, Transaction } from './types/transactions.types'
+
+const PairChart = lazy(async () => {
+  const module = await import('./components/PairChart')
+  return { default: module.PairChart }
+})
+
+function PairChartFallback() {
+  return <Skeleton className="h-[520px] rounded-[28px]" />
+}
 
 type PendingOrderAction = {
   orderId: string
@@ -218,12 +226,14 @@ export default function TransacoesPage() {
         <div className="space-y-6 lg:col-span-2">
           <CurrencySelector selectedCurrency={displayCurrency} onCurrencyChange={setDisplayCurrency} />
 
-          <PairChart
-            selectedPair={selectedPair}
-            onPairChange={setSelectedPair}
-            displayCurrency={displayCurrency}
-            exchangeRate={exchangeRate?.rate}
-          />
+          <Suspense fallback={<PairChartFallback />}>
+            <PairChart
+              selectedPair={selectedPair}
+              onPairChange={setSelectedPair}
+              displayCurrency={displayCurrency}
+              exchangeRate={exchangeRate?.rate}
+            />
+          </Suspense>
 
           <div className="space-y-4">
             <TransactionFilters filters={filters} onFiltersChange={setFilters} />

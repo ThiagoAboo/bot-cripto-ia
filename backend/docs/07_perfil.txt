@@ -6,7 +6,7 @@ TELA: PERFIL
 1. API: GET /api/profile
 -------------------------------------------------------------------------------
 
-Descrição: Retorna dados do perfil do usuário
+Descricao: Retorna dados do perfil do usuario
 
 HEADERS:
   Authorization: Bearer {token}
@@ -19,7 +19,6 @@ RESPONSE (200 - Sucesso):
     "name": "Thiago Aboo",
     "email": "thiago@email.com",
     "preferences": {
-      "notificationsEnabled": true,
       "theme": "dark"
     },
     "createdAt": "2024-01-01T00:00:00Z",
@@ -42,7 +41,7 @@ CAMPOS RETORNADOS:
 2. API: PUT /api/profile
 -------------------------------------------------------------------------------
 
-Descrição: Atualiza dados do perfil do usuário
+Descricao: Atualiza dados do perfil do usuario
 
 HEADERS:
   Authorization: Bearer {token}
@@ -59,14 +58,14 @@ RESPONSE (200 - Sucesso):
   "success": true
 }
 
-RESPONSE (409 - Email já existe):
+RESPONSE (409 - Email ja existe):
 {
   "success": false,
-  "error": "Email já está em uso"
+  "error": "Email ja esta em uso"
 }
 
 TABELAS ENVOLVIDAS:
-- User (atualização)
+- User (atualizacao)
 
 CAMPOS ATUALIZADOS:
 - name
@@ -77,7 +76,7 @@ CAMPOS ATUALIZADOS:
 3. API: PUT /api/profile/preferences
 -------------------------------------------------------------------------------
 
-Descrição: Atualiza preferências do usuário
+Descricao: Atualiza preferencias do usuario
 
 HEADERS:
   Authorization: Bearer {token}
@@ -85,7 +84,6 @@ HEADERS:
 
 REQUEST BODY:
 {
-  "notificationsEnabled": true,
   "theme": "dark"
 }
 
@@ -95,7 +93,7 @@ RESPONSE (200 - Sucesso):
 }
 
 TABELAS ENVOLVIDAS:
-- User (atualização)
+- User (atualizacao)
 
 CAMPOS ATUALIZADOS:
 - preferences (JSON)
@@ -108,13 +106,12 @@ CAMPOS ATUALIZADOS:
 (Ver detalhes no arquivo 01_autenticacao.txt)
 
 -------------------------------------------------------------------------------
-5. MODELO DE DADOS - User (Preferências)
+5. MODELO DE DADOS - User (Preferencias)
 -------------------------------------------------------------------------------
 
 CAMPO preferences (JSON):
 
 {
-  "notificationsEnabled": true,    // Notificações push
   "theme": "dark"                   // dark ou light
 }
 
@@ -125,7 +122,7 @@ EXEMPLO DE REGISTRO COMPLETO:
   "email": "thiago@email.com",
   "passwordHash": "$2a$10$N9qo8uLOickgx2ZMRZoMy.Mr/.cYqF7N",
   "name": "Thiago Aboo",
-  "preferences": "{\"notificationsEnabled\":true,\"theme\":\"dark\"}",
+  "preferences": "{\"theme\":\"dark\"}",
   "lastLogin": "2024-01-15T10:30:00Z",
   "createdAt": "2024-01-01T00:00:00Z",
   "updatedAt": "2024-01-15T10:30:00Z"

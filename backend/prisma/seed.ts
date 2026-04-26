@@ -333,7 +333,7 @@ async function main() {
       email: 'admin@botcrypto.com',
       passwordHash: hashedPassword,
       name: 'Administrador',
-      preferences: JSON.stringify({ notificationsEnabled: true, theme: 'dark' })
+      preferences: JSON.stringify({ theme: 'dark' })
     }
   })
   console.log(`✅ Usuário criado: ${user.email} (ID: ${user.id})`)

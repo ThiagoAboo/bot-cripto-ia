@@ -2,6 +2,7 @@ import { apiClient } from '../../../shared/services/api.client'
 import type {
   BotDetail,
   BotHistory,
+  BotHomologationReport,
   BotListItem,
   BotModelArtifact,
   BotModelCatalog,
@@ -27,6 +28,17 @@ export const botsService = {
 
   async getBotHistory(botId: string): Promise<BotHistory> {
     return apiClient.getData(`/dashboard/bots/${botId}/history`)
+  },
+
+  async getBotHomologationReport(
+    botId: string,
+    params?: { startDate?: string; endDate?: string },
+  ): Promise<BotHomologationReport> {
+    const searchParams = new URLSearchParams()
+    if (params?.startDate) searchParams.append('startDate', params.startDate)
+    if (params?.endDate) searchParams.append('endDate', params.endDate)
+    const suffix = searchParams.toString() ? `?${searchParams.toString()}` : ''
+    return apiClient.getData(`/dashboard/bots/${botId}/homologation-report${suffix}`)
   },
 
   async getBotModels(botId: string): Promise<BotModelCatalog> {

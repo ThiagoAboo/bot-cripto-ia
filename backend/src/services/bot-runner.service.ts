@@ -32,7 +32,15 @@ import { getInternalApiBaseUrl } from './internal-api-base-url.service'
 import { getCurrencyRateToBrl } from './market-valuation.service'
 import { recordBalanceHistorySnapshot } from './portfolio.service'
 import { resolveTrainingModelArtifactPath } from './training-model.service'
-import { runPythonBotCycle, type PythonBotCyclePlanResult } from './python-bot-runtime.service'
+import {
+  runPythonBotCycle,
+  type PythonBotCycleBalance,
+  type PythonBotCyclePlanItem,
+  type PythonBotCyclePlanResult,
+  type PythonBotCyclePosition,
+  type PythonBotRuntimeOpportunity,
+  type PythonBotRuntimeResult,
+} from './python-bot-runtime.service'
 import { emitDashboardUpdate } from './socket.service'
 import { logger } from '../utils/logger'
 import { endTrace, startTrace, trace } from '../utils/tracer'
@@ -1105,6 +1113,111 @@ function buildBotCyclePlans(
   }))
 }
 
+function summarizeBalancesForTrace(balances: PythonBotCycleBalance[]): Array<{
+  currency: string
+  available: number
+  total: number
+}> {
+  return balances
+    .filter((balance) => balance.total > QUANTITY_EPSILON || balance.available > QUANTITY_EPSILON)
+    .sort((left, right) => right.total - left.total)
+    .slice(0, 8)
+    .map((balance) => ({
+      currency: balance.currency,
+      available: Number(balance.available.toFixed(8)),
+      total: Number(balance.total.toFixed(8)),
+    }))
+}
+
+function summarizePositionsForTrace(openPositions: PythonBotCyclePosition[]): Array<{
+  pair: string
+  quantity: number
+  pnlPercent: number
+  exposureBrl: number
+}> {
+  return openPositions.slice(0, 8).map((position) => ({
+    pair: position.pair,
+    quantity: Number(position.quantity.toFixed(8)),
+    pnlPercent: Number(position.pnlPercent.toFixed(4)),
+    exposureBrl: Number(position.exposureBrl.toFixed(2)),
+  }))
+}
+
+function summarizeOpportunityForTrace(
+  opportunity: (
+    Pick<PythonBotRuntimeOpportunity, 'pair' | 'action' | 'confidence' | 'price' | 'reason'>
+    & { specialists?: PythonBotRuntimeOpportunity['specialists'] }
+  ) | null | undefined,
+) {
+  if (!opportunity) {
+    return null
+  }
+
+  return {
+    pair: opportunity.pair,
+    action: opportunity.action,
+    confidence: Number(opportunity.confidence.toFixed(2)),
+    price: Number(opportunity.price.toFixed(8)),
+    reason: opportunity.reason,
+    specialists: (opportunity.specialists ?? []).slice(0, 3).map((specialist) => ({
+      specialist: specialist.specialist,
+      action: specialist.action,
+      confidence: Number(specialist.confidence.toFixed(2)),
+      indicators: Object.fromEntries(
+        Object.entries(specialist.indicators)
+          .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
+          .slice(0, 6),
+      ),
+    })),
+  }
+}
+
+function summarizePlanForTrace(plan: PythonBotCyclePlanItem | null | undefined) {
+  if (!plan) {
+    return null
+  }
+
+  return {
+    status: plan.status,
+    reason: plan.reason,
+    pair: plan.pair,
+    action: plan.action,
+    confidence: typeof plan.confidence === 'number' ? Number(plan.confidence.toFixed(2)) : undefined,
+    decisionPrice: typeof plan.decisionPrice === 'number' ? Number(plan.decisionPrice.toFixed(8)) : undefined,
+    quantity: typeof plan.quantity === 'number' ? Number(plan.quantity.toFixed(8)) : undefined,
+    isRiskOverride: Boolean(plan.isRiskOverride),
+    source: plan.source,
+    rank: plan.rank,
+    paperSimulation: plan.paperSimulation
+      ? {
+          requestedQuantity: Number(plan.paperSimulation.requestedQuantity.toFixed(8)),
+          executedQuantity: Number(plan.paperSimulation.executedQuantity.toFixed(8)),
+          executionPrice: Number(plan.paperSimulation.executionPrice.toFixed(8)),
+          slippagePercent: Number(plan.paperSimulation.slippagePercent.toFixed(4)),
+          simulatedLatencyMs: plan.paperSimulation.simulatedLatencyMs,
+          simulatedFillPercent: Number(plan.paperSimulation.simulatedFillPercent.toFixed(4)),
+        }
+      : undefined,
+  }
+}
+
+function summarizeRuntimeAnalysisForTrace(analysis: PythonBotRuntimeResult) {
+  return {
+    timeframe: analysis.timeframe,
+    primarySpecialist: analysis.primarySpecialist,
+    summary: analysis.summary,
+    analyzedPairs: analysis.analyzedPairs.slice(0, 10),
+    bestOpportunity: summarizeOpportunityForTrace(analysis.bestOpportunity ?? undefined),
+    topOpportunities: analysis.opportunities.slice(0, 5).map((opportunity) => summarizeOpportunityForTrace(opportunity)),
+    socialSignals: analysis.socialSignals.slice(0, 5).map((signal) => ({
+      pair: signal.pair,
+      score: Number(signal.score.toFixed(2)),
+      mentions: signal.mentions,
+      sentiment: signal.sentiment,
+    })),
+  }
+}
+
 export async function listBotRuntimeQueue(): Promise<BotRuntimeQueueItem[]> {
   const bots = await prisma.bot.findMany({
     where: {
@@ -1345,77 +1458,112 @@ export async function buildBotRuntimeCycleContext(
   const strategyId = bot.template?.id ?? buildStrategyId(strategyType)
   const cycleGeneratedAt = new Date().toISOString()
   const pairLimit = resolveMaxPairsToAnalyze(parameters)
+  const payload: BotRuntimeCycleContext['payload'] = {
+    backend: {
+      baseUrl: getInternalApiBaseUrl(),
+      accessToken: signUserAccessToken({
+        id: bot.userId,
+        email: user?.email ?? '',
+      }),
+      timeoutSeconds: Number(process.env.PYTHON_BOT_RUNTIME_TIMEOUT_SECONDS ?? 15),
+    },
+    bot: {
+      id: bot.id,
+      name: bot.name,
+      strategyType,
+      strategyId,
+      indicatorType: bot.template?.indicatorType ?? undefined,
+      specialization: bot.template?.specialization ?? undefined,
+      parameters,
+      allowedPairs: effectiveAllowedPairs.length > 0 ? effectiveAllowedPairs : ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
+      focusPair: bot.focusPair ?? undefined,
+      currentPair: bot.currentPair ?? undefined,
+      minMentions: typeof parameters.minMentions === 'number' ? parameters.minMentions : undefined,
+      minSocialScore: typeof parameters.minSocialScore === 'number' ? parameters.minSocialScore : undefined,
+      timeframe,
+      modelArtifactPath: bot.modelUrl ? resolveTrainingModelArtifactPath(bot.modelUrl) : undefined,
+    },
+    pairLimit,
+    includeSocialOverlay: true,
+    cycle: {
+      executionMode,
+      minimumConfidence,
+      maxTradeAmount: configuration?.maxTradeAmount ?? 1000,
+      maxTradeAmountUnit: configuration?.maxTradeAmountUnit ?? 'USDT',
+      riskConfig: { ...riskConfig },
+      balances,
+      openPositions,
+      portfolio: {
+        totalPortfolioBrl: exposureSnapshot.totalPortfolioBrl,
+        totalExposureBrl: exposureSnapshot.totalExposureBrl,
+        openPositionsCount: exposureSnapshot.openPositionsCount,
+      },
+      recentSellTransactions: recentSellTransactions.map((transaction) => ({
+        date: transaction.date.toISOString(),
+        profitBrl: transaction.profitBrl ?? 0,
+      })),
+      recentExecutions: recentExecutions
+        .filter((transaction) => transaction.type === 'buy' || transaction.type === 'sell')
+        .map((transaction) => ({
+          pair: transaction.pair,
+          action: transaction.type as 'buy' | 'sell',
+          executedAt: transaction.date.toISOString(),
+        })),
+      tradeCooldownMs: BOT_TRADE_COOLDOWN_MS,
+      fullAutoBuyBlockReason,
+      exchangeCredentialsReady: Boolean(exchangeCredentials),
+      openExchangeOrder: openExchangeOrder
+        ? {
+            pair: openExchangeOrder.pair,
+            status: openExchangeOrder.status,
+            requestedQuantity: openExchangeOrder.requestedQuantity ?? undefined,
+            quantity: openExchangeOrder.quantity ?? undefined,
+            externalStatus: openExchangeOrder.externalStatus ?? undefined,
+          }
+        : null,
+    },
+  }
+
+  trace('INFO', 'bot', 'buildBotRuntimeCycleContext', 'Contexto do ciclo do bot preparado', 0, {
+    userId: bot.userId,
+    botId: bot.id,
+    currentPair: bot.currentPair,
+    recommendedAction: bot.recommendedAction,
+    confidence: bot.confidence,
+    stage: 'cycle_context_ready',
+    snapshot: {
+      generatedAt: cycleGeneratedAt,
+      executionMode,
+      timeframe,
+      pairLimit,
+      allowedPairsCount: payload.bot.allowedPairs.length,
+      allowedPairsPreview: payload.bot.allowedPairs.slice(0, 8),
+      modelReadiness: {
+        modelReady: modelReadiness.modelReady,
+        modelVersion: modelReadiness.modelVersion,
+        modelUrl: modelReadiness.modelUrl,
+        modelArchitecture: modelReadiness.modelArchitecture,
+        validationStrategy: modelReadiness.validationStrategy,
+        forecastHorizonCandles: modelReadiness.forecastHorizonCandles,
+      },
+      riskConfig,
+      balances: summarizeBalancesForTrace(balances),
+      portfolio: payload.cycle.portfolio,
+      openPositions: summarizePositionsForTrace(openPositions),
+      recentExecutionsCount: payload.cycle.recentExecutions.length,
+      recentSellTransactionsCount: payload.cycle.recentSellTransactions.length,
+      exchangeCredentialsReady: payload.cycle.exchangeCredentialsReady,
+      fullAutoBuyBlockReason: payload.cycle.fullAutoBuyBlockReason,
+      openExchangeOrder: payload.cycle.openExchangeOrder,
+    },
+  })
 
   return {
     botId: bot.id,
     botName: bot.name,
     userId: bot.userId,
     generatedAt: cycleGeneratedAt,
-    payload: {
-      backend: {
-        baseUrl: getInternalApiBaseUrl(),
-        accessToken: signUserAccessToken({
-          id: bot.userId,
-          email: user?.email ?? '',
-        }),
-        timeoutSeconds: Number(process.env.PYTHON_BOT_RUNTIME_TIMEOUT_SECONDS ?? 15),
-      },
-      bot: {
-        id: bot.id,
-        name: bot.name,
-        strategyType,
-        strategyId,
-        indicatorType: bot.template?.indicatorType ?? undefined,
-        specialization: bot.template?.specialization ?? undefined,
-        parameters,
-        allowedPairs: effectiveAllowedPairs.length > 0 ? effectiveAllowedPairs : ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
-        focusPair: bot.focusPair ?? undefined,
-        currentPair: bot.currentPair ?? undefined,
-        minMentions: typeof parameters.minMentions === 'number' ? parameters.minMentions : undefined,
-        minSocialScore: typeof parameters.minSocialScore === 'number' ? parameters.minSocialScore : undefined,
-        timeframe,
-        modelArtifactPath: bot.modelUrl ? resolveTrainingModelArtifactPath(bot.modelUrl) : undefined,
-      },
-      pairLimit,
-      includeSocialOverlay: true,
-      cycle: {
-        executionMode,
-        minimumConfidence,
-        maxTradeAmount: configuration?.maxTradeAmount ?? 1000,
-        maxTradeAmountUnit: configuration?.maxTradeAmountUnit ?? 'USDT',
-        riskConfig: { ...riskConfig },
-        balances,
-        openPositions,
-        portfolio: {
-          totalPortfolioBrl: exposureSnapshot.totalPortfolioBrl,
-          totalExposureBrl: exposureSnapshot.totalExposureBrl,
-          openPositionsCount: exposureSnapshot.openPositionsCount,
-        },
-        recentSellTransactions: recentSellTransactions.map((transaction) => ({
-          date: transaction.date.toISOString(),
-          profitBrl: transaction.profitBrl ?? 0,
-        })),
-        recentExecutions: recentExecutions
-          .filter((transaction) => transaction.type === 'buy' || transaction.type === 'sell')
-          .map((transaction) => ({
-            pair: transaction.pair,
-            action: transaction.type as 'buy' | 'sell',
-            executedAt: transaction.date.toISOString(),
-          })),
-        tradeCooldownMs: BOT_TRADE_COOLDOWN_MS,
-        fullAutoBuyBlockReason,
-        exchangeCredentialsReady: Boolean(exchangeCredentials),
-        openExchangeOrder: openExchangeOrder
-          ? {
-              pair: openExchangeOrder.pair,
-              status: openExchangeOrder.status,
-              requestedQuantity: openExchangeOrder.requestedQuantity ?? undefined,
-              quantity: openExchangeOrder.quantity ?? undefined,
-              externalStatus: openExchangeOrder.externalStatus ?? undefined,
-            }
-          : null,
-      },
-    },
+    payload,
   }
 }
 
@@ -1473,6 +1621,16 @@ export async function applyBotRuntimeCycleResult(params: {
   })
 
   if (bot.isPaused || bot.status !== 'online') {
+    trace('WARN', 'bot', 'applyBotRuntimeCycleResult', 'Aplicacao do ciclo ignorada por status operacional do bot', 0, {
+      userId: params.userId,
+      botId: bot.id,
+      stage: 'execution_skipped',
+      snapshot: {
+        botStatus: bot.status,
+        isPaused: bot.isPaused,
+      },
+    })
+
     return {
       botId: bot.id,
       botName: bot.name,
@@ -1488,6 +1646,15 @@ export async function applyBotRuntimeCycleResult(params: {
   }
 
   if (await hasActiveTrainingSession(params.userId, bot.id)) {
+    trace('WARN', 'bot', 'applyBotRuntimeCycleResult', 'Aplicacao do ciclo adiada por treinamento ativo', 0, {
+      userId: params.userId,
+      botId: bot.id,
+      stage: 'execution_skipped',
+      snapshot: {
+        activeTrainingSession: true,
+      },
+    })
+
     return {
       botId: bot.id,
       botName: bot.name,
@@ -1503,6 +1670,18 @@ export async function applyBotRuntimeCycleResult(params: {
   }
 
   if (!modelReadiness.modelReady) {
+    trace('WARN', 'bot', 'applyBotRuntimeCycleResult', 'Aplicacao do ciclo bloqueada por modelo nao operacional', 0, {
+      userId: params.userId,
+      botId: bot.id,
+      stage: 'execution_blocked_model',
+      snapshot: {
+        modelReady: modelReadiness.modelReady,
+        operationalBlockReason: modelReadiness.operationalBlockReason,
+        modelVersion: modelReadiness.modelVersion,
+        modelUrl: modelReadiness.modelUrl,
+      },
+    })
+
     return {
       botId: bot.id,
       botName: bot.name,
@@ -1591,6 +1770,87 @@ export async function applyBotRuntimeCycleResult(params: {
   const plannedQuantity = params.cycleResult.plan.quantity
   const isRiskOverride = Boolean(params.cycleResult.plan.isRiskOverride)
   const decisionTimestamp = new Date()
+  const approvedPlansCount = cyclePlans.filter((plan) => plan.status !== 'skipped').length
+
+  trace('INFO', 'bot', 'applyBotRuntimeCycleResult', 'Plano do runtime Python recebido para aplicação', 0, {
+    userId: params.userId,
+    botId: bot.id,
+    currentPair: selectedOpportunity?.pair ?? analysis.bestOpportunity?.pair,
+    recommendedAction: selectedOpportunity?.action ?? analysis.bestOpportunity?.action,
+    confidence: selectedOpportunity?.confidence ?? analysis.bestOpportunity?.confidence,
+    stage: 'runtime_plan_received',
+    snapshot: {
+      generatedAt: cycleGeneratedAt,
+      executionMode,
+      modelReadiness: {
+        modelReady: modelReadiness.modelReady,
+        modelVersion: modelReadiness.modelVersion,
+        modelUrl: modelReadiness.modelUrl,
+        modelArchitecture: modelReadiness.modelArchitecture,
+        validationStrategy: modelReadiness.validationStrategy,
+        forecastHorizonCandles: modelReadiness.forecastHorizonCandles,
+      },
+      analysis: summarizeRuntimeAnalysisForTrace(params.cycleResult.analysis),
+      selectedPlan: summarizePlanForTrace(params.cycleResult.plan),
+      approvedPlansCount,
+      totalPlansCount: cyclePlans.length,
+      fullAutoBuyBlockReason,
+      openExchangeOrder: openExchangeOrder
+        ? {
+            pair: openExchangeOrder.pair,
+            status: openExchangeOrder.status,
+            requestedQuantity: openExchangeOrder.requestedQuantity ?? undefined,
+            quantity: openExchangeOrder.quantity,
+            externalStatus: openExchangeOrder.externalStatus ?? undefined,
+          }
+        : null,
+    },
+  })
+
+  const logExecutionTrace = (
+    level: 'INFO' | 'WARN' | 'ERROR',
+    message: string,
+    stage: string,
+    snapshot?: Record<string, unknown>,
+  ) => {
+    trace(level, 'bot', 'applyBotRuntimeCycleResult', message, 0, {
+      userId: params.userId,
+      botId: bot.id,
+      currentPair: selectedOpportunity?.pair ?? analysis.bestOpportunity?.pair,
+      recommendedAction: selectedOpportunity?.action ?? analysis.bestOpportunity?.action,
+      confidence: selectedOpportunity?.confidence ?? analysis.bestOpportunity?.confidence,
+      stage,
+      snapshot: {
+        generatedAt: cycleGeneratedAt,
+        executionMode,
+        isRiskOverride,
+        modelReadiness: {
+          modelReady: modelReadiness.modelReady,
+          modelVersion: modelReadiness.modelVersion,
+          modelUrl: modelReadiness.modelUrl,
+          modelArchitecture: modelReadiness.modelArchitecture,
+          validationStrategy: modelReadiness.validationStrategy,
+          forecastHorizonCandles: modelReadiness.forecastHorizonCandles,
+        },
+        selectedOpportunity: summarizeOpportunityForTrace(selectedOpportunity ?? analysis.bestOpportunity ?? undefined),
+        selectedPlan: summarizePlanForTrace(params.cycleResult.plan),
+        approvedPlansCount,
+        totalPlansCount: cyclePlans.length,
+        fullAutoBuyBlockReason,
+        openExchangeOrder: openExchangeOrder
+          ? {
+              pair: openExchangeOrder.pair,
+              status: openExchangeOrder.status,
+              requestedQuantity: openExchangeOrder.requestedQuantity ?? undefined,
+              quantity: openExchangeOrder.quantity,
+              externalStatus: openExchangeOrder.externalStatus ?? undefined,
+            }
+          : null,
+        ...snapshot,
+      },
+    })
+  }
+
   const persistDecision = async (input: {
     executionStatus: BotCycleExecution['status']
     reason: string
@@ -1624,7 +1884,7 @@ export async function applyBotRuntimeCycleResult(params: {
     }
 
     try {
-      await recordBotDecision({
+      const decision = await recordBotDecision({
         userId: params.userId,
         botId: bot.id,
         pair,
@@ -1649,6 +1909,38 @@ export async function applyBotRuntimeCycleResult(params: {
         sellThresholdPercent: modelReadiness.sellThresholdPercent ?? -0.3,
         createdAt: input.createdAt ?? decisionTimestamp,
       })
+
+      trace('INFO', 'bot', 'persistDecision', 'Decisão do bot persistida', 0, {
+        userId: params.userId,
+        botId: bot.id,
+        currentPair: pair,
+        recommendedAction: action,
+        confidence,
+        stage: 'decision_persisted',
+        snapshot: {
+          decisionId: decision.id,
+          generatedAt: cycleGeneratedAt,
+          pair,
+          action,
+          executionMode,
+          executionStatus: input.executionStatus,
+          reason: input.reason,
+          decisionPrice,
+          requestedQuantity: input.requestedQuantity,
+          executedQuantity: input.executedQuantity,
+          transactionId: input.transactionId,
+          slippagePercent: input.slippagePercent,
+          simulatedLatencyMs: input.simulatedLatencyMs,
+          simulatedFillPercent: input.simulatedFillPercent,
+          modelVersion: modelReadiness.modelVersion,
+          modelUrl: modelReadiness.modelUrl,
+          modelArchitecture: modelReadiness.modelArchitecture,
+          forecastHorizonCandles: modelReadiness.forecastHorizonCandles,
+          isRiskOverride,
+          selectedOpportunity: summarizeOpportunityForTrace(selectedOpportunity ?? analysis.bestOpportunity ?? undefined),
+          selectedPlan: summarizePlanForTrace(params.cycleResult.plan),
+        },
+      })
     } catch (decisionError) {
       logger.warn('[bot] Falha ao persistir decisão do bot', {
         module: 'bot',
@@ -1672,6 +1964,11 @@ export async function applyBotRuntimeCycleResult(params: {
       action: params.cycleResult.plan.action,
       confidence: params.cycleResult.plan.confidence,
       decisionPrice: params.cycleResult.plan.decisionPrice,
+    })
+
+    logExecutionTrace('WARN', 'Ciclo encerrado sem execução após validação do plano', 'execution_skipped', {
+      reason: params.cycleResult.plan.reason,
+      plannedQuantity,
     })
 
     return {
@@ -1700,6 +1997,11 @@ export async function applyBotRuntimeCycleResult(params: {
       action: params.cycleResult.plan.action,
       confidence: params.cycleResult.plan.confidence,
       decisionPrice: params.cycleResult.plan.decisionPrice,
+    })
+
+    logExecutionTrace('INFO', 'Ciclo gerou sugestão para revisão manual', 'execution_suggested', {
+      reason: params.cycleResult.plan.reason,
+      plannedQuantity,
     })
 
     return {
@@ -1734,6 +2036,12 @@ export async function applyBotRuntimeCycleResult(params: {
       executionStatus: 'skipped',
       reason: 'O runtime Python não retornou um plano de execução válido',
     })
+    logExecutionTrace('WARN', 'Ciclo encerrado por plano invalido retornado pelo runtime', 'execution_invalid_plan', {
+      plannedQuantity,
+      selectedOpportunity: selectedOpportunity
+        ? summarizeOpportunityForTrace(selectedOpportunity)
+        : null,
+    })
 
     return {
       botId: bot.id,
@@ -1756,6 +2064,10 @@ export async function applyBotRuntimeCycleResult(params: {
       requestedQuantity: plannedQuantity,
       decisionPrice: selectedOpportunity.price,
     })
+    logExecutionTrace('WARN', 'Execucao bloqueada pela governanca de full_auto', 'execution_blocked_governance', {
+      reason: fullAutoBuyBlockReason,
+      plannedQuantity,
+    })
 
     return {
       botId: bot.id,
@@ -1776,11 +2088,22 @@ export async function applyBotRuntimeCycleResult(params: {
 
   if (executionMode === 'full_auto' && openExchangeOrder) {
     const quantity = openExchangeOrder.requestedQuantity ?? openExchangeOrder.quantity
+    const reason = `Ainda existe uma ordem ${openExchangeOrder.status === 'partially_filled' ? 'parcialmente executada' : 'pendente'} em ${openExchangeOrder.pair}; o bot vai aguardar a reconciliacao antes de abrir nova posicao`
     await persistDecision({
       executionStatus: 'skipped',
-      reason: `Ainda existe uma ordem ${openExchangeOrder.status === 'partially_filled' ? 'parcialmente executada' : 'pendente'} em ${openExchangeOrder.pair}; o bot vai aguardar a reconciliação antes de abrir nova posição`,
+      reason,
       requestedQuantity: quantity ?? undefined,
       decisionPrice: selectedOpportunity.price,
+    })
+    logExecutionTrace('WARN', 'Execucao adiada por ordem ainda aberta na corretora', 'execution_blocked_open_order', {
+      reason,
+      blockingOrder: {
+        pair: openExchangeOrder.pair,
+        status: openExchangeOrder.status,
+        requestedQuantity: openExchangeOrder.requestedQuantity ?? undefined,
+        quantity: openExchangeOrder.quantity,
+        externalStatus: openExchangeOrder.externalStatus ?? undefined,
+      },
     })
 
     return {
@@ -1792,7 +2115,7 @@ export async function applyBotRuntimeCycleResult(params: {
       execution: {
         mode: executionMode,
         status: 'skipped',
-        reason: `Ainda existe uma ordem ${openExchangeOrder.status === 'partially_filled' ? 'parcialmente executada' : 'pendente'} em ${openExchangeOrder.pair}; o bot vai aguardar a reconciliação antes de abrir nova posição`,
+        reason,
         pair: selectedOpportunity.pair,
         action: selectedOpportunity.action,
         quantity: quantity ?? undefined,
@@ -1830,6 +2153,16 @@ export async function applyBotRuntimeCycleResult(params: {
         executionStatus: 'skipped',
         reason,
         requestedQuantity: plannedQuantity,
+      })
+      logExecutionTrace('WARN', 'Execucao bloqueada pelos filtros da corretora', 'execution_blocked_exchange_filters', {
+        reason,
+        plannedQuantity,
+        preparedOrder: {
+          quantity: preparedOrder.quantity,
+          isValid: preparedOrder.isValid,
+          rejectionReason: preparedOrder.rejectionReason,
+          adjustments: preparedOrder.adjustments,
+        },
       })
 
       return {
@@ -1995,6 +2328,33 @@ export async function applyBotRuntimeCycleResult(params: {
     simulatedFillPercent: paperSimulation?.simulatedFillPercent,
     decisionPrice: transaction.price,
     createdAt: transaction.date,
+  })
+
+  logExecutionTrace(executionStatus === 'executed' ? 'INFO' : 'WARN', 'Execucao do ciclo concluida', 'execution_result', {
+    executionStatus,
+    executionReason,
+    requestedQuantity: transaction.requestedQuantity ?? transaction.quantity,
+    executedQuantity: transaction.quantity,
+    transaction: {
+      id: transaction.id,
+      status: transaction.status,
+      price: transaction.price,
+      total: transaction.total,
+      fee: transaction.fee,
+      feeCurrency: transaction.feeCurrency,
+      externalStatus: transaction.externalStatus ?? undefined,
+      syncedAt: transaction.syncedAt?.toISOString(),
+    },
+    paperSimulation: paperSimulation
+      ? {
+          requestedQuantity: paperSimulation.requestedQuantity,
+          executedQuantity: paperSimulation.executedQuantity,
+          executionPrice: paperSimulation.executionPrice,
+          slippagePercent: paperSimulation.slippagePercent,
+          simulatedLatencyMs: paperSimulation.simulatedLatencyMs,
+          simulatedFillPercent: paperSimulation.simulatedFillPercent,
+        }
+      : undefined,
   })
 
   logger.info('[bot] Ordem automatizada executada pelo ciclo do bot', {

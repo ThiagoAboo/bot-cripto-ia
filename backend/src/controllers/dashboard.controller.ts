@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { prisma } from '../config/database'
 import { AuthRequest } from '../middleware/auth.middleware'
 import { analyzeBotInstance } from '../services/bot-analysis.service'
+import { buildBotHomologationReport } from '../services/bot-homologation-report.service'
 import { buildBotDecisionSummary, buildBotPaperReadiness, loadBotPaperReadiness, resolveBotOperationalReadiness } from '../services/bot-decision.service'
 import { evaluateBotModelGovernance, resolveBotFullAutoEligibility } from '../services/bot-governance-policy.service'
 import { getBotInstanceById, listBotInstances, listBotTemplates, materializeEditableBotForUser } from '../services/bot-registry.service'
@@ -14,7 +15,7 @@ import { recordBalanceHistorySnapshot, recordBalanceHistorySnapshotValue } from 
 import { DEFAULT_BOT_RUNTIME_SERVICE_NAME, getRuntimeHeartbeatStatus } from '../services/runtime-heartbeat.service'
 import { emitDashboardUpdate } from '../services/socket.service'
 import { logger } from '../utils/logger'
-import { endTrace, startTrace } from '../utils/tracer'
+import { endTrace, parseTraceSnapshot, startTrace } from '../utils/tracer'
 
 const executionModeSchema = z.enum(['paper', 'semi_auto', 'full_auto'])
 const editableStatusSchema = z.enum(['online', 'offline'])
@@ -64,6 +65,11 @@ const botHistoryQuerySchema = z.object({
   tracesLimit: z.coerce.number().int().positive().max(50).default(20),
   sessionsLimit: z.coerce.number().int().positive().max(20).default(5),
   decisionsLimit: z.coerce.number().int().positive().max(100).default(30),
+})
+
+const botHomologationReportQuerySchema = z.object({
+  startDate: z.string().datetime().optional(),
+  endDate: z.string().datetime().optional(),
 })
 
 const botModelActionSchema = z.object({
@@ -749,6 +755,8 @@ export async function getBotHistory(req: AuthRequest, res: Response): Promise<Re
           traceId: trace.traceId,
           functionName: trace.functionName,
           message: trace.message,
+          stage: trace.stage ?? undefined,
+          snapshot: parseTraceSnapshot(trace.snapshot),
           durationMs: trace.durationMs,
           currentPair: trace.currentPair ?? undefined,
           recommendedAction: trace.recommendedAction ?? undefined,
@@ -811,6 +819,65 @@ export async function getBotHistory(req: AuthRequest, res: Response): Promise<Re
     })
 
     endTrace('getBotHistory', { userId: req.userId, botId: req.params.id, errorFlag: true })
+    return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
+  }
+}
+
+export async function getBotHomologationReport(req: AuthRequest, res: Response): Promise<Response> {
+  startTrace(req.userId!, 'getBotHomologationReport', 'dashboard')
+
+  try {
+    const userId = req.userId!
+    const { id } = req.params
+    const validation = botHomologationReportQuerySchema.safeParse(req.query)
+    if (!validation.success) {
+      endTrace('getBotHomologationReport', { userId, botId: id, errorFlag: true })
+      return res.status(400).json({
+        success: false,
+        error: validation.error.errors.map((entry) => entry.message).join(', '),
+      })
+    }
+
+    const bot = await getBotInstanceById(userId, id)
+    if (!bot) {
+      endTrace('getBotHomologationReport', { userId, botId: id, errorFlag: true })
+      return res.status(404).json({ success: false, error: 'Bot nÃ£o encontrado' })
+    }
+
+    const endDate = validation.data.endDate ? new Date(validation.data.endDate) : new Date()
+    const startDate = validation.data.startDate
+      ? new Date(validation.data.startDate)
+      : new Date(endDate.getTime() - (14 * 24 * 60 * 60 * 1000))
+
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || startDate > endDate) {
+      endTrace('getBotHomologationReport', { userId, botId: id, errorFlag: true })
+      return res.status(400).json({
+        success: false,
+        error: 'Intervalo de datas invÃ¡lido para o relatÃ³rio de homologacao',
+      })
+    }
+
+    const report = await buildBotHomologationReport({
+      userId,
+      botId: bot.id,
+      startDate,
+      endDate,
+    })
+
+    endTrace('getBotHomologationReport', { userId, botId: bot.id })
+    return res.json({
+      success: true,
+      data: report,
+    })
+  } catch (error) {
+    logger.error('[dashboard] Erro ao gerar relatorio de homologacao do bot', {
+      module: 'dashboard',
+      event: 'bot_homologation_report_error',
+      userId: req.userId,
+      botId: req.params.id,
+      error,
+    })
+    endTrace('getBotHomologationReport', { userId: req.userId, botId: req.params.id, errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }

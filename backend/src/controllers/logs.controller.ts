@@ -4,7 +4,7 @@ import { prisma } from '../config/database'
 import { listBotInstances } from '../services/bot-registry.service'
 import { emitLogNew, emitSystemLogNew, emitTraceNew } from '../services/socket.service'
 import { getSystemLogUserId, logger } from '../utils/logger'
-import { startTrace, endTrace } from '../utils/tracer'
+import { endTrace, normalizeTraceStage, parseTraceSnapshot, serializeTraceSnapshot, startTrace } from '../utils/tracer'
 import { z } from 'zod'
 
 const logFiltersSchema = z.object({
@@ -27,6 +27,7 @@ const traceFiltersSchema = z.object({
   botId: z.string().optional(),
   currentPair: z.string().optional(),
   recommendedAction: z.string().optional(),
+  stage: z.string().optional(),
   minDurationMs: z.coerce.number().optional(),
   onlyErrors: z.coerce.boolean().optional(),
   startDate: z.string().optional(),
@@ -55,6 +56,8 @@ const createTraceSchema = z.object({
   recommendedAction: z.enum(['buy', 'sell', 'hold']).optional(),
   confidence: z.number().min(0).max(100).optional(),
   errorFlag: z.boolean().optional(),
+  stage: z.string().trim().max(80).optional(),
+  snapshot: z.unknown().optional(),
   timestamp: z.string().datetime().optional(),
 })
 
@@ -140,6 +143,8 @@ function buildRealtimeTracePayload(trace: {
   parentTraceId: string | null
   functionName: string
   message: string
+  stage?: string | null
+  snapshot?: string | null
   durationMs: number
   botId: string | null
   currentPair: string | null
@@ -156,6 +161,8 @@ function buildRealtimeTracePayload(trace: {
     parentTraceId: trace.parentTraceId ?? undefined,
     functionName: trace.functionName,
     message: trace.message,
+    stage: trace.stage ?? undefined,
+    snapshot: parseTraceSnapshot(trace.snapshot),
     durationMs: trace.durationMs,
     botId: trace.botId ?? undefined,
     currentPair: trace.currentPair ?? undefined,
@@ -257,8 +264,131 @@ function normalizeLogLevel(level: string): 'INFO' | 'WARN' | 'ERROR' {
   return 'INFO'
 }
 
-function normalizeTraceLevel(level: string): 'DEBUG' | 'TRACE' {
-  return level === 'DEBUG' ? 'DEBUG' : 'TRACE'
+function normalizeTraceLevel(level: string): 'DEBUG' | 'TRACE' | 'INFO' | 'WARN' | 'ERROR' {
+  if (level === 'DEBUG') {
+    return 'DEBUG'
+  }
+
+  if (level === 'INFO' || level === 'WARN' || level === 'ERROR') {
+    return level
+  }
+
+  return 'TRACE'
+}
+
+function buildTraceWhere(validationData: z.infer<typeof traceFiltersSchema>, userId: string): Record<string, unknown> {
+  const {
+    levels,
+    modules,
+    traceId: traceIdFilter,
+    functionName,
+    botId,
+    currentPair,
+    recommendedAction,
+    stage,
+    minDurationMs,
+    onlyErrors,
+    startDate,
+    endDate,
+    search,
+  } = validationData
+
+  const where: any = { userId }
+
+  const expandedTraceLevels = expandRequestedTraceLevels(levels)
+  if (expandedTraceLevels) where.level = { in: expandedTraceLevels }
+  const expandedTraceModules = expandRequestedModules(modules)
+  if (expandedTraceModules) where.module = { in: expandedTraceModules }
+  if (traceIdFilter) where.traceId = traceIdFilter
+  if (functionName) where.functionName = { contains: functionName }
+  if (botId) where.botId = botId
+  if (currentPair) where.currentPair = currentPair
+  if (recommendedAction) where.recommendedAction = recommendedAction
+  if (stage) where.stage = normalizeTraceStage(stage)
+  if (minDurationMs) where.durationMs = { gte: minDurationMs }
+  if (onlyErrors) where.errorFlag = true
+  if (startDate) where.timestamp = { ...where.timestamp, gte: new Date(startDate) }
+  if (endDate) where.timestamp = { ...where.timestamp, lte: new Date(endDate) }
+  if (search) {
+    where.OR = [
+      { message: { contains: search } },
+      { functionName: { contains: search } },
+    ]
+  }
+
+  return where
+}
+
+function mapTraceItem(trace: any) {
+  return {
+    id: trace.id,
+    timestamp: trace.timestamp,
+    level: normalizeTraceLevel(trace.level),
+    module: normalizeModule(trace.module),
+    traceId: trace.traceId,
+    parentTraceId: trace.parentTraceId ?? undefined,
+    functionName: trace.functionName,
+    message: trace.message,
+    stage: trace.stage ?? undefined,
+    snapshot: parseTraceSnapshot(trace.snapshot),
+    durationMs: trace.durationMs,
+    botId: trace.botId ?? undefined,
+    botName: trace.bot?.name ?? undefined,
+    currentPair: trace.currentPair ?? undefined,
+    recommendedAction: trace.recommendedAction ?? undefined,
+    confidence: trace.confidence ?? undefined,
+    errorFlag: trace.errorFlag,
+  }
+}
+
+function buildTraceAnalysisExportPayload(params: {
+  filters: z.infer<typeof traceFiltersSchema>
+  traces: any[]
+}) {
+  const items = params.traces.map((trace) => mapTraceItem(trace))
+  const stageSummaryMap = new Map<string, { stage: string; count: number; errorCount: number }>()
+
+  for (const trace of items) {
+    const stageKey = trace.stage ?? 'unclassified'
+    const current = stageSummaryMap.get(stageKey) ?? {
+      stage: stageKey,
+      count: 0,
+      errorCount: 0,
+    }
+    current.count += 1
+    current.errorCount += trace.errorFlag ? 1 : 0
+    stageSummaryMap.set(stageKey, current)
+  }
+
+  return {
+    exportType: 'trace_analysis_pack_v1',
+    generatedAt: new Date().toISOString(),
+    filters: {
+      levels: params.filters.levels ? params.filters.levels.split(',').map((entry) => entry.trim()).filter(Boolean) : [],
+      modules: params.filters.modules ? params.filters.modules.split(',').map((entry) => entry.trim()).filter(Boolean) : [],
+      traceId: params.filters.traceId ?? null,
+      functionName: params.filters.functionName ?? null,
+      botId: params.filters.botId ?? null,
+      currentPair: params.filters.currentPair ?? null,
+      recommendedAction: params.filters.recommendedAction ?? null,
+      stage: params.filters.stage ? normalizeTraceStage(params.filters.stage) : null,
+      minDurationMs: params.filters.minDurationMs ?? null,
+      onlyErrors: Boolean(params.filters.onlyErrors),
+      startDate: params.filters.startDate ?? null,
+      endDate: params.filters.endDate ?? null,
+      search: params.filters.search ?? null,
+    },
+    summary: {
+      totalTraces: items.length,
+      errorTraces: items.filter((trace) => trace.errorFlag).length,
+      uniqueTraceIds: new Set(items.map((trace) => trace.traceId)).size,
+      snapshotTraces: items.filter((trace) => trace.snapshot !== undefined).length,
+      stages: Array.from(stageSummaryMap.values()).sort((left, right) => right.count - left.count),
+      firstTimestamp: items[0]?.timestamp ?? null,
+      lastTimestamp: items[items.length - 1]?.timestamp ?? null,
+    },
+    traces: items,
+  }
 }
 
 function normalizeModule(moduleName: string): 'dashboard' | 'configurations' | 'training' | 'transactions' | 'bot' | 'system' | 'api' | 'database' {
@@ -401,46 +531,10 @@ export async function getTraces(req: AuthRequest, res: Response) {
       })
     }
 
-    const {
-      page,
-      limit,
-      levels,
-      modules,
-      traceId: traceIdFilter,
-      functionName,
-      botId,
-      currentPair,
-      recommendedAction,
-      minDurationMs,
-      onlyErrors,
-      startDate,
-      endDate,
-      search,
-    } = validation.data
+    const { page, limit } = validation.data
     const userId = req.userId!
     const skip = (page - 1) * limit
-
-    const where: any = { userId }
-
-    const expandedTraceLevels = expandRequestedTraceLevels(levels)
-    if (expandedTraceLevels) where.level = { in: expandedTraceLevels }
-    const expandedTraceModules = expandRequestedModules(modules)
-    if (expandedTraceModules) where.module = { in: expandedTraceModules }
-    if (traceIdFilter) where.traceId = traceIdFilter
-    if (functionName) where.functionName = { contains: functionName }
-    if (botId) where.botId = botId
-    if (currentPair) where.currentPair = currentPair
-    if (recommendedAction) where.recommendedAction = recommendedAction
-    if (minDurationMs) where.durationMs = { gte: minDurationMs }
-    if (onlyErrors) where.errorFlag = true
-    if (startDate) where.timestamp = { ...where.timestamp, gte: new Date(startDate) }
-    if (endDate) where.timestamp = { ...where.timestamp, lte: new Date(endDate) }
-    if (search) {
-      where.OR = [
-        { message: { contains: search } },
-        { functionName: { contains: search } },
-      ]
-    }
+    const where = buildTraceWhere(validation.data, userId)
 
     const [traces, total] = await Promise.all([
       prisma.trace.findMany({
@@ -457,23 +551,7 @@ export async function getTraces(req: AuthRequest, res: Response) {
       prisma.trace.count({ where }),
     ])
 
-    const items = traces.map((trace: any) => ({
-      id: trace.id,
-      timestamp: trace.timestamp,
-      level: normalizeTraceLevel(trace.level),
-      module: normalizeModule(trace.module),
-      traceId: trace.traceId,
-      parentTraceId: trace.parentTraceId ?? undefined,
-      functionName: trace.functionName,
-      message: trace.message,
-      durationMs: trace.durationMs,
-      botId: trace.botId ?? undefined,
-      botName: trace.bot?.name ?? undefined,
-      currentPair: trace.currentPair ?? undefined,
-      recommendedAction: trace.recommendedAction ?? undefined,
-      confidence: trace.confidence ?? undefined,
-      errorFlag: trace.errorFlag,
-    }))
+    const items = traces.map((trace: any) => mapTraceItem(trace))
 
     endTrace('getTraces')
 
@@ -516,6 +594,8 @@ export async function createTraceEntry(req: AuthRequest, res: Response) {
         parentTraceId: validation.data.parentTraceId ?? null,
         functionName: validation.data.functionName,
         message: validation.data.message,
+        stage: normalizeTraceStage(validation.data.stage),
+        snapshot: serializeTraceSnapshot(validation.data.snapshot),
         durationMs: validation.data.durationMs,
         botId: validation.data.botId ?? null,
         currentPair: validation.data.currentPair ?? null,
@@ -579,6 +659,8 @@ export async function getTraceGroup(req: AuthRequest, res: Response) {
       parentTraceId: trace.parentTraceId ?? undefined,
       functionName: trace.functionName,
       message: trace.message,
+      stage: trace.stage ?? undefined,
+      snapshot: parseTraceSnapshot(trace.snapshot),
       durationMs: trace.durationMs,
       botId: trace.botId ?? undefined,
       botName: trace.bot?.name ?? undefined,
@@ -681,25 +763,8 @@ export async function exportTraces(req: AuthRequest, res: Response) {
       })
     }
 
-    const { levels, modules, traceId: traceIdFilter, functionName, botId, startDate, endDate, search } = validation.data
     const userId = req.userId!
-    const where: any = { userId }
-
-    const expandedTraceLevels = expandRequestedTraceLevels(levels)
-    if (expandedTraceLevels) where.level = { in: expandedTraceLevels }
-    const expandedTraceModules = expandRequestedModules(modules)
-    if (expandedTraceModules) where.module = { in: expandedTraceModules }
-    if (traceIdFilter) where.traceId = traceIdFilter
-    if (functionName) where.functionName = { contains: functionName }
-    if (botId) where.botId = botId
-    if (startDate) where.timestamp = { ...where.timestamp, gte: new Date(startDate) }
-    if (endDate) where.timestamp = { ...where.timestamp, lte: new Date(endDate) }
-    if (search) {
-      where.OR = [
-        { message: { contains: search } },
-        { functionName: { contains: search } },
-      ]
-    }
+    const where = buildTraceWhere(validation.data, userId)
 
     const traces = await prisma.trace.findMany({
       where,
@@ -713,6 +778,8 @@ export async function exportTraces(req: AuthRequest, res: Response) {
       'traceId',
       'functionName',
       'message',
+      'stage',
+      'snapshot',
       'durationMs',
       'botId',
       'currentPair',
@@ -730,6 +797,8 @@ export async function exportTraces(req: AuthRequest, res: Response) {
         trace.traceId,
         `"${trace.functionName.replace(/"/g, '""')}"`,
         `"${trace.message.replace(/"/g, '""')}"`,
+        trace.stage || '',
+        trace.snapshot ? `"${trace.snapshot.replace(/"/g, '""')}"` : '',
         trace.durationMs,
         trace.botId || '',
         trace.currentPair || '',
@@ -750,6 +819,48 @@ export async function exportTraces(req: AuthRequest, res: Response) {
   } catch (error) {
     logger.error('Erro ao exportar traces:', error)
     endTrace('exportTraces', { errorFlag: true })
+    return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
+  }
+}
+
+export async function exportTracesForAnalysis(req: AuthRequest, res: Response) {
+  startTrace(req.userId!, 'exportTracesForAnalysis', 'logs')
+
+  try {
+    const validation = traceFiltersSchema.safeParse(req.query)
+    if (!validation.success) {
+      endTrace('exportTracesForAnalysis')
+      return res.status(400).json({
+        success: false,
+        error: validation.error.errors.map((entry) => entry.message).join(', '),
+      })
+    }
+
+    const userId = req.userId!
+    const where = buildTraceWhere(validation.data, userId)
+    const traces = await prisma.trace.findMany({
+      where,
+      orderBy: { timestamp: 'asc' },
+      include: {
+        bot: {
+          select: { name: true },
+        },
+      },
+    })
+
+    const payload = buildTraceAnalysisExportPayload({
+      filters: validation.data,
+      traces,
+    })
+
+    endTrace('exportTracesForAnalysis')
+    return res.json({
+      success: true,
+      data: payload,
+    })
+  } catch (error) {
+    logger.error('Erro ao exportar traces para analise:', error)
+    endTrace('exportTracesForAnalysis', { errorFlag: true })
     return res.status(500).json({ success: false, error: 'Erro interno do servidor' })
   }
 }

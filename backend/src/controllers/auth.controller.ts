@@ -7,6 +7,7 @@ import { prisma } from '../config/database'
 import { AuthRequest } from '../middleware/auth.middleware'
 import { logger } from '../utils/logger'
 import { endTrace, setCurrentTraceUserId, startTrace, trace } from '../utils/tracer'
+import { normalizeUserPreferences, serializeUserPreferences } from '../utils/user-preferences'
 
 const JWT_SECRET = process.env.JWT_SECRET || 'default-secret'
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h'
@@ -36,18 +37,6 @@ const registerSchema = z.object({
     name: z.string().min(1, 'Nome é obrigatório'),
   }),
 })
-
-function safeParsePreferences(preferences: string | null | undefined): Record<string, unknown> {
-  if (!preferences) {
-    return {}
-  }
-
-  try {
-    return JSON.parse(preferences)
-  } catch {
-    return {}
-  }
-}
 
 export async function login(req: Request, res: Response): Promise<Response> {
   startTrace(null, 'login', 'auth')
@@ -186,7 +175,7 @@ export async function getMe(req: AuthRequest, res: Response): Promise<Response> 
       success: true,
       user: {
         ...user,
-        preferences: safeParsePreferences(user.preferences),
+        preferences: normalizeUserPreferences(user.preferences),
       },
     })
   } catch (error) {
@@ -334,7 +323,7 @@ export async function register(req: Request, res: Response): Promise<Response> {
         email,
         passwordHash,
         name,
-        preferences: JSON.stringify({ notificationsEnabled: true, theme: 'dark' }),
+        preferences: serializeUserPreferences({ theme: 'dark' }),
       },
     })
 

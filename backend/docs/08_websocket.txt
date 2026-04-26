@@ -1,275 +1,177 @@
 ================================================================================
-WEBSOCKET - COMUNICAÇÃO EM TEMPO REAL
+SOCKET.IO - COMUNICACAO EM TEMPO REAL
 ================================================================================
 
-1. CONEXÃO
-===============================================================================
+O sistema atual usa Socket.IO sobre o mesmo backend HTTP.
+Nao existe namespace publico documentado em `/ws/*`.
 
-URL: ws://localhost:3001 (ou a mesma porta do backend)
+Conexao padrao:
+- frontend local: `http://localhost:3001`
+- via proxy do frontend em producao/docker: mesma origem do painel
 
-HEADERS:
-  - Precisa autenticar via token
+-------------------------------------------------------------------------------
+1. AUTENTICACAO
+-------------------------------------------------------------------------------
 
-EXEMPLO DE CONEXÃO (Socket.io):
+A conexao exige token JWT.
 
+Exemplo:
+
+```ts
 const socket = io('http://localhost:3001', {
+  transports: ['websocket'],
   auth: { token: localStorage.getItem('auth_token') }
 })
+```
 
+O backend tambem aceita token no header `Authorization: Bearer <token>`.
 
-2. EVENTOS (Cliente -> Servidor)
-===============================================================================
+Se o token faltar ou estiver invalido:
+- a conexao e rejeitada
+- o cliente recebe erro de autenticacao
 
-2.1 subscribe:dashboard
-Descrição: Inscreve para receber atualizações do dashboard
-Payload: {}
+-------------------------------------------------------------------------------
+2. EVENTOS CLIENTE -> SERVIDOR
+-------------------------------------------------------------------------------
 
-2.2 subscribe:orders
-Descrição: Inscreve para receber atualizações de ordens
-Payload: {}
+Assinaturas gerais:
+- `subscribe:dashboard`
+- `subscribe:orders`
+- `subscribe:logs`
+- `subscribe:traces`
 
-2.3 subscribe:logs
-Descrição: Inscreve para receber novos logs
-Payload: {}
+Assinatura de treinamento:
+- `subscribe:training`
+  - payload: `sessionId` em string
 
-2.4 subscribe:traces
-Descrição: Inscreve para receber novos traces
-Payload: {}
+Cancelamento:
+- `unsubscribe:dashboard`
+- `unsubscribe:orders`
+- `unsubscribe:logs`
+- `unsubscribe:traces`
+- `unsubscribe:training`
+  - payload: `sessionId`
 
-2.5 subscribe:training:{sessionId}
-Descrição: Inscreve para receber atualizações de uma sessão de treinamento
-Payload: {}
+-------------------------------------------------------------------------------
+3. EVENTOS SERVIDOR -> CLIENTE
+-------------------------------------------------------------------------------
 
-2.6 unsubscribe:dashboard
-Descrição: Cancela inscrição das atualizações do dashboard
-Payload: {}
+Eventos de conexao:
+- `connected`
+- `error`
 
-2.7 unsubscribe:orders
-Descrição: Cancela inscrição das atualizações de ordens
-Payload: {}
+Eventos operacionais:
+- `dashboard:update`
+- `order:created`
+- `order:updated`
+- `log:new`
+- `trace:new`
+- `training:status`
+- `training:metrics`
+- `training:log`
 
-2.8 unsubscribe:logs
-Descrição: Cancela inscrição dos logs
-Payload: {}
+-------------------------------------------------------------------------------
+4. FORMATOS IMPORTANTES
+-------------------------------------------------------------------------------
 
-2.9 unsubscribe:traces
-Descrição: Cancela inscrição dos traces
-Payload: {}
+### 4.1 connected
 
-2.10 unsubscribe:training:{sessionId}
-Descrição: Cancela inscrição da sessão de treinamento
-Payload: {}
+```json
+{
+  "message": "connected",
+  "userId": "user_123"
+}
+```
 
+### 4.2 dashboard:update
 
-3. EVENTOS (Servidor -> Cliente)
-===============================================================================
+Hoje esse evento funciona como gatilho de sincronizacao, nao como snapshot completo.
 
-3.1 dashboard:update
-Descrição: Atualização dos dados do dashboard
-Frequência: A cada 5-10 segundos
+```json
+{
+  "scope": "portfolio",
+  "reason": "order_executed",
+  "updatedAt": "2026-04-26T10:00:00.000Z",
+  "botId": "bot1"
+}
+```
+
+`scope`:
+- `portfolio`
+- `bots`
+
+Uso no frontend:
+- invalidar/refetch das queries relacionadas
+
+### 4.3 order:created / order:updated
+
 Payload:
-{
-  "totalBalance": { ... },
-  "currenciesBalance": [ ... ],
-  "botsStatus": [ ... ]
-}
+- objeto de ordem/transacao relevante para a tela de transacoes e para o dashboard
 
-3.2 order:created
-Descrição: Nova ordem criada
-Payload: Transaction (objeto completo)
+### 4.4 log:new / trace:new
 
-3.3 order:updated
-Descrição: Ordem atualizada (status mudou)
-Payload: { "id": "tx_123", "status": "executed" }
-
-3.4 log:new
-Descrição: Novo log gerado
-Payload: Log (objeto completo)
-
-3.5 trace:new
-Descrição: Novo trace gerado
-Payload: Trace (objeto completo)
-
-3.6 training:metrics
-Descrição: Novas métricas de treinamento
-Frequência: A cada época
 Payload:
-{
-  "sessionId": "session_123",
-  "metrics": {
-    "epoch": 42,
-    "trainLoss": 0.0123,
-    "valLoss": 0.0134,
-    "learningRate": 0.001,
-    "duration": 50400
-  }
-}
+- entrada normalizada de log ou trace
 
-3.7 training:log
-Descrição: Novo log de treinamento
-Payload:
-{
-  "sessionId": "session_123",
-  "log": {
-    "timestamp": "2024-01-15T10:35:00Z",
-    "level": "INFO",
-    "message": "Epoca 42 concluida"
-  }
-}
+Observacao:
+- `subscribe:logs` inscreve tanto nos logs do proprio usuario quanto nos logs de sistema liberados para a UI
 
-3.8 training:status
-Descrição: Mudança de status do treinamento
-Payload:
-{
-  "sessionId": "session_123",
-  "status": "completed"
-}
+### 4.5 training:status / training:metrics / training:log
 
-3.9 connected
-Descrição: Conexão estabelecida
-Payload: { "message": "connected" }
+Payloads:
 
-3.10 error
-Descrição: Erro na conexão ou subscrição
-Payload: { "error": "Mensagem de erro" }
+```json
+{ "sessionId": "session_1", "status": "running" }
+```
 
+```json
+{ "sessionId": "session_1", "metrics": { "epoch": 10, "trainLoss": 0.02 } }
+```
 
-3.11 PADRÃO DE ENVELOPE DE EVENTOS
-===============================================================================
+```json
+{ "sessionId": "session_1", "log": { "level": "INFO", "message": "checkpoint salvo" } }
+```
 
-Diretriz recomendada para evolução do contrato:
+-------------------------------------------------------------------------------
+5. FLUXO RECOMENDADO NO FRONTEND
+-------------------------------------------------------------------------------
 
-{
-  "eventName": "order:created",
-  "eventVersion": 1,
-  "entityId": "tx_123",
-  "userId": "user_001",
-  "timestamp": "2026-04-11T10:30:00Z",
-  "correlationId": "corr_abc123",
-  "idempotencyKey": "idem_order_tx_123_v1",
-  "payload": {
-    "...": "conteudo especifico do evento"
-  }
-}
+1. abrir conexao com token
+2. escutar `connected`
+3. emitir:
+   - `subscribe:dashboard`
+   - `subscribe:orders`
+   - `subscribe:logs`
+   - `subscribe:traces`
+4. quando entrar em uma tela de treino, emitir `subscribe:training` com `sessionId`
+5. usar os eventos para sincronizar React Query e atualizar a interface
+6. ao sair, cancelar inscricoes especificas ou fechar o socket
 
-Campos:
-- eventName: nome lógico do evento
-- eventVersion: versão do payload para evolução sem quebra
-- entityId: id principal do recurso afetado
-- userId: dono do evento
-- timestamp: data/hora exata da emissão
-- correlationId: encadeia requisição, decisão do bot, ordem e logs
-- idempotencyKey: evita processamento duplicado no consumidor
+-------------------------------------------------------------------------------
+6. SALAS INTERNAS USADAS PELO BACKEND
+-------------------------------------------------------------------------------
 
-Regras:
-- Eventos novos da camada bots devem seguir esse envelope
-- Eventos legados podem ser migrados gradualmente
-- Todo evento de decisão, execução, falha e reconciliação deve carregar correlationId
+O backend organiza a distribuicao por salas privadas:
+- `user:{userId}`
+- `user:{userId}:dashboard`
+- `user:{userId}:orders`
+- `user:{userId}:logs`
+- `user:{userId}:traces`
+- `user:{userId}:training:{sessionId}`
+- `system:logs`
 
+Isso garante que:
+- eventos de dashboard, ordens e traces sejam isolados por usuario
+- logs de sistema possam ser propagados para os clientes autorizados que escutam logs
+- treinamento seja filtrado por sessao e por dono
 
-4. FLUXO TÍPICO (Frontend)
-===============================================================================
+-------------------------------------------------------------------------------
+7. OBSERVACOES DE MANUTENCAO
+-------------------------------------------------------------------------------
 
-1. Conectar ao WebSocket:
-   socket = io(WS_URL, { auth: { token } })
-
-2. Inscrever para eventos necessarios:
-   socket.emit('subscribe:dashboard')
-   socket.emit('subscribe:orders')
-   socket.emit('subscribe:logs')
-   socket.emit('subscribe:traces')
-
-3. Receber atualizacoes:
-   socket.on('dashboard:update', (data) => {
-     atualizarDashboard(data)
-   })
-
-   socket.on('order:created', (order) => {
-     adicionarOrdemNaLista(order)
-   })
-
-   socket.on('log:new', (log) => {
-     adicionarLogNoTerminal(log)
-   })
-
-4. Ao trocar de tela ou sair, cancelar inscricoes:
-   socket.emit('unsubscribe:dashboard')
-   socket.emit('unsubscribe:orders')
-   socket.emit('unsubscribe:logs')
-   socket.emit('unsubscribe:traces')
-
-5. Ao desconectar:
-   socket.disconnect()
-
-
-5. EXEMPLO DE IMPLEMENTACAO (Frontend)
-===============================================================================
-
-Hook useWebSocket em TypeScript:
-
-import { useEffect, useState } from 'react'
-import { io, Socket } from 'socket.io-client'
-
-export function useWebSocket() {
-  const [socket, setSocket] = useState<Socket | null>(null)
-  const [isConnected, setIsConnected] = useState(false)
-
-  useEffect(() => {
-    const token = localStorage.getItem('auth_token')
-    const newSocket = io('http://localhost:3001', {
-      auth: { token }
-    })
-
-    newSocket.on('connect', () => {
-      console.log('WebSocket connected')
-      setIsConnected(true)
-      // Inscrever para eventos
-      newSocket.emit('subscribe:dashboard')
-      newSocket.emit('subscribe:orders')
-      newSocket.emit('subscribe:logs')
-      newSocket.emit('subscribe:traces')
-    })
-
-    newSocket.on('disconnect', () => {
-      console.log('WebSocket disconnected')
-      setIsConnected(false)
-    })
-
-    setSocket(newSocket)
-
-    return () => {
-      newSocket.disconnect()
-    }
-  }, [])
-
-  return { socket, isConnected }
-}
-
-
-6. TABELA DE REFERENCIA RAPIDA
-===============================================================================
-
-| EVENTO (Cliente)              | DESCRICAO                              |
-|-------------------------------|----------------------------------------|
-| subscribe:dashboard           | Receber atualizacoes do dashboard      |
-| subscribe:orders              | Receber atualizacoes de ordens         |
-| subscribe:logs                | Receber novos logs                     |
-| subscribe:traces              | Receber novos traces                   |
-| subscribe:training:{id}       | Receber atualizacoes de treinamento    |
-| unsubscribe:*                 | Cancelar inscricao                      |
-
-| EVENTO (Servidor)             | DESCRICAO                              |
-|-------------------------------|----------------------------------------|
-| dashboard:update              | Dados do dashboard atualizados         |
-| order:created                 | Nova ordem criada                      |
-| order:updated                 | Ordem atualizada                       |
-| log:new                       | Novo log gerado                        |
-| trace:new                     | Novo trace gerado                      |
-| training:metrics              | Novas metricas de treinamento          |
-| training:log                  | Novo log de treinamento                |
-| training:status               | Status do treinamento mudou            |
-| connected                     | Conexao estabelecida                   |
-| error                         | Erro ocorrido                          |
+- o contrato realtime atual e Socket.IO, nao WebSocket bruto com `/ws/dashboard`
+- `subscribe:training` recebe `sessionId` como payload; nao existe evento nomeado `subscribe:training:{id}`
+- o frontend atual usa os eventos como gatilho de sincronizacao, nao como unica fonte de dados
 
 ================================================================================
 FIM DO ARQUIVO 08_websocket.txt

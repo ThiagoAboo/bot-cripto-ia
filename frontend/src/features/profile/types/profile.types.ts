@@ -3,7 +3,6 @@ export interface Profile {
     name: string
     email: string
     preferences: {
-      notificationsEnabled: boolean
       theme: 'dark' | 'light'
     }
     createdAt: string
@@ -15,8 +14,7 @@ export interface Profile {
     email: string
   }
   
-  export interface UpdatePreferencesRequest {
-    notificationsEnabled: boolean
+export interface UpdatePreferencesRequest {
     theme: 'dark' | 'light'
   }
   

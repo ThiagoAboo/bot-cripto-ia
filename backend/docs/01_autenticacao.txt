@@ -1,5 +1,5 @@
 ================================================================================
-TELA: AUTENTICAÇÃO (Login + Troca de Senha)
+TELA: AUTENTICACAO (Login + Troca de Senha)
 ================================================================================
 
 -------------------------------------------------------------------------------
@@ -7,21 +7,21 @@ TELA: AUTENTICAÇÃO (Login + Troca de Senha)
 -------------------------------------------------------------------------------
 
 URL: /login
-Método: GET (carregar página) + POST (autenticar)
+Metodo: GET (carregar pagina) + POST (autenticar)
 
 -------------------------------------------------------------------------------
 1.1 API: POST /api/auth/login
 -------------------------------------------------------------------------------
 
-Descrição: Autentica o usuário e retorna token JWT
+Descricao: Autentica o usuario e retorna token JWT
 
 HEADERS:
   Content-Type: application/json
 
 REQUEST BODY:
 {
-  "email": "string (email válido)",
-  "password": "string (mínimo 6 caracteres)"
+  "email": "string (email valido)",
+  "password": "string (minimo 6 caracteres)"
 }
 
 RESPONSE (200 - Sucesso):
@@ -35,32 +35,32 @@ RESPONSE (200 - Sucesso):
   }
 }
 
-RESPONSE (401 - Não autorizado):
+RESPONSE (401 - Nao autorizado):
 {
   "success": false,
-  "error": "Email ou senha inválidos"
+  "error": "Email ou senha invalidos"
 }
 
 TABELAS ENVOLVIDAS:
 - User (leitura)
 
 CAMPOS NA TABELA User:
-- email (para buscar usuário)
+- email (para buscar usuario)
 - passwordHash (para validar senha com bcrypt)
 - id, name (para retornar ao frontend)
 
 FLUXO:
-1. Buscar usuário por email no banco
+1. Buscar usuario por email no banco
 2. Comparar senha informada com passwordHash (bcrypt.compare)
 3. Gerar token JWT com payload { userId, email }
 4. Atualizar campo lastLogin com data/hora atual
-5. Retornar token e dados do usuário
+5. Retornar token e dados do usuario
 
 -------------------------------------------------------------------------------
 1.2 API: GET /api/auth/me
 -------------------------------------------------------------------------------
 
-Descrição: Retorna dados do usuário logado (valida token)
+Descricao: Retorna dados do usuario logado (valida token)
 
 HEADERS:
   Authorization: Bearer {token}
@@ -71,14 +71,17 @@ RESPONSE (200 - Sucesso):
   "user": {
     "id": "cm5x123...",
     "email": "admin@botcrypto.com",
-    "name": "Administrador"
+    "name": "Administrador",
+    "preferences": {
+      "theme": "dark"
+    }
   }
 }
 
-RESPONSE (401 - Token inválido):
+RESPONSE (401 - Token invalido):
 {
   "success": false,
-  "error": "Token inválido ou expirado"
+  "error": "Token invalido ou expirado"
 }
 
 TABELAS ENVOLVIDAS:
@@ -86,14 +89,14 @@ TABELAS ENVOLVIDAS:
 
 FLUXO:
 1. Validar token JWT recebido
-2. Buscar usuário pelo ID do token
-3. Retornar dados do usuário
+2. Buscar usuario pelo ID do token
+3. Retornar dados do usuario
 
 -------------------------------------------------------------------------------
 1.3 API: POST /api/auth/logout
 -------------------------------------------------------------------------------
 
-Descrição: Realiza logout (frontend apenas remove token)
+Descricao: Realiza logout (frontend apenas remove token)
 
 HEADERS:
   Authorization: Bearer {token}
@@ -103,19 +106,19 @@ RESPONSE (200 - Sucesso):
   "success": true
 }
 
-OBSERVAÇÃO: Backend é stateless, apenas valida token. Frontend remove o token do localStorage.
+OBSERVACAO: Backend e stateless, apenas valida token. Frontend remove o token do localStorage.
 
 -------------------------------------------------------------------------------
 2. TROCA DE SENHA (Tela Perfil)
 -------------------------------------------------------------------------------
 
-URL: /perfil (seção Segurança)
+URL: /perfil (secao Seguranca)
 
 -------------------------------------------------------------------------------
 2.1 API: PUT /api/auth/change-password
 -------------------------------------------------------------------------------
 
-Descrição: Altera a senha do usuário logado
+Descricao: Altera a senha do usuario logado
 
 HEADERS:
   Authorization: Bearer {token}
@@ -124,7 +127,7 @@ HEADERS:
 REQUEST BODY:
 {
   "currentPassword": "string (senha atual)",
-  "newPassword": "string (mínimo 8 caracteres)",
+  "newPassword": "string (minimo 8 caracteres)",
   "confirmPassword": "string (deve ser igual a newPassword)"
 }
 
@@ -134,10 +137,10 @@ RESPONSE (200 - Sucesso):
   "message": "Senha alterada com sucesso"
 }
 
-RESPONSE (400 - Validação):
+RESPONSE (400 - Validacao):
 {
   "success": false,
-  "error": "Nova senha deve ter no mínimo 8 caracteres"
+  "error": "Nova senha deve ter no minimo 8 caracteres"
 }
 
 RESPONSE (401 - Senha atual incorreta):
@@ -147,16 +150,16 @@ RESPONSE (401 - Senha atual incorreta):
 }
 
 TABELAS ENVOLVIDAS:
-- User (atualização)
+- User (atualizacao)
 
 CAMPOS ATUALIZADOS:
 - passwordHash (novo hash gerado com bcrypt)
 
 FLUXO:
 1. Validar token JWT
-2. Buscar usuário pelo ID
+2. Buscar usuario pelo ID
 3. Validar currentPassword com bcrypt.compare
-4. Validar newPassword (mínimo 8 caracteres)
+4. Validar newPassword (minimo 8 caracteres)
 5. Validar newPassword === confirmPassword
 6. Gerar novo hash com bcrypt.hash (salt 10)
 7. Atualizar passwordHash no banco
@@ -168,16 +171,16 @@ FLUXO:
 
 TABELA: User
 
-CAMPO               | TIPO        | OBRIGATÓRIO | DESCRIÇÃO
+CAMPO               | TIPO        | OBRIGATORIO | DESCRICAO
 --------------------|-------------|-------------|----------------------------------
-id                  | String      | Sim         | UUID (cuid) - Chave primária
-email               | String      | Sim         | Email único para login
+id                  | String      | Sim         | UUID (cuid) - Chave primaria
+email               | String      | Sim         | Email unico para login
 passwordHash        | String      | Sim         | Hash da senha (bcrypt)
-name                | String      | Sim         | Nome do usuário
-preferences         | JSON        | Não         | Preferências (tema, notificações)
-lastLogin           | DateTime    | Não         | Último login
-createdAt           | DateTime    | Sim         | Data de criação
-updatedAt           | DateTime    | Sim         | Data da última atualização
+name                | String      | Sim         | Nome do usuario
+preferences         | JSON        | Nao         | Preferencias visuais (tema)
+lastLogin           | DateTime    | Nao         | Ultimo login
+createdAt           | DateTime    | Sim         | Data de criacao
+updatedAt           | DateTime    | Sim         | Data da ultima atualizacao
 
 EXEMPLO DE REGISTRO:
 {
@@ -185,21 +188,21 @@ EXEMPLO DE REGISTRO:
   "email": "admin@botcrypto.com",
   "passwordHash": "$2a$10$N9qo8uLOickgx2ZMRZoMy.Mr/.cYqF7N",
   "name": "Administrador",
-  "preferences": "{\"notificationsEnabled\":true,\"theme\":\"dark\"}",
+  "preferences": "{\"theme\":\"dark\"}",
   "lastLogin": "2024-01-15T10:30:00Z",
   "createdAt": "2024-01-01T00:00:00Z",
   "updatedAt": "2024-01-15T10:30:00Z"
 }
 
 -------------------------------------------------------------------------------
-4. SEQUÊNCIA DE CHAMADAS (Frontend)
+4. SEQUENCIA DE CHAMADAS (Frontend)
 -------------------------------------------------------------------------------
 
 1. Ao carregar o app:
    - Verificar se existe token no localStorage
    - Se existir, chamar GET /api/auth/me para validar
-   - Se válido, manter usuário logado
-   - Se inválido, redirecionar para /login
+   - Se valido, manter usuario logado
+   - Se invalido, redirecionar para /login
 
 2. Ao fazer login:
    - Chamar POST /api/auth/login com email/senha

@@ -525,7 +525,7 @@ Atualização: Frontend faz polling a cada 5 segundos
    - Chama Binance API para executar ordem
    - Atualiza saldos (Balance.available e Balance.total)
    - Registra transação (Transaction)
-   - Emite WebSocket order:created
+   - Emite evento Socket.IO `order:created`
 3. Retorna para Frontend:
    - Objeto Transaction
 
@@ -535,7 +535,8 @@ Tempo de resposta esperado: < 2000ms
 
 1. Frontend chama POST /api/training/sessions
 2. Backend:
-   - Inicia job em background (Bull/Redis)
+   - Registra a sessão no backend
+   - O worker de treinamento processa a fila operacional sem dependência obrigatória de Bull/Redis
    - Coleta dados da Binance API:
      - Período: config.trainingPeriod
      - Pares: config.includedPairs

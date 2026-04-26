@@ -452,6 +452,8 @@ def emit_runtime_trace(
     recommended_action: Optional[str] = None,
     confidence: Optional[float] = None,
     error_flag: bool = False,
+    stage: Optional[str] = None,
+    snapshot: Optional[Dict[str, Any]] = None,
 ) -> None:
     best_effort_post_json(backend, "/api/traces", {
         "level": level,
@@ -459,6 +461,8 @@ def emit_runtime_trace(
         "traceId": trace_id,
         "functionName": function_name,
         "message": message,
+        "stage": stage,
+        "snapshot": snapshot,
         "durationMs": max(0.0, duration_ms),
         "botId": bot.get("id"),
         "currentPair": current_pair,
@@ -1421,7 +1425,20 @@ def collect_analysis_context(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], D
 def run_analysis(payload: Dict[str, Any]) -> Dict[str, Any]:
     backend, bot, _, _, analysis, _ = collect_analysis_context(payload)
     trace_id = str(uuid.uuid4())
-    emit_runtime_trace(backend, trace_id, "run_analysis", "Starting python bot analysis", 0.0, bot)
+    emit_runtime_trace(
+        backend,
+        trace_id,
+        "run_analysis",
+        "Starting python bot analysis",
+        0.0,
+        bot,
+        stage="python_analysis_started",
+        snapshot={
+            "timeframe": analysis.get("timeframe"),
+            "analyzedPairs": analysis.get("analyzedPairs"),
+            "summary": analysis.get("summary"),
+        },
+    )
 
     best_opportunity = analysis.get("bestOpportunity") or {}
     emit_runtime_log(
@@ -1446,6 +1463,15 @@ def run_analysis(payload: Dict[str, Any]) -> Dict[str, Any]:
         current_pair=best_opportunity.get("pair"),
         recommended_action=best_opportunity.get("action"),
         confidence=to_float(best_opportunity.get("confidence")) if best_opportunity else None,
+        stage="python_analysis_completed",
+        snapshot={
+            "timeframe": analysis.get("timeframe"),
+            "primarySpecialist": analysis.get("primarySpecialist"),
+            "summary": analysis.get("summary"),
+            "bestOpportunity": best_opportunity,
+            "topOpportunities": (analysis.get("opportunities") or [])[:5],
+            "socialSignals": (analysis.get("socialSignals") or [])[:5],
+        },
     )
 
     return analysis
@@ -1983,7 +2009,23 @@ def run_cycle(payload: Dict[str, Any]) -> Dict[str, Any]:
     backend, bot, _, market_snapshots, analysis, _ = collect_analysis_context(payload)
     cycle = payload.get("cycle") or {}
     trace_id = str(uuid.uuid4())
-    emit_runtime_trace(backend, trace_id, "run_cycle", "Starting python bot cycle planning", 0.0, bot)
+    emit_runtime_trace(
+        backend,
+        trace_id,
+        "run_cycle",
+        "Starting python bot cycle planning",
+        0.0,
+        bot,
+        stage="python_cycle_started",
+        snapshot={
+            "executionMode": cycle.get("executionMode"),
+            "minimumConfidence": cycle.get("minimumConfidence"),
+            "portfolio": cycle.get("portfolio"),
+            "riskConfig": cycle.get("riskConfig"),
+            "openPositions": (cycle.get("openPositions") or [])[:8],
+            "recentExecutions": (cycle.get("recentExecutions") or [])[:8],
+        },
+    )
 
     open_positions = resolve_open_positions(cycle)
     risk_override = select_risk_override(open_positions, cycle.get("riskConfig") or {})
@@ -2000,7 +2042,21 @@ def run_cycle(payload: Dict[str, Any]) -> Dict[str, Any]:
             "plan": plan,
             "plans": [],
         }
-        emit_runtime_trace(backend, trace_id, "run_cycle", "Python bot cycle skipped by circuit breaker", 1.0, bot, error_flag=False)
+        emit_runtime_trace(
+            backend,
+            trace_id,
+            "run_cycle",
+            "Python bot cycle skipped by circuit breaker",
+            1.0,
+            bot,
+            error_flag=False,
+            stage="python_cycle_circuit_breaker",
+            snapshot={
+                "reason": skip_reason,
+                "executionMode": cycle.get("executionMode"),
+                "portfolio": cycle.get("portfolio"),
+            },
+        )
         return result
 
     if not candidate_opportunities:
@@ -2078,6 +2134,16 @@ def run_cycle(payload: Dict[str, Any]) -> Dict[str, Any]:
         current_pair=pair,
         recommended_action=action,
         confidence=confidence if confidence is not None else None,
+        stage="python_cycle_completed",
+        snapshot={
+            "executionMode": cycle.get("executionMode"),
+            "summary": analysis.get("summary"),
+            "plan": plan,
+            "plans": plans[:5],
+            "candidatePairs": [snapshot.get("pair") for snapshot in market_snapshots[:10]],
+            "openPositionsCount": len(open_positions),
+            "riskOverride": risk_override,
+        },
     )
 
     return {

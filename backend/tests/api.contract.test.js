@@ -32,7 +32,9 @@ const pairDiscoveryRunnerService = require('../src/services/pair-discovery-runne
 const configurationBackupService = require('../src/services/configuration-backup.service')
 const botRunnerService = require('../src/services/bot-runner.service')
 const botDecisionService = require('../src/services/bot-decision.service')
+const botHomologationReportService = require('../src/services/bot-homologation-report.service')
 const botGovernancePolicyService = require('../src/services/bot-governance-policy.service')
+const botRegistryService = require('../src/services/bot-registry.service')
 const pythonBotRuntimeService = require('../src/services/python-bot-runtime.service')
 const pythonMlEngineService = require('../src/services/python-ml-engine.service')
 const trainingWorkerService = require('../src/services/training-worker.service')
@@ -1838,12 +1840,20 @@ describe('API contract tests', () => {
           timestamp: new Date('2026-04-13T09:00:01.000Z'),
           level: 'TRACE',
           module: 'bot',
-          traceId: 'trace-1',
-          functionName: 'runBotCycle',
-          message: 'Executando ciclo',
-          durationMs: 120,
-          currentPair: 'BTC/USDT',
-          recommendedAction: 'buy',
+        traceId: 'trace-1',
+        functionName: 'runBotCycle',
+        message: 'Executando ciclo',
+        stage: 'execution_result',
+        snapshot: JSON.stringify({
+          executionMode: 'paper',
+          selectedPlan: {
+            pair: 'BTC/USDT',
+            action: 'buy',
+          },
+        }),
+        durationMs: 120,
+        currentPair: 'BTC/USDT',
+        recommendedAction: 'buy',
           confidence: 78,
           errorFlag: false,
         },
@@ -1910,6 +1920,195 @@ describe('API contract tests', () => {
       assert.equal(body.data.paperReadiness.evaluatedSignals, 1)
       assert.equal(body.data.decisions[0].executionStatus, 'executed')
       assert.equal(body.data.traces[0].functionName, 'runBotCycle')
+      assert.equal(body.data.traces[0].stage, 'execution_result')
+      assert.equal(body.data.traces[0].snapshot.executionMode, 'paper')
+      assert.equal(body.data.traces[0].snapshot.selectedPlan.pair, 'BTC/USDT')
+    })
+
+    it('GET /api/dashboard/bots/:id/homologation-report returns the consolidated homologation contract', async () => {
+      stubAuthenticatedUser()
+      stub(botRegistryService, 'getBotInstanceById', async () => ({
+        id: 'bot-hml-1',
+        userId: TEST_USER.id,
+        name: 'RSI Alpha',
+      }))
+      stub(botHomologationReportService, 'buildBotHomologationReport', async () => ({
+        botId: 'bot-hml-1',
+        generatedAt: '2026-04-14T12:00:00.000Z',
+        period: {
+          startDate: '2026-04-01T00:00:00.000Z',
+          endDate: '2026-04-14T23:59:59.999Z',
+          days: 14,
+        },
+        verdict: {
+          status: 'attention',
+          approvedForFullAuto: false,
+          summary: 'Janela ainda em acompanhamento antes da liberacao total.',
+          blockers: ['Aguardar mais evidencias em paper.'],
+        },
+        decisionSummary: {
+          total: 12,
+          pending: 2,
+          evaluated: 10,
+          correct: 7,
+          accuracyPercent: 70,
+          averageConfidence: 73,
+          averageMarketReturnPercent: 0.2,
+          averageStrategyReturnPercent: 0.31,
+          bestEdgePercent: 1.1,
+          worstEdgePercent: -0.5,
+        },
+        paperReadiness: {
+          readyForFullAuto: false,
+          evaluatedSignals: 10,
+          pendingSignals: 2,
+          minimumEvaluatedSignals: 30,
+          accuracyPercent: 70,
+          minimumAccuracyPercent: 55,
+          averageStrategyReturnPercent: 0.31,
+          minimumAverageStrategyReturnPercent: 0.15,
+          averageEdgePercent: 0.07,
+          minimumAverageEdgePercent: 0,
+          maxObservedDrawdownPercent: 5.4,
+          maximumDrawdownPercent: 12,
+          maxConsecutiveIncorrect: 2,
+          currentConsecutiveIncorrect: 0,
+          maximumConsecutiveIncorrect: 5,
+          blockers: ['Ainda nao atingiu a amostra minima.'],
+        },
+        fullAutoEligibility: {
+          eligible: false,
+          blockers: ['Champion ainda nao homologado.'],
+          championArtifactId: 'artifact-1',
+          championModelVersion: 'v1',
+          championModelUrl: '/models/rsi-alpha-v1.json',
+          botModelSynchronized: true,
+        },
+        executionSummary: {
+          totalTransactions: 4,
+          executedTransactions: 3,
+          submittedTransactions: 1,
+          profitableSells: 2,
+          losingSells: 1,
+          averageProfitPercent: 0.42,
+          totalProfitBrl: 184.75,
+          averageSlippagePercent: 0.12,
+          averageSimulatedLatencyMs: 380,
+          averageSimulatedFillPercent: 0.94,
+          executionStatusBreakdown: { executed: 3, submitted: 1 },
+          executionModeBreakdown: { paper: 4 },
+        },
+        operationalSummary: {
+          totalTraces: 18,
+          errorTraces: 1,
+          snapshotCoveragePercent: 77.78,
+          averageTraceDurationMs: 132.4,
+          slowestFunctions: [
+            {
+              functionName: 'applyBotRuntimeCycleResult',
+              module: 'bot',
+              count: 4,
+              averageDurationMs: 180.2,
+              maxDurationMs: 320.1,
+              errorCount: 1,
+            },
+          ],
+          stageBreakdown: [
+            {
+              stage: 'runtime_plan_received',
+              count: 4,
+              errorCount: 0,
+              averageDurationMs: 118.4,
+            },
+          ],
+        },
+        pairBreakdown: [
+          {
+            pair: 'BTC/USDT',
+            decisions: 8,
+            evaluatedDecisions: 6,
+            executedTransactions: 2,
+            errorTraces: 1,
+            accuracyPercent: 66.67,
+            averageStrategyReturnPercent: 0.28,
+            averageEdgePercent: 0.06,
+            profitBrl: 120.5,
+          },
+        ],
+        findings: [
+          {
+            severity: 'warning',
+            title: 'Amostra insuficiente',
+            detail: 'O bot ainda precisa acumular mais sinais avaliados em paper.',
+          },
+        ],
+        recentIncidents: [
+          {
+            id: 'trace-incident-1',
+            timestamp: '2026-04-14T12:00:00.000Z',
+            level: 'WARN',
+            module: 'bot',
+            traceId: 'trace-root-1',
+            functionName: 'applyBotRuntimeCycleResult',
+            message: 'Execucao adiada por ordem ainda aberta na corretora',
+            stage: 'execution_blocked_open_order',
+            durationMs: 245,
+            currentPair: 'BTC/USDT',
+            recommendedAction: 'buy',
+            confidence: 73,
+            errorFlag: true,
+            snapshot: {
+              blockingOrder: {
+                pair: 'BTC/USDT',
+                status: 'pending',
+              },
+            },
+          },
+        ],
+        recentSnapshots: [
+          {
+            id: 'trace-snapshot-1',
+            timestamp: '2026-04-14T12:00:00.000Z',
+            level: 'INFO',
+            module: 'bot',
+            traceId: 'trace-root-2',
+            functionName: 'applyBotRuntimeCycleResult',
+            message: 'Plano do runtime Python recebido para aplicacao',
+            stage: 'runtime_plan_received',
+            durationMs: 140,
+            currentPair: 'BTC/USDT',
+            recommendedAction: 'buy',
+            confidence: 74,
+            errorFlag: false,
+            snapshot: {
+              selectedPlan: {
+                pair: 'BTC/USDT',
+                action: 'buy',
+              },
+            },
+          },
+        ],
+        balanceTimeline: [
+          {
+            timestamp: '2026-04-14T12:00:00.000Z',
+            totalBrl: 10250.45,
+          },
+        ],
+      }))
+
+      const { response, body } = await requestJson('/api/dashboard/bots/bot-hml-1/homologation-report?startDate=2026-04-01T00:00:00.000Z&endDate=2026-04-14T23:59:59.999Z', {
+        headers: authHeaders(),
+      })
+
+      assert.equal(response.status, 200)
+      assert.equal(body.success, true)
+      assert.equal(body.data.botId, 'bot-hml-1')
+      assert.equal(body.data.verdict.status, 'attention')
+      assert.equal(body.data.executionSummary.executedTransactions, 3)
+      assert.equal(body.data.operationalSummary.snapshotCoveragePercent, 77.78)
+      assert.equal(body.data.recentSnapshots[0].stage, 'runtime_plan_received')
+      assert.equal(body.data.recentSnapshots[0].snapshot.selectedPlan.pair, 'BTC/USDT')
+      assert.equal(body.data.findings[0].severity, 'warning')
     })
 
     it('GET /api/dashboard/bots/:id/models returns the governance catalog for the selected bot', async () => {
@@ -5455,6 +5654,11 @@ describe('API contract tests', () => {
         parentTraceId: null,
         functionName: 'createTrainingSession',
         message: 'Sessão criada',
+        stage: 'training_started',
+        snapshot: JSON.stringify({
+          fold: 1,
+          datasetSize: 320,
+        }),
         durationMs: 42,
         botId: 'bot1',
         currentPair: 'BTC/USDT',
@@ -5479,6 +5683,54 @@ describe('API contract tests', () => {
     assert.equal(body.data.items[0].level, 'TRACE')
     assert.equal(body.data.items[0].botName, 'Scalper V2')
     assert.equal(body.data.items[0].recommendedAction, 'buy')
+    assert.equal(body.data.items[0].stage, 'training_started')
+    assert.equal(body.data.items[0].snapshot.fold, 1)
+  })
+
+  it('GET /api/traces/export-analysis returns the enriched analysis pack for copy/paste workflows', async () => {
+    stubAuthenticatedUser()
+    stub(prisma.trace, 'findMany', async () => [
+      {
+        id: 'trace-1',
+        timestamp: new Date('2026-04-11T12:00:00.000Z'),
+        level: 'WARN',
+        module: 'bot',
+        traceId: 'trace-root',
+        parentTraceId: null,
+        functionName: 'applyBotRuntimeCycleResult',
+        message: 'Execucao adiada por ordem ainda aberta na corretora',
+        stage: 'execution_blocked_open_order',
+        snapshot: JSON.stringify({
+          blockingOrder: {
+            pair: 'BTC/USDT',
+            status: 'pending',
+          },
+        }),
+        durationMs: 142,
+        botId: 'bot1',
+        currentPair: 'BTC/USDT',
+        recommendedAction: 'buy',
+        confidence: 82,
+        errorFlag: true,
+        bot: {
+          name: 'Scalper V2',
+        },
+      },
+    ])
+
+    const { response, body } = await requestJson('/api/traces/export-analysis?botId=bot1&stage=execution_blocked_open_order', {
+      headers: authHeaders(),
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(body.success, true)
+    assert.equal(body.data.exportType, 'trace_analysis_pack_v1')
+    assert.equal(body.data.summary.totalTraces, 1)
+    assert.equal(body.data.summary.errorTraces, 1)
+    assert.equal(body.data.filters.botId, 'bot1')
+    assert.equal(body.data.filters.stage, 'execution_blocked_open_order')
+    assert.equal(body.data.traces[0].level, 'WARN')
+    assert.equal(body.data.traces[0].snapshot.blockingOrder.pair, 'BTC/USDT')
   })
 
   it('rejects websocket connections without an auth token', async () => {

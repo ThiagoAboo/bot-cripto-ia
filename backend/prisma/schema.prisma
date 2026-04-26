@@ -363,6 +363,8 @@ model Trace {
   parentTraceId     String?
   functionName      String
   message           String
+  stage             String?
+  snapshot          String?
   durationMs        Float
   botId             String?
   bot               Bot?     @relation(fields: [botId], references: [id])
@@ -377,4 +379,5 @@ model Trace {
   @@index([traceId])
   @@index([timestamp])
   @@index([userId])
+  @@index([stage])
 }

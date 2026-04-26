@@ -6,6 +6,7 @@ import { prisma } from '../config/database'
 import { AuthRequest } from '../middleware/auth.middleware'
 import { logger } from '../utils/logger'
 import { endTrace, startTrace, trace } from '../utils/tracer'
+import { normalizeUserPreferences, serializeUserPreferences } from '../utils/user-preferences'
 
 const updateProfileSchema = z.object({
   name: z.string().min(1, 'Nome é obrigatório'),
@@ -13,7 +14,6 @@ const updateProfileSchema = z.object({
 })
 
 const preferencesSchema = z.object({
-  notificationsEnabled: z.boolean(),
   theme: z.enum(['dark', 'light']),
 })
 
@@ -45,7 +45,7 @@ export async function getProfile(req: AuthRequest, res: Response): Promise<Respo
         id: user.id,
         name: user.name,
         email: user.email,
-        preferences: JSON.parse(user.preferences || '{"notificationsEnabled":true,"theme":"dark"}'),
+        preferences: normalizeUserPreferences(user.preferences),
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
       },
@@ -164,7 +164,7 @@ export async function updatePreferences(req: AuthRequest, res: Response): Promis
     await prisma.user.update({
       where: { id: userId },
       data: {
-        preferences: JSON.stringify(validation.data),
+        preferences: serializeUserPreferences(validation.data),
         updatedAt: new Date(),
       },
     })

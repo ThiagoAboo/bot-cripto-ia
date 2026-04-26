@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useWebSocket } from '../../app/providers/WebSocketProvider'
-import { useLogs, useTraces, useExportLogs, useExportTraces, useAvailableBots } from './hooks/useLogs'
+import { useLogs, useTraces, useExportLogs, useExportTraces, useAvailableBots, useCopyTracesForAnalysis } from './hooks/useLogs'
 import { LOGS_QUERY_KEYS } from './hooks/useLogs'
 import { ModeSelector } from './components/ModeSelector'
 import { LogFilters } from './components/LogFilters'
@@ -14,9 +14,11 @@ import type { ViewMode, LogFilters as LogFiltersType, TraceFilters } from './typ
 interface TraceAdvancedFiltersProps {
   filters: TraceFilters
   onFiltersChange: (filters: TraceFilters) => void
+  onCopyForAnalysis: () => void
+  isCopyingForAnalysis: boolean
 }
 
-function TraceAdvancedFilters({ filters, onFiltersChange }: TraceAdvancedFiltersProps) {
+function TraceAdvancedFilters({ filters, onFiltersChange, onCopyForAnalysis, isCopyingForAnalysis }: TraceAdvancedFiltersProps) {
   const { data: bots } = useAvailableBots()
   const [showAdvanced, setShowAdvanced] = useState(false)
 
@@ -35,10 +37,20 @@ function TraceAdvancedFilters({ filters, onFiltersChange }: TraceAdvancedFilters
   return (
     <Card className="mt-4">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Filter className="w-4 h-4 text-primary-500" />
-          Filtros de Trace
-        </CardTitle>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <CardTitle className="flex items-center gap-2">
+            <Filter className="w-4 h-4 text-primary-500" />
+            Filtros de Trace
+          </CardTitle>
+          <button
+            type="button"
+            onClick={onCopyForAnalysis}
+            disabled={isCopyingForAnalysis}
+            className="rounded-lg border border-dark-300 bg-dark-300 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-dark-400 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isCopyingForAnalysis ? 'Gerando pacote...' : 'Copiar para análise'}
+          </button>
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-2">
@@ -88,7 +100,7 @@ function TraceAdvancedFilters({ filters, onFiltersChange }: TraceAdvancedFilters
         </button>
 
         {showAdvanced && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-dark-300">
+          <div className="grid grid-cols-1 gap-4 pt-2 border-t border-dark-300 md:grid-cols-3">
             <div className="space-y-2">
               <label className="text-sm font-medium text-gray-300">Função/Método</label>
               <input
@@ -106,6 +118,16 @@ function TraceAdvancedFilters({ filters, onFiltersChange }: TraceAdvancedFilters
                 value={filters.traceId || ''}
                 onChange={(e) => onFiltersChange({ ...filters, traceId: e.target.value || undefined, offset: 0 })}
                 placeholder="Ex: trace_001"
+                className="w-full rounded-lg border border-dark-300 bg-dark-300 px-3 py-2 text-sm text-white"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-300">Stage</label>
+              <input
+                type="text"
+                value={filters.stage || ''}
+                onChange={(e) => onFiltersChange({ ...filters, stage: e.target.value || undefined, offset: 0 })}
+                placeholder="Ex: execution_result"
                 className="w-full rounded-lg border border-dark-300 bg-dark-300 px-3 py-2 text-sm text-white"
               />
             </div>
@@ -138,6 +160,7 @@ export default function LogsPage() {
   const { data: tracesData, isLoading: isLoadingTraces } = useTraces(traceFilters)
   const { mutate: exportLogs, isPending: isExportingLogs } = useExportLogs()
   const { mutate: exportTraces, isPending: isExportingTraces } = useExportTraces()
+  const { mutate: copyTracesForAnalysis, isPending: isCopyingTracesForAnalysis } = useCopyTracesForAnalysis()
 
   useEffect(() => {
     setLogOffset(0)
@@ -226,7 +249,12 @@ export default function LogsPage() {
             onExport={handleExport}
             isExporting={isExporting}
           />
-          <TraceAdvancedFilters filters={traceFilters} onFiltersChange={setTraceFilters} />
+          <TraceAdvancedFilters
+            filters={traceFilters}
+            onFiltersChange={setTraceFilters}
+            onCopyForAnalysis={() => copyTracesForAnalysis(traceFilters)}
+            isCopyingForAnalysis={isCopyingTracesForAnalysis}
+          />
         </>
       )}
 

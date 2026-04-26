@@ -1,736 +1,235 @@
 ================================================================================
-TELA: CONFIGURAÇÕES
+TELA: CONFIGURACOES
 ================================================================================
 
--------------------------------------------------------------------------------
-1. API: GET /api/configurations
--------------------------------------------------------------------------------
-
-Descrição: Carrega todas as configurações do usuário
-
-HEADERS:
-  Authorization: Bearer {token}
-
-RESPONSE (200 - Sucesso):
-{
-  "success": true,
-  "data": {
-    "exchangeApiKeys": {
-      "exchange": "binance",
-      "apiKey": "xxxxx",
-      "secretKey": "xxxxx"
-    },
-    "botParameters": {
-      "riskManagement": {
-        "stopLossPercent": 5.0,
-        "takeProfitPercent": 10.0,
-        "leverage": 1,
-        "maxTradeAmount": 1000,
-        "maxTradeAmountUnit": "USDT"
-      },
-      "allowedPairs": ["BTC/USDT", "ETH/USDT", "SOL/USDT"],
-      "fees": {
-        "useBnbForFees": true,
-        "discountUsdtPercent": 0.075,
-        "discountBnbPercent": 0.075,
-        "minBnbBalance": 0.01,
-        "reserveBnbForFeesEnabled": true
-      },
-      "pairDiscovery": {
-        "autoDiscoveryEnabled": false,
-        "autoAddToAllowedPairs": false,
-        "autoRemoveFromAllowedPairs": false,
-        "reviewRequired": true,
-        "sources": {
-          "reddit": true,
-          "rss": false,
-          "x": false,
-          "telegram": false
-        },
-        "minSocialScore": 65,
-        "minMentions": 25,
-        "maxPairs": 20,
-        "excludedAssets": ["BNB", "USDC"]
-      },
-      "advanced": {
-        "mode": "spot",
-        "orderType": "market",
-        "slippagePercent": 0.5
-      },
-      "strategies": [
-        {
-          "id": "strategy_scalper",
-          "name": "Scalper V2",
-          "strategyType": "scalper",
-          "isActive": true,
-          "parameters": {
-            "timeframe": "1m",
-            "maxSpread": 0.1,
-            "minVolume": 100000
-          }
-        }
-      ]
-    }
-  }
-}
-
-TABELAS ENVOLVIDAS:
-- Configuration
-
-CAMPOS NA TABELA Configuration (mapeamento):
-
-| Campo Frontend                    | Campo Banco                     |
-|-----------------------------------|---------------------------------|
-| exchangeApiKeys.exchange          | exchange                        |
-| exchangeApiKeys.apiKey            | apiKey                          |
-| exchangeApiKeys.secretKey         | secretKey                       |
-| botParameters.riskManagement.stopLossPercent | stopLossPercent       |
-| botParameters.riskManagement.takeProfitPercent | takeProfitPercent     |
-| botParameters.riskManagement.leverage | leverage                      |
-| botParameters.riskManagement.maxTradeAmount | maxTradeAmount          |
-| botParameters.riskManagement.maxTradeAmountUnit | maxTradeAmountUnit    |
-| botParameters.allowedPairs        | allowedPairs (JSON)             |
-| botParameters.fees.useBnbForFees  | regra derivada das políticas de fee |
-| botParameters.fees.discountUsdtPercent | discountUsdtPercent         |
-| botParameters.fees.discountBnbPercent | discountBnbPercent          |
-| botParameters.fees.minBnbBalance  | minBnbBalance                   |
-| botParameters.fees.reserveBnbForFeesEnabled | regra derivada da reserva BNB |
-| botParameters.pairDiscovery       | extensão futura da configuração |
-| botParameters.advanced.mode       | mode                            |
-| botParameters.advanced.orderType  | orderType                       |
-| botParameters.advanced.slippagePercent | slippagePercent             |
-| botParameters.strategies          | strategies (JSON)               |
+Este arquivo cobre o contrato atual de configuracoes do usuario e as rotas que
+alimentam a tela `/configuracoes`.
 
 -------------------------------------------------------------------------------
-2. API: PUT /api/configurations
+1. GET /api/configurations
 -------------------------------------------------------------------------------
 
-Descrição: Salva todas as configurações do usuário
+Descricao:
+- carrega toda a configuracao operacional do usuario
 
-HEADERS:
-  Authorization: Bearer {token}
-  Content-Type: application/json
+Estrutura principal do retorno:
+- `exchangeApiKeys`
+- `botParameters.riskManagement`
+- `botParameters.allowedPairs`
+- `botParameters.fees`
+- `botParameters.pairDiscovery`
+- `botParameters.advanced`
+- `botParameters.strategies`
 
-REQUEST BODY: (mesma estrutura do GET)
-
-RESPONSE (200 - Sucesso):
-{
-  "success": true
-}
-
-RESPONSE (400 - Validação):
-{
-  "success": false,
-  "error": "stopLossPercent deve ser entre 0 e 50"
-}
-
-TABELAS ENVOLVIDAS:
-- Configuration (cria ou atualiza)
-
-CAMPOS ATUALIZADOS:
-- Todos os campos da tabela Configuration
-
-VALIDAÇÕES:
-
-| Campo                    | Validação                                    |
-|--------------------------|----------------------------------------------|
-| stopLossPercent          | 0 < valor ≤ 50                               |
-| takeProfitPercent        | 0 < valor ≤ 100                              |
-| leverage                 | valor fixo = 1 no runtime spot atual         |
-| maxTradeAmount           | > 0                                          |
-| discountUsdtPercent      | 0 ≤ valor ≤ 1                                |
-| discountBnbPercent       | 0 ≤ valor ≤ 1                                |
-| minBnbBalance            | ≥ 0                                          |
-| useBnbForFees            | boolean                                      |
-| reserveBnbForFeesEnabled | boolean                                      |
-| slippagePercent          | 0 ≤ valor ≤ 5                                |
-| allowedPairs             | Array de strings (pares válidos)             |
-| pairDiscovery            | Estrutura válida com fontes, limites e exclusões |
-| strategies               | Array com estrutura válida                   |
-
-REGRAS FUNCIONAIS ADICIONAIS:
-- Se useBnbForFees = true, o sistema deve priorizar taxa em BNB quando houver saldo disponível
-- minBnbBalance representa o saldo mínimo de BNB que deve permanecer livre para pagamento de taxas
-- reserveBnbForFeesEnabled = true impede consumo do saldo reservado de BNB por trades comuns
-- pairDiscovery controla descoberta automática de moedas a partir de sinais externos/sociais
-- autoAddToAllowedPairs/autoRemoveFromAllowedPairs só podem atuar dentro de maxPairs e respeitando excludedAssets
+Regras refletidas no retorno:
+- exchange operacional atual: `binance`
+- modo operacional atual: `spot`
+- `leverage` permanece em `1`
+- valores legados fora dessas regras devem ser normalizados na leitura
 
 -------------------------------------------------------------------------------
-3. API: POST /api/configurations/test-connection
+2. PUT /api/configurations
 -------------------------------------------------------------------------------
 
-Descrição: Testa as credenciais da API com a exchange
+Descricao:
+- salva a configuracao consolidada do usuario
 
-HEADERS:
-  Authorization: Bearer {token}
-  Content-Type: application/json
+Validacoes importantes:
+- `exchange` precisa ser `binance`
+- `mode` precisa ser `spot`
+- `leverage` precisa ser `1`
+- `slippagePercent` precisa estar dentro do limite aceito
+- `allowedPairs` deve ser lista valida de pares
+- `strategies` deve manter a estrutura esperada
 
-REQUEST BODY:
-{
-  "exchange": "binance",
-  "apiKey": "xxxxx",
-  "secretKey": "xxxxx"
-}
-
-RESPONSE (200 - Sucesso):
-{
-  "success": true,
-  "message": "Conexão estabelecida com sucesso!"
-}
-
-RESPONSE (401 - Falha):
-{
-  "success": false,
-  "message": "Chaves de API inválidas"
-}
-
-TABELAS ENVOLVIDAS:
-- Nenhuma (apenas comunicação com exchange)
-
-FLUXO:
-1. Tentar fazer uma chamada autenticada à exchange (ex: GET /api/v3/account)
-2. Se sucesso, retornar true
-3. Se falha, retornar false com mensagem de erro
+Observacao:
+- o runtime atual nao deve expor operacao futures nem leverage real
 
 -------------------------------------------------------------------------------
-4. API: GET /api/exchange/pairs
+3. POST /api/configurations/test-connection
+4. POST /api/configurations/test
 -------------------------------------------------------------------------------
 
-Descrição: Retorna lista de pares disponíveis na exchange
+Descricao:
+- testam credenciais da exchange
 
-HEADERS:
-  Authorization: Bearer {token}
-
-QUERY PARAMS:
-  quoteAsset: string (opcional, padrão: 'USDT')
-
-RESPONSE (200 - Sucesso):
-{
-  "success": true,
-  "data": [
-    "BTC/USDT",
-    "ETH/USDT",
-    "SOL/USDT",
-    "BNB/USDT",
-    "XRP/USDT",
-    "DOGE/USDT",
-    "ADA/USDT",
-    "AVAX/USDT",
-    "DOT/USDT",
-    "LINK/USDT"
-  ]
-}
-
-TABELAS ENVOLVIDAS:
-- Nenhuma (dados da exchange)
-
-OBSERVAÇÃO: Pode ser cacheadado por 5 minutos para evitar chamadas excessivas
+Uso:
+- validacao da integracao Binance na tela de configuracoes
 
 -------------------------------------------------------------------------------
-4.1 PARÂMETROS FUTUROS: DESCOBERTA AUTOMÁTICA DE PARES
+5. GET /api/configurations/exchange-pairs
+6. GET /api/exchange/pairs
 -------------------------------------------------------------------------------
 
-Estrutura prevista dentro de botParameters.pairDiscovery:
+Descricao:
+- retornam a lista de pares disponiveis para selecao
 
-{
-  "autoDiscoveryEnabled": true,
-  "autoAddToAllowedPairs": true,
-  "autoRemoveFromAllowedPairs": false,
-  "reviewRequired": true,
-  "autoSyncIntervalMinutes": 60,
-  "sources": {
-    "reddit": true,
-    "rss": true,
-    "x": false,
-    "telegram": false
-  },
-  "minSocialScore": 70,
-  "minMentions": 30,
-  "maxPairs": 25,
-  "excludedAssets": ["BNB", "USDC"],
-  "managedPairs": ["SOL/USDT", "LINK/USDT"],
-  "lastSyncAt": "2026-04-13T12:00:00.000Z",
-  "lastAppliedAt": "2026-04-13T12:00:00.000Z",
-  "lastSyncStatus": "applied",
-  "lastSyncSummary": "1 adições e 0 remoções sugeridas"
-}
-
-Objetivo:
-- Permitir inclusão automatizada de novas moedas fortes na lista allowedPairs
-- Permitir remoção automatizada de moedas que percam tração, quando habilitado
+Uso:
+- montagem da lista `allowedPairs`
+- formularios de configuracao e transacoes
 
 -------------------------------------------------------------------------------
-4.2 API: GET /api/configurations/backup/export
+7. GET /api/social/latest
 -------------------------------------------------------------------------------
 
-Descrição: Exporta um snapshot operacional completo do usuário autenticado
+Descricao:
+- retorna o radar social consolidado para pair discovery
 
-HEADERS:
-  Authorization: Bearer {token}
-
-RESPONSE (200 - Sucesso):
-{
-  "success": true,
-  "data": {
-    "snapshotType": "bot-crypto-ia-user-backup",
-    "formatVersion": 1,
-    "exportedAt": "2026-04-15T11:00:00.000Z",
-    "userProfile": {
-      "sourceUserId": "user_xpto",
-      "name": "Administrador",
-      "preferences": "{}",
-      "lastLogin": null
-    },
-    "summary": {
-      "recordCounts": {
-        "balances": 2,
-        "transactions": 25,
-        "trainingSessions": 4,
-        "botDecisions": 120
-      },
-      "fileCounts": {
-        "modelFiles": 3,
-        "uploadFiles": 1,
-        "checkpointFiles": 2
-      }
-    },
-    "data": {
-      "...": "snapshot completo dos registros do usuário"
-    },
-    "files": {
-      "...": "arquivos serializados em base64"
-    }
-  }
-}
-
-TABELAS ENVOLVIDAS:
-- User (nome/preferências)
-- Configuration
-- Balance
-- BalanceHistory
-- Bot
-- Transaction
-- TrainingSession
-- BotModelArtifact
-- BotDecision
-- Log
-- Trace
-
-ARQUIVOS ENVOLVIDOS:
-- storage/models/*
-- storage/uploads/*
-- storage/checkpoints/*
-
-OBJETIVO:
-- Permitir restauração fiel do ambiente do usuário
-- Gerar snapshot transportável entre máquinas/instâncias
-- Preservar treinamento, paper, histórico e artefatos
+Uso:
+- suporte ao preview e a curadoria automatica
 
 -------------------------------------------------------------------------------
-4.3 API: POST /api/configurations/backup/restore
+8. POST /api/configurations/pair-discovery/preview
 -------------------------------------------------------------------------------
 
-Descrição: Restaura um snapshot operacional completo para o usuário autenticado
+Descricao:
+- gera um preview de curadoria sem persistir alteracoes
 
-HEADERS:
-  Authorization: Bearer {token}
-  Content-Type: application/json
-
-REQUEST BODY:
-{
-  "snapshot": {
-    "snapshotType": "bot-crypto-ia-user-backup",
-    "formatVersion": 1,
-    "...": "conteúdo exportado anteriormente"
-  },
-  "preserveCurrentApiKeys": true
-}
-
-RESPONSE (200 - Sucesso):
-{
-  "success": true,
-  "data": {
-    "restoredAt": "2026-04-15T11:30:00.000Z",
-    "summary": "Backup restaurado com sucesso. 57 registros recriados. 5 arquivos restaurados. As chaves externas atuais foram preservadas.",
-    "restoredRecords": {
-      "balances": 2,
-      "transactions": 25,
-      "trainingSessions": 4
-    },
-    "restoredFiles": {
-      "modelFiles": 3,
-      "uploadFiles": 1,
-      "checkpointFiles": 2
-    },
-    "preservedApiKeys": true,
-    "configuration": {
-      "...": "configuração já refrescada no contrato do frontend"
-    }
-  }
-}
-
-REGRAS FUNCIONAIS:
-- A restauração limpa os dados atuais do usuário antes de recriar o snapshot
-- As chaves externas atuais podem ser preservadas com preserveCurrentApiKeys = true
-- IDs internos são remapeados para evitar colisão entre ambientes
-- Referências entre bots, sessões, decisões, transações e artefatos são reescritas
-- Arquivos de treino, upload e checkpoint são restaurados junto com os registros
-- templateId dos bots é resolvido preferencialmente por BotTemplate.slug
-
-OBSERVAÇÃO OPERACIONAL:
-- O backend aceita payload JSON maior para suportar snapshots com artefatos serializados
-- O frontend deve preferir esse fluxo para backup antes de resets destrutivos
-- Manter governança via reviewRequired, limites e lista de exclusão
-- managedPairs identifica quais pares foram adicionados pela curadoria automática e podem ser removidos depois sem afetar pares manuais
-- autoSyncIntervalMinutes define a frequência mínima da curadoria automática em minutos
-- lastSyncAt/lastAppliedAt/lastSyncStatus/lastSyncSummary registram o último ciclo automático executado
+Campos relevantes:
+- `generatedAt`
+- `autoDiscoveryEnabled`
+- `reviewRequired`
+- `sourcesUsed`
+- `items`
+- `nextAllowedPairs`
+- `managedPairs`
 
 -------------------------------------------------------------------------------
-5. API: POST /api/configurations/reset
+9. POST /api/configurations/pair-discovery/apply
 -------------------------------------------------------------------------------
 
-Descrição: Executa limpezas seletivas para restaurar grupos de dados sem reinstalar o sistema
+Descricao:
+- aplica a curadoria no `allowedPairs` e atualiza `managedPairs`
 
-HEADERS:
-  Authorization: Bearer {token}
-  Content-Type: application/json
-
-REQUEST BODY:
-{
-  "scope": "paper"
-}
-
-SCOPES SUPORTADOS:
-- `logs_traces`: remove logs e traces
-- `cash`: remove saldos e histórico de saldo
-- `transactions`: remove ordens e transações
-- `trainings`: remove sessões de treinamento e artefatos associados
-- `paper`: remove ordens, decisões, saldos e histórico de saldo; depois recria o capital inicial do paper
-- `bots_runtime`: limpa decisões avaliadas e reseta o estado operacional dos bots do usuário
-- `all_except_configurations`: remove todos os dados operacionais do usuário, mantendo a tabela `Configuration`
-- `configurations`: volta as configurações ao padrão inicial, preservando `exchange`, `apiKey` e `secretKey`
-- `all`: combina todas as limpezas, restaura configurações padrão e recria o paper inicial
-
-RESPONSE (200 - Sucesso):
-{
-  "success": true,
-  "data": {
-    "scope": "paper",
-    "label": "Limpar paper",
-    "summary": "Limpar paper executado com sucesso. 28 registros afetados. Paper restaurado com 10000 USDT.",
-    "executedAt": "2026-04-14T14:00:00.000Z",
-    "deletedRecords": {
-      "logs": 0,
-      "traces": 0,
-      "balances": 3,
-      "balanceHistory": 12,
-      "transactions": 9,
-      "trainingSessions": 0,
-      "botDecisions": 4,
-      "botsRuntimeResets": 2,
-      "userBots": 0,
-      "configurations": 0
-    },
-    "deletedFiles": {
-      "modelFiles": 0,
-      "uploadFiles": 0,
-      "checkpointFiles": 0
-    },
-    "preservedApiKeys": false,
-    "paperBalance": {
-      "currency": "USDT",
-      "amount": 10000
-    },
-    "configuration": {
-      "...": "mesmo contrato do GET /api/configurations"
-    }
-  }
-}
-
-REGRAS FUNCIONAIS:
-- `configurations` e `all` preservam as chaves externas e a exchange suportada (`binance`)
-- `trainings`, `all_except_configurations` e `all` também removem artefatos de disco:
-  - modelos salvos
-  - uploads CSV
-  - checkpoints
-- `paper` recria a carteira local usando:
-  - `PAPER_RESET_CURRENCY` (padrão `USDT`)
-  - `PAPER_RESET_INITIAL_CAPITAL` (padrão `10000`)
-- `all_except_configurations` remove bots materializados do usuário, mas mantém o catálogo global seedado (`BotTemplate` e bots globais)
-- `bots_runtime` é uma limpeza extra pertinente para zerar o placar de `paperReadiness` sem apagar modelos ou configurações
-- `transactions` é uma limpeza extra pertinente para reiniciar apenas o histórico operacional
+Regras:
+- se `reviewRequired = true` e nao houver confirmacao explicita, a API pode devolver que ainda precisa de confirmacao
+- pares manuais nao devem ser removidos automaticamente
+- `BNB` nao deve ser removido quando a reserva para taxas estiver habilitada
 
 -------------------------------------------------------------------------------
-4.2 API: GET /api/social/latest
+10. POST /api/configurations/pair-discovery/run
 -------------------------------------------------------------------------------
 
-Descrição: Retorna o radar social consolidado para os ativos detectados nas fontes habilitadas
+Descricao:
+- executa imediatamente um ciclo da curadoria automatica usando a configuracao persistida
 
-HEADERS:
-  Authorization: Bearer {token}
-
-RESPONSE (200 - Sucesso):
-{
-  "success": true,
-  "data": [
-    {
-      "symbol": "BTC",
-      "pair": "BTC/USDT",
-      "score": 84,
-      "mentions": 12,
-      "sentiment": "bullish",
-      "sources": ["reddit", "rss"]
-    }
-  ]
-}
-
-REGRAS:
-- Usa as fontes habilitadas em pairDiscovery.sources
-- Pode devolver lista vazia quando nenhuma fonte estiver configurada ou quando não houver menções válidas
-- O ranking usa score social, número de menções e variedade de fontes
+Regras:
+- quando `reviewRequired = true`, o backend pode atualizar preview e metadados sem alterar `allowedPairs`
+- quando `reviewRequired = false`, o backend pode aplicar o resultado automaticamente
 
 -------------------------------------------------------------------------------
-4.3 API: POST /api/configurations/pair-discovery/preview
+11. GET /api/configurations/backup/export
 -------------------------------------------------------------------------------
 
-Descrição: Gera um preview da próxima curadoria automática sem persistir mudanças
+Descricao:
+- exporta um snapshot operacional completo do usuario
 
-HEADERS:
-  Authorization: Bearer {token}
-  Content-Type: application/json
+Inclui:
+- perfil
+- configuracoes
+- saldos e historico
+- bots
+- sessoes de treino
+- decisoes
+- artefatos e arquivos
 
-REQUEST BODY:
-{
-  "allowedPairs": ["BTC/USDT", "ETH/USDT"],
-  "fees": {
-    "useBnbForFees": true,
-    "discountUsdtPercent": 0.075,
-    "discountBnbPercent": 0.075,
-    "minBnbBalance": 0.01,
-    "reserveBnbForFeesEnabled": true
-  },
-  "pairDiscovery": {
-    "autoDiscoveryEnabled": true,
-    "autoAddToAllowedPairs": true,
-    "autoRemoveFromAllowedPairs": true,
-    "reviewRequired": true,
-    "autoSyncIntervalMinutes": 30,
-    "sources": { "reddit": true, "rss": true, "x": false, "telegram": false },
-    "minSocialScore": 70,
-    "minMentions": 30,
-    "maxPairs": 20,
-    "excludedAssets": ["BNB"],
-    "managedPairs": ["SOL/USDT"]
-  }
-}
-
-RESPONSE (200 - Sucesso):
-{
-  "success": true,
-  "data": {
-    "generatedAt": "2026-04-11T14:00:00.000Z",
-    "autoDiscoveryEnabled": true,
-    "reviewRequired": true,
-    "sourcesUsed": ["reddit", "rss"],
-    "items": [
-      {
-        "action": "add",
-        "pair": "LINK/USDT",
-        "score": 81,
-        "mentions": 14,
-        "reason": "Score 81 com 14 menções e suporte em reddit, rss"
-      }
-    ],
-    "nextAllowedPairs": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "LINK/USDT"],
-    "managedPairs": ["SOL/USDT", "LINK/USDT"]
-  }
-}
+Uso:
+- backup transportavel entre ambientes
 
 -------------------------------------------------------------------------------
-4.4 API: POST /api/configurations/pair-discovery/run
+12. POST /api/configurations/backup/restore
 -------------------------------------------------------------------------------
 
-Descrição: Executa imediatamente um ciclo da curadoria automática usando a configuração persistida do usuário
+Descricao:
+- restaura um snapshot operacional para o usuario autenticado
 
-HEADERS:
-  Authorization: Bearer {token}
-
-RESPONSE (200 - Sucesso):
-{
-  "success": true,
-  "data": {
-    "userId": "user-1",
-    "applied": true,
-    "previewRequired": false,
-    "status": "applied",
-    "summary": "1 adições e 0 remoções sugeridas",
-    "preview": {
-      "nextAllowedPairs": ["BTC/USDT", "DOGE/USDT"],
-      "managedPairs": ["DOGE/USDT"]
-    },
-    "runner": {
-      "running": true,
-      "lastCycleAt": "2026-04-13T12:00:00.000Z"
-    },
-    "configuration": {
-      "botParameters": {
-        "pairDiscovery": {
-          "lastSyncStatus": "applied"
-        }
-      }
-    }
-  }
-}
-
-REGRAS:
-- Quando reviewRequired = true, o ciclo atualiza preview/metadata mas não altera allowedPairs automaticamente
-- Quando reviewRequired = false, o ciclo pode aplicar allowedPairs e managedPairs diretamente
-- O runner automático executa o mesmo fluxo de forma periódica quando autoDiscoveryEnabled = true
+Regras:
+- pode preservar as chaves atuais da exchange
+- remapeia IDs internos
+- recria arquivos associados a treino, upload e modelos
 
 -------------------------------------------------------------------------------
-4.4 API: POST /api/configurations/pair-discovery/apply
+13. POST /api/configurations/reset
 -------------------------------------------------------------------------------
 
-Descrição: Aplica a curadoria automática no allowedPairs e atualiza managedPairs
+Descricao:
+- executa resets seletivos sem reinstalar o sistema
 
-REGRAS:
-- Se reviewRequired = true e force != true, retorna apenas requiresConfirmation = true
-- Quando aplicado, salva nextAllowedPairs em allowedPairs
-- managedPairs persiste apenas pares adicionados automaticamente
-- Nunca remove pares manuais
-- Nunca remove BNB quando a reserva para taxas estiver habilitada
+Escopos suportados:
+- `logs_traces`
+- `cash`
+- `transactions`
+- `trainings`
+- `paper`
+- `bots_runtime`
+- `all_except_configurations`
+- `configurations`
+- `all`
 
--------------------------------------------------------------------------------
-5. MODELO DE DADOS - Configuration
--------------------------------------------------------------------------------
-
-TABELA: Configuration
-
-CAMPO                    | TIPO    | OBRIG | DESCRIÇÃO
--------------------------|---------|-------|----------------------------------
-id                       | String  | Sim   | UUID - Chave primária
-userId                   | String  | Sim   | FK para User (unique)
-exchange                 | String  | Sim   | binance
-apiKey                   | String  | Sim   | Chave da API (criptografada)
-secretKey                | String  | Sim   | Chave secreta (criptografada)
-stopLossPercent          | Float   | Sim   | Stop-loss percentual
-takeProfitPercent        | Float   | Sim   | Take-profit percentual
-leverage                 | Int     | Sim   | Alavancagem fixa em 1 no runtime spot atual
-maxTradeAmount           | Float   | Sim   | Valor máximo por trade
-maxTradeAmountUnit       | String  | Sim   | USDT ou percent
-allowedPairs             | String  | Sim   | JSON array
-discountUsdtPercent      | Float   | Sim   | Desconto USDT
-discountBnbPercent       | Float   | Sim   | Desconto BNB
-minBnbBalance            | Float   | Sim   | Saldo mínimo BNB
-mode                     | String  | Sim   | spot
-orderType                | String  | Sim   | market/limit
-slippagePercent          | Float   | Sim   | Slippage percentual
-strategies               | String  | Sim   | JSON array
-createdAt                | DateTime| Sim   | Data criação
-updatedAt                | DateTime| Sim   | Data atualização
-
-OBSERVAÇÃO DE EVOLUÇÃO:
-- pairDiscovery pode evoluir para campo persistido dedicado
-- fees e allowedPairs já existem persistidos; pairDiscovery representa a política futura de curadoria automática
-- o runtime atual é `spot-only` e `binance-only`; valores legados diferentes de
-  `spot`, `binance` ou `leverage = 1` devem ser normalizados na leitura e
-  rejeitados em novas gravações
-
-EXEMPLO DE REGISTRO:
-
-{
-  "id": "cfg_001",
-  "userId": "user_001",
-  "exchange": "binance",
-  "apiKey": "encrypted_key_here",
-  "secretKey": "encrypted_secret_here",
-  "stopLossPercent": 5.0,
-  "takeProfitPercent": 10.0,
-  "leverage": 1,
-  "maxTradeAmount": 1000,
-  "maxTradeAmountUnit": "USDT",
-  "allowedPairs": "[\"BTC/USDT\",\"ETH/USDT\"]",
-  "discountUsdtPercent": 0.075,
-  "discountBnbPercent": 0.075,
-  "minBnbBalance": 0.01,
-  "mode": "spot",
-  "orderType": "market",
-  "slippagePercent": 0.5,
-  "strategies": "[{\"id\":\"strategy_scalper\",\"name\":\"Scalper V2\",\"isActive\":true}]",
-  "createdAt": "2024-01-01T00:00:00Z",
-  "updatedAt": "2024-01-15T10:30:00Z"
-}
+Regras importantes:
+- `paper` recria a carteira local inicial
+- `configurations` e `all` preservam exchange e chaves externas
+- `bots_runtime` zera o placar operacional sem apagar modelos nem configuracoes
 
 -------------------------------------------------------------------------------
-6. ESTRUTURA DO JSON strategies
+14. ESTRUTURA LOGICA DA CONFIGURACAO
 -------------------------------------------------------------------------------
 
-EXEMPLO COMPLETO:
+Blocos principais:
 
-[
-  {
-    "id": "strategy_scalper",
-    "name": "Scalper V2",
-    "strategyType": "scalper",
-    "isActive": true,
-    "parameters": {
-      "timeframe": "1m",
-      "maxSpread": 0.1,
-      "minVolume": 100000,
-      "takeProfitTicks": 5,
-      "stopLossTicks": 3
-    }
-  },
-  {
-    "id": "strategy_momentum",
-    "name": "Momentum Trader",
-    "strategyType": "momentum",
-    "isActive": true,
-    "parameters": {
-      "period": 14,
-      "threshold": 2.5,
-      "rsiPeriod": 14,
-      "rsiOverbought": 70,
-      "rsiOversold": 30
-    }
-  },
-  {
-    "id": "strategy_trend",
-    "name": "Trend Follower",
-    "strategyType": "trend_follower",
-    "isActive": true,
-    "parameters": {
-      "fastEma": 20,
-      "slowEma": 50,
-      "adxPeriod": 14,
-      "adxThreshold": 25
-    }
-  },
-  {
-    "id": "strategy_reversion",
-    "name": "Mean Reversion",
-    "strategyType": "mean_reversion",
-    "isActive": true,
-    "parameters": {
-      "bbPeriod": 20,
-      "bbStdDev": 2,
-      "rsiPeriod": 14,
-      "rsiLower": 30,
-      "rsiUpper": 70
-    }
-  },
-  {
-    "id": "strategy_arbitrage",
-    "name": "Arbitrage Hunter",
-    "strategyType": "arbitrage",
-    "isActive": false,
-    "parameters": {
-      "minSpreadPercent": 0.5,
-      "maxLatencyMs": 100,
-      "minLiquidity": 50000
-    }
-  }
-]
+`exchangeApiKeys`
+- `exchange`
+- `apiKey`
+- `secretKey`
+
+`riskManagement`
+- `stopLossPercent`
+- `takeProfitPercent`
+- `leverage`
+- `maxTradeAmount`
+- `maxTradeAmountUnit`
+
+`fees`
+- `discountUsdtPercent`
+- `discountBnbPercent`
+- `minBnbBalance`
+- regras derivadas para uso e reserva de BNB
+
+`pairDiscovery`
+- `autoDiscoveryEnabled`
+- `autoAddToAllowedPairs`
+- `autoRemoveFromAllowedPairs`
+- `reviewRequired`
+- `autoSyncIntervalMinutes`
+- `sources`
+- `minSocialScore`
+- `minMentions`
+- `maxPairs`
+- `excludedAssets`
+- `managedPairs`
+- `lastSyncAt`
+- `lastAppliedAt`
+- `lastSyncStatus`
+- `lastSyncSummary`
+
+`advanced`
+- `mode`
+- `orderType`
+- `slippagePercent`
+
+`strategies`
+- lista de estrategias com `id`, `name`, `strategyType`, `isActive` e `parameters`
+
+-------------------------------------------------------------------------------
+15. REGRAS DE NEGOCIO RESUMIDAS
+-------------------------------------------------------------------------------
+
+- runtime atual e `spot-only`
+- exchange operacional atual e `binance-only`
+- `leverage` permanece em `1`
+- `allowedPairs` controla o universo que os bots podem analisar
+- `pairDiscovery` pode sugerir ou aplicar mudancas conforme a politica
+- o frontend deve usar backup/restore antes de resets destrutivos quando quiser preservar o ambiente
 
 ================================================================================
 FIM DO ARQUIVO 03_configuracoes.txt

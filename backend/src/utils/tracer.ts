@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid'
+import { randomUUID } from 'node:crypto'
 import { prisma } from '../config/database'
 import { emitTraceNew } from '../services/socket.service'
 import {
@@ -18,6 +18,8 @@ export interface TraceExtra {
   confidence?: number | null
   errorFlag?: boolean
   userId?: string | null
+  stage?: string | null
+  snapshot?: unknown
   [key: string]: unknown
 }
 
@@ -32,8 +34,137 @@ const FRONTEND_TRACE_MODULES = new Set([
   'database',
 ])
 
+const TRACE_SNAPSHOT_MAX_DEPTH = 4
+const TRACE_SNAPSHOT_MAX_KEYS = 24
+const TRACE_SNAPSHOT_MAX_ARRAY_LENGTH = 16
+const TRACE_SNAPSHOT_MAX_STRING_LENGTH = 400
+const TRACE_STAGE_MAX_LENGTH = 80
+
 function isTraceEnabled(): boolean {
   return process.env.TRACE_ENABLED !== 'false'
+}
+
+function truncateString(value: string): string {
+  if (value.length <= TRACE_SNAPSHOT_MAX_STRING_LENGTH) {
+    return value
+  }
+
+  return `${value.slice(0, TRACE_SNAPSHOT_MAX_STRING_LENGTH - 1)}…`
+}
+
+function normalizeTraceSnapshotValue(
+  value: unknown,
+  depth: number,
+  seen: WeakSet<object>,
+): unknown {
+  if (value === null) {
+    return null
+  }
+
+  if (typeof value === 'string') {
+    return truncateString(value)
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? Number(value.toFixed(8)) : null
+  }
+
+  if (typeof value === 'boolean') {
+    return value
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString()
+  }
+
+  if (depth >= TRACE_SNAPSHOT_MAX_DEPTH) {
+    if (Array.isArray(value)) {
+      return {
+        truncated: true,
+        totalItems: value.length,
+      }
+    }
+
+    if (value && typeof value === 'object') {
+      return {
+        truncated: true,
+        totalKeys: Object.keys(value as Record<string, unknown>).length,
+      }
+    }
+
+    return String(value)
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, TRACE_SNAPSHOT_MAX_ARRAY_LENGTH)
+      .map((entry) => normalizeTraceSnapshotValue(entry, depth + 1, seen))
+  }
+
+  if (value && typeof value === 'object') {
+    if (seen.has(value)) {
+      return '[circular]'
+    }
+
+    seen.add(value)
+
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .slice(0, TRACE_SNAPSHOT_MAX_KEYS)
+      .map(([key, entryValue]) => [
+        key,
+        normalizeTraceSnapshotValue(entryValue, depth + 1, seen),
+      ] as const)
+
+    return Object.fromEntries(entries)
+  }
+
+  return String(value)
+}
+
+export function normalizeTraceStage(stage: string | null | undefined): string | null {
+  if (!stage) {
+    return null
+  }
+
+  const normalized = stage.trim().toLowerCase().replace(/\s+/g, '_')
+  return normalized ? normalized.slice(0, TRACE_STAGE_MAX_LENGTH) : null
+}
+
+export function sanitizeTraceSnapshot(snapshot: unknown): unknown | null {
+  if (snapshot === undefined) {
+    return null
+  }
+
+  return normalizeTraceSnapshotValue(snapshot, 0, new WeakSet<object>())
+}
+
+export function serializeTraceSnapshot(snapshot: unknown): string | null {
+  const sanitized = sanitizeTraceSnapshot(snapshot)
+  if (sanitized === null) {
+    return null
+  }
+
+  try {
+    return JSON.stringify(sanitized)
+  } catch {
+    return JSON.stringify({
+      serializationError: true,
+      preview: truncateString(String(snapshot)),
+    })
+  }
+}
+
+export function parseTraceSnapshot(snapshot: string | null | undefined): unknown | undefined {
+  if (!snapshot) {
+    return undefined
+  }
+
+  try {
+    return JSON.parse(snapshot) as unknown
+  } catch {
+    return snapshot
+  }
 }
 
 async function saveTrace(
@@ -80,6 +211,8 @@ async function saveTrace(
         module,
         functionName,
         message,
+        stage: normalizeTraceStage(extra?.stage),
+        snapshot: serializeTraceSnapshot(extra?.snapshot),
         durationMs,
         userId,
         botId: extra?.botId ?? null,
@@ -99,6 +232,8 @@ async function saveTrace(
       parentTraceId: persistedTrace.parentTraceId ?? undefined,
       functionName: persistedTrace.functionName,
       message: persistedTrace.message,
+      stage: persistedTrace.stage ?? undefined,
+      snapshot: parseTraceSnapshot(persistedTrace.snapshot),
       durationMs: persistedTrace.durationMs,
       botId: persistedTrace.botId ?? undefined,
       currentPair: persistedTrace.currentPair ?? undefined,
@@ -125,7 +260,7 @@ export function startTrace(
   const previousContext = getObservabilityContext()
 
   const context: ObservabilityContext = {
-    traceId: uuidv4(),
+    traceId: randomUUID(),
     parentTraceId: previousContext?.traceId ?? null,
     startTime: Date.now(),
     userId: userId ?? previousContext?.userId ?? null,

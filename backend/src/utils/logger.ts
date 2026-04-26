@@ -270,7 +270,7 @@ async function ensureSystemUserId(): Promise<string | null> {
             email: SYSTEM_USER_EMAIL,
             name: SYSTEM_USER_NAME,
             passwordHash: SYSTEM_USER_PASSWORD_HASH,
-            preferences: JSON.stringify({ internal: true, theme: 'dark', notificationsEnabled: false }),
+            preferences: JSON.stringify({ theme: 'dark' }),
           },
           select: { id: true },
         })

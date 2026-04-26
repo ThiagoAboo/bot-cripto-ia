@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const {
   botDetailMock,
   botHistoryMock,
+  botHomologationReportMock,
   botListMock,
   botModelsMock,
   botTemplatesMock,
@@ -329,6 +330,176 @@ const {
       blockers: [],
     },
   },
+  botHomologationReportMock: {
+    botId: 'bot-1',
+    generatedAt: '2026-04-14T12:00:00.000Z',
+    period: {
+      startDate: '2026-04-01T00:00:00.000Z',
+      endDate: '2026-04-14T23:59:59.999Z',
+      days: 14,
+    },
+    verdict: {
+      status: 'attention',
+      approvedForFullAuto: false,
+      summary: 'O bot esta em acompanhamento antes da liberacao operacional.',
+      blockers: ['Aguardar mais evidencias em paper.'],
+    },
+    decisionSummary: {
+      total: 12,
+      pending: 2,
+      evaluated: 10,
+      correct: 7,
+      accuracyPercent: 70,
+      averageConfidence: 73,
+      averageMarketReturnPercent: 0.21,
+      averageStrategyReturnPercent: 0.35,
+      bestEdgePercent: 1.4,
+      worstEdgePercent: -0.6,
+    },
+    paperReadiness: {
+      readyForFullAuto: false,
+      evaluatedSignals: 10,
+      pendingSignals: 2,
+      minimumEvaluatedSignals: 30,
+      accuracyPercent: 70,
+      minimumAccuracyPercent: 55,
+      averageStrategyReturnPercent: 0.35,
+      minimumAverageStrategyReturnPercent: 0.15,
+      averageEdgePercent: 0.08,
+      minimumAverageEdgePercent: 0,
+      maxObservedDrawdownPercent: 5.3,
+      maximumDrawdownPercent: 12,
+      maxConsecutiveIncorrect: 2,
+      currentConsecutiveIncorrect: 0,
+      maximumConsecutiveIncorrect: 5,
+      lastEvaluatedAt: '2026-04-14T12:00:00.000Z',
+      blockers: ['Ainda nao atingiu a amostra minima para full_auto.'],
+    },
+    fullAutoEligibility: {
+      eligible: false,
+      blockers: ['Champion ainda em validacao.'],
+      championArtifactId: 'model-1',
+      championModelVersion: 'v1',
+      championModelUrl: '/models/rsi-alpha-v1.json',
+      botModelSynchronized: true,
+    },
+    executionSummary: {
+      totalTransactions: 4,
+      executedTransactions: 3,
+      submittedTransactions: 1,
+      profitableSells: 2,
+      losingSells: 1,
+      averageProfitPercent: 0.42,
+      totalProfitBrl: 185.5,
+      averageSlippagePercent: 0.12,
+      averageSimulatedLatencyMs: 380,
+      averageSimulatedFillPercent: 0.94,
+      executionStatusBreakdown: {
+        executed: 3,
+        submitted: 1,
+      },
+      executionModeBreakdown: {
+        paper: 4,
+      },
+    },
+    operationalSummary: {
+      totalTraces: 16,
+      errorTraces: 1,
+      snapshotCoveragePercent: 75,
+      averageTraceDurationMs: 124.3,
+      slowestFunctions: [
+        {
+          functionName: 'applyBotRuntimeCycleResult',
+          module: 'bot',
+          count: 4,
+          averageDurationMs: 180.2,
+          maxDurationMs: 320.1,
+          errorCount: 1,
+        },
+      ],
+      stageBreakdown: [
+        {
+          stage: 'runtime_plan_received',
+          count: 4,
+          errorCount: 0,
+          averageDurationMs: 110.4,
+        },
+      ],
+    },
+    pairBreakdown: [
+      {
+        pair: 'BTC/USDT',
+        decisions: 8,
+        evaluatedDecisions: 6,
+        executedTransactions: 2,
+        errorTraces: 1,
+        accuracyPercent: 66.67,
+        averageStrategyReturnPercent: 0.31,
+        averageEdgePercent: 0.09,
+        profitBrl: 124.3,
+      },
+    ],
+    findings: [
+      {
+        severity: 'warning',
+        title: 'Amostra insuficiente',
+        detail: 'O bot ainda precisa acumular mais sinais avaliados em paper.',
+      },
+    ],
+    recentIncidents: [
+      {
+        id: 'trace-incident-1',
+        timestamp: '2026-04-14T12:00:00.000Z',
+        level: 'WARN',
+        module: 'bot',
+        traceId: 'trace-group-1',
+        functionName: 'applyBotRuntimeCycleResult',
+        message: 'Execucao adiada por ordem ainda aberta na corretora',
+        stage: 'execution_blocked_open_order',
+        durationMs: 245,
+        currentPair: 'BTC/USDT',
+        recommendedAction: 'buy',
+        confidence: 73,
+        errorFlag: true,
+        snapshot: {
+          blockingOrder: {
+            pair: 'BTC/USDT',
+            status: 'pending',
+          },
+        },
+      },
+    ],
+    recentSnapshots: [
+      {
+        id: 'trace-snapshot-1',
+        timestamp: '2026-04-14T12:00:00.000Z',
+        level: 'INFO',
+        module: 'bot',
+        traceId: 'trace-group-2',
+        functionName: 'applyBotRuntimeCycleResult',
+        message: 'Plano do runtime Python recebido para aplicacao',
+        stage: 'runtime_plan_received',
+        durationMs: 140,
+        currentPair: 'BTC/USDT',
+        recommendedAction: 'buy',
+        confidence: 74,
+        errorFlag: false,
+        snapshot: {
+          selectedPlan: {
+            status: 'suggested',
+            pair: 'BTC/USDT',
+            action: 'buy',
+          },
+        },
+      },
+    ],
+    balanceTimeline: [
+      {
+        timestamp: '2026-04-14T12:00:00.000Z',
+        totalBrl: 10250.45,
+      },
+    ],
+  },
   archiveBotModelMutateAsync: vi.fn(),
   createBotMutateAsync: vi.fn(),
   deleteBotMutateAsync: vi.fn(),
@@ -375,6 +546,7 @@ vi.mock('./hooks/useBots', () => ({
     list: ['bots', 'list'],
     detail: (botId: string) => ['bots', 'detail', botId],
     history: (botId: string) => ['bots', 'history', botId],
+    homologationReport: (botId: string) => ['bots', 'homologation-report', botId],
     models: (botId: string) => ['bots', 'models', botId],
     templates: ['bots', 'templates'],
     workerStatus: ['bots', 'worker-status'],
@@ -396,6 +568,10 @@ vi.mock('./hooks/useBots', () => ({
   }),
   useBotHistory: () => ({
     data: botHistoryMock,
+    isLoading: false,
+  }),
+  useBotHomologationReport: () => ({
+    data: botHomologationReportMock,
     isLoading: false,
   }),
   useBotModels: () => ({
@@ -460,6 +636,8 @@ describe('BotsPage', () => {
     expect(await screen.findByDisplayValue('RSI Alpha')).toBeInTheDocument()
     expect(screen.getAllByText('RSI Specialist').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Pronto para full_auto').length).toBeGreaterThan(0)
+    expect(screen.getByText('Homologação Assistida')).toBeInTheDocument()
+    expect(screen.getByText('Achados da homologação')).toBeInTheDocument()
 
     fireEvent.change(screen.getByDisplayValue('RSI Alpha'), {
       target: { value: 'RSI Alpha Custom' },
