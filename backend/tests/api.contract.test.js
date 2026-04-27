@@ -1472,6 +1472,58 @@ describe('API contract tests', () => {
       assert.equal(body.data.paperReadiness.minimumEvaluatedSignals, 30)
     })
 
+    it('GET /api/dashboard/bots/:id resolves template-level allowed pairs when the instance does not override them', async () => {
+      stubAuthenticatedUser()
+      stub(prisma.bot, 'findFirst', async () => ({
+        id: 'bot-template-scalper-1',
+        userId: TEST_USER.id,
+        templateId: 'template_micro_scalper_paper',
+        name: 'Micro Scalper Paper',
+        strategyType: 'scalper',
+        description: 'Preset de micro trades',
+        executionMode: 'paper',
+        isSystemManaged: true,
+        status: 'online',
+        isPaused: false,
+        currentPair: null,
+        lastAnalysis: null,
+        recommendedAction: 'hold',
+        confidence: 60,
+        modelVersion: 'v1.0.0',
+        modelUrl: '/models/micro-scalper-v1.json',
+        parameters: '{}',
+        createdAt: new Date('2026-04-13T10:00:00.000Z'),
+        updatedAt: new Date('2026-04-13T10:00:00.000Z'),
+        template: {
+          id: 'template_micro_scalper_paper',
+          slug: 'micro-scalper-paper',
+          name: 'Micro Scalper Paper',
+          strategyType: 'scalper',
+          indicatorType: 'OrderBook',
+          specialization: 'micro_scalping',
+          description: 'Preset de micro trades',
+          defaultParameters: JSON.stringify({
+            timeframe: '1m',
+            allowedPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
+            maxPairsToAnalyze: 3,
+          }),
+        },
+      }))
+      stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
+        allowedPairs: JSON.stringify(['XRP/USDT', 'ADA/USDT']),
+      }))
+
+      const { response, body } = await requestJson('/api/dashboard/bots/bot-template-scalper-1', {
+        headers: authHeaders(),
+      })
+
+      assert.equal(response.status, 200)
+      assert.equal(body.success, true)
+      assert.equal(body.data.allowedPairsSource, 'template')
+      assert.deepEqual(body.data.effectiveAllowedPairs, ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'])
+      assert.equal(body.data.effectiveParameters.timeframe, '1m')
+    })
+
     it('POST /api/dashboard/bots creates a custom bot instance from a template', async () => {
       stubAuthenticatedUser()
       stub(prisma.botTemplate, 'findFirst', async () => ({

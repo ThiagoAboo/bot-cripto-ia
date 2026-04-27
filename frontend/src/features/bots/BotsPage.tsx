@@ -60,6 +60,10 @@ interface BotEditorFormState {
   allowedPairs: string
   maxPairsToAnalyze: string
   maxExecutableOpportunitiesPerCycle: string
+  minVolume: string
+  maxSpreadPercent: string
+  microMomentumThresholdPercent: string
+  orderImbalanceThreshold: string
   stopLossPercent: string
   takeProfitPercent: string
   circuitBreakerDailyLossPercent: string
@@ -86,6 +90,10 @@ const DEFAULT_FORM_STATE: BotEditorFormState = {
   allowedPairs: '',
   maxPairsToAnalyze: '',
   maxExecutableOpportunitiesPerCycle: '',
+  minVolume: '',
+  maxSpreadPercent: '',
+  microMomentumThresholdPercent: '',
+  orderImbalanceThreshold: '',
   stopLossPercent: '',
   takeProfitPercent: '',
   circuitBreakerDailyLossPercent: '',
@@ -119,6 +127,28 @@ function parseOptionalNumber(value: string, integer: boolean = false): number | 
   return integer ? Math.round(parsed) : parsed
 }
 
+function getTemplatePairs(defaultParameters: Record<string, unknown>): string[] {
+  return Array.from(new Set(
+    (Array.isArray(defaultParameters.allowedPairs) ? defaultParameters.allowedPairs : [])
+      .filter((entry): entry is string => typeof entry === 'string')
+      .map((entry) => entry.trim().toUpperCase())
+      .filter(Boolean),
+  ))
+}
+
+function resolveTemplatePreset(template: BotTemplateSummary) {
+  const templatePairs = getTemplatePairs(template.defaultParameters)
+
+  return {
+    name: template.name,
+    description: template.description,
+    useGlobalAllowedPairs: templatePairs.length === 0,
+    allowedPairs: templatePairs.join(', '),
+    maxPairsToAnalyze: toStringValue(template.defaultParameters.maxPairsToAnalyze),
+    maxExecutableOpportunitiesPerCycle: toStringValue(template.defaultParameters.maxExecutableOpportunitiesPerCycle),
+  }
+}
+
 function buildFormState(detail?: BotDetail): BotEditorFormState {
   if (!detail) return DEFAULT_FORM_STATE
   const parameters = detail.effectiveParameters
@@ -134,6 +164,10 @@ function buildFormState(detail?: BotDetail): BotEditorFormState {
     allowedPairs: detail.effectiveAllowedPairs.join(', '),
     maxPairsToAnalyze: toStringValue(parameters.maxPairsToAnalyze),
     maxExecutableOpportunitiesPerCycle: toStringValue(parameters.maxExecutableOpportunitiesPerCycle),
+    minVolume: toStringValue(parameters.minVolume),
+    maxSpreadPercent: toStringValue(parameters.maxSpreadPercent),
+    microMomentumThresholdPercent: toStringValue(parameters.microMomentumThresholdPercent),
+    orderImbalanceThreshold: toStringValue(parameters.orderImbalanceThreshold),
     stopLossPercent: toStringValue(parameters.stopLossPercent),
     takeProfitPercent: toStringValue(parameters.takeProfitPercent),
     circuitBreakerDailyLossPercent: toStringValue(parameters.circuitBreakerDailyLossPercent),
@@ -162,6 +196,10 @@ function buildUpdatePayload(formState: BotEditorFormState) {
       allowedPairs: formState.useGlobalAllowedPairs ? [] : parsePairsInput(formState.allowedPairs),
       maxPairsToAnalyze: parseOptionalNumber(formState.maxPairsToAnalyze, true),
       maxExecutableOpportunitiesPerCycle: parseOptionalNumber(formState.maxExecutableOpportunitiesPerCycle, true),
+      minVolume: parseOptionalNumber(formState.minVolume),
+      maxSpreadPercent: parseOptionalNumber(formState.maxSpreadPercent),
+      microMomentumThresholdPercent: parseOptionalNumber(formState.microMomentumThresholdPercent),
+      orderImbalanceThreshold: parseOptionalNumber(formState.orderImbalanceThreshold),
       stopLossPercent: parseOptionalNumber(formState.stopLossPercent),
       takeProfitPercent: parseOptionalNumber(formState.takeProfitPercent),
       circuitBreakerDailyLossPercent: parseOptionalNumber(formState.circuitBreakerDailyLossPercent),
@@ -1197,9 +1235,14 @@ function CreateBotModal({
 
   useEffect(() => {
     if (!isOpen || selectedTemplateId || !templates?.length) return
+    const preset = resolveTemplatePreset(templates[0])
     setSelectedTemplateId(templates[0].id)
-    setName(templates[0].name)
-    setDescription(templates[0].description)
+    setName(preset.name)
+    setDescription(preset.description)
+    setUseGlobalAllowedPairs(preset.useGlobalAllowedPairs)
+    setAllowedPairs(preset.allowedPairs)
+    setMaxPairsToAnalyze(preset.maxPairsToAnalyze)
+    setMaxExecutableOpportunitiesPerCycle(preset.maxExecutableOpportunitiesPerCycle)
   }, [isOpen, selectedTemplateId, templates])
 
   const selectedTemplate = templates?.find((template) => template.id === selectedTemplateId)
@@ -1269,8 +1312,13 @@ function CreateBotModal({
                   setSelectedTemplateId(value)
                   const template = templates?.find((entry) => entry.id === value)
                   if (template) {
-                    setName(template.name)
-                    setDescription(template.description)
+                    const preset = resolveTemplatePreset(template)
+                    setName(preset.name)
+                    setDescription(preset.description)
+                    setUseGlobalAllowedPairs(preset.useGlobalAllowedPairs)
+                    setAllowedPairs(preset.allowedPairs)
+                    setMaxPairsToAnalyze(preset.maxPairsToAnalyze)
+                    setMaxExecutableOpportunitiesPerCycle(preset.maxExecutableOpportunitiesPerCycle)
                   }
                 }}
               >
@@ -1676,7 +1724,13 @@ export function BotsPage() {
                     <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
                       <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Pares permitidos</p>
                       <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{botDetail.effectiveAllowedPairs.length}</p>
-                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>origem: {botDetail.allowedPairsSource === 'global' ? 'global' : 'instância'}</p>
+                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                        origem: {botDetail.allowedPairsSource === 'global'
+                          ? 'global'
+                          : botDetail.allowedPairsSource === 'template'
+                            ? 'template'
+                            : 'instancia'}
+                      </p>
                     </div>
                     <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
                       <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Modelo ativo</p>
@@ -1778,6 +1832,33 @@ export function BotsPage() {
 
                         <SectionField label="Confiança mínima (%)">
                           <Input value={formState.minConfidence} onChange={(event) => setFormState((current) => ({ ...current, minConfidence: event.target.value }))} placeholder="60" />
+                        </SectionField>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4 rounded-3xl border p-5" style={{ borderColor: 'var(--border-color)' }}>
+                      <div>
+                        <h3 className="font-semibold" style={{ color: 'var(--text-primary)' }}>Microestrutura</h3>
+                        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                          Filtros de spread, liquidez e momentum para perfis de scalping e micro trades.
+                        </p>
+                      </div>
+
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <SectionField label="Volume minimo 24h">
+                          <Input value={formState.minVolume} onChange={(event) => setFormState((current) => ({ ...current, minVolume: event.target.value }))} placeholder="250000" />
+                        </SectionField>
+                        <SectionField label="Spread maximo (%)">
+                          <Input value={formState.maxSpreadPercent} onChange={(event) => setFormState((current) => ({ ...current, maxSpreadPercent: event.target.value }))} placeholder="0.05" />
+                        </SectionField>
+                      </div>
+
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <SectionField label="Micro momentum minimo (%)">
+                          <Input value={formState.microMomentumThresholdPercent} onChange={(event) => setFormState((current) => ({ ...current, microMomentumThresholdPercent: event.target.value }))} placeholder="0.05" />
+                        </SectionField>
+                        <SectionField label="Imbalance minimo">
+                          <Input value={formState.orderImbalanceThreshold} onChange={(event) => setFormState((current) => ({ ...current, orderImbalanceThreshold: event.target.value }))} placeholder="0.58" />
                         </SectionField>
                       </div>
                     </div>

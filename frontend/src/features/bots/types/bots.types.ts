@@ -89,7 +89,7 @@ export interface BotDetail {
   instanceParameters: Record<string, unknown>
   effectiveParameters: Record<string, unknown>
   effectiveAllowedPairs: string[]
-  allowedPairsSource: 'instance' | 'global'
+  allowedPairsSource: 'instance' | 'template' | 'global'
   materializedFromTemplate?: boolean
 }
 

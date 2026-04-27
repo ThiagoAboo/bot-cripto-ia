@@ -90,7 +90,53 @@ const DEFAULT_ALLOWED_PAIRS = JSON.stringify([
   "DOGE/USDT", "ADA/USDT", "AVAX/USDT", "DOT/USDT", "LINK/USDT"
 ])
 
+function normalizePairs(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return Array.from(new Set(
+    value
+      .filter((entry): entry is string => typeof entry === 'string')
+      .map((entry) => entry.trim().toUpperCase())
+      .filter(Boolean),
+  ))
+}
+
 const BOT_TEMPLATES = [
+  {
+    id: 'template_micro_scalper_paper',
+    slug: 'micro-scalper-paper',
+    name: 'Micro Scalper Paper',
+    strategyType: 'scalper',
+    indicatorType: 'OrderBook',
+    specialization: 'micro_scalping',
+    description: 'Preset de micro trades para paper com foco em spread curto, liquidez e confirmacao rapida',
+    defaultParameters: {
+      timeframe: '1m',
+      minConfidence: 60,
+      allowedPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
+      maxPairsToAnalyze: 3,
+      maxExecutableOpportunitiesPerCycle: 1,
+      stopLossPercent: 0.6,
+      takeProfitPercent: 0.8,
+      circuitBreakerDailyLossPercent: 1.5,
+      circuitBreakerCooldownMinutes: 15,
+      maxConsecutiveLosses: 4,
+      maxPositionSize: 150,
+      maxExposurePerCoin: 0.18,
+      maxTotalExposure: 0.3,
+      maxConcurrentTrades: 1,
+      minCorrelationThreshold: 0.92,
+      atrPeriod: 14,
+      targetAtrPercent: 0.006,
+      minAtrPositionFactor: 0.2,
+      minVolume: 250000,
+      maxSpreadPercent: 0.05,
+      microMomentumThresholdPercent: 0.05,
+      orderImbalanceThreshold: 0.58,
+    },
+  },
   {
     id: 'template_rsi_reversion',
     slug: 'rsi-reversion-specialist',
@@ -185,7 +231,23 @@ const BOT_TEMPLATES = [
   },
 ]
 
-const BOT_INSTANCES = [
+type SeedBotInstance = {
+  id: string
+  templateId: string
+  name: string
+  strategyType: string
+  description: string
+  parameters?: Record<string, unknown>
+}
+
+const BOT_INSTANCES: SeedBotInstance[] = [
+  {
+    id: 'bot0',
+    templateId: 'template_micro_scalper_paper',
+    name: 'Micro Scalper Paper Bot',
+    strategyType: 'scalper',
+    description: 'Bot operacional de micro trades em paper para capturar variacoes curtas com filtros de spread e imbalance',
+  },
   {
     id: 'bot1',
     templateId: 'template_rsi_reversion',
@@ -224,6 +286,7 @@ const BOT_INSTANCES = [
 ]
 
 const BOOTSTRAP_MODEL_SOURCE_FILENAME = 'model_bootstrap_bot1_bootstrap-e2e-v1.h5'
+const BOT_TEMPLATE_BY_ID = new Map(BOT_TEMPLATES.map((template) => [template.id, template]))
 
 function buildFingerprint(value: unknown): string {
   return crypto
@@ -320,6 +383,21 @@ async function ensureBootstrapArtifact(params: {
   }
 }
 
+function resolveSeedBotAllowedPairs(bot: SeedBotInstance, fallbackPairs: string[]): string[] {
+  const instancePairs = normalizePairs(bot.parameters?.allowedPairs)
+  if (instancePairs.length > 0) {
+    return instancePairs
+  }
+
+  const templateParameters = BOT_TEMPLATE_BY_ID.get(bot.templateId)?.defaultParameters as Record<string, unknown> | undefined
+  const templatePairs = normalizePairs(templateParameters?.allowedPairs)
+  if (templatePairs.length > 0) {
+    return templatePairs
+  }
+
+  return fallbackPairs.slice(0, 5)
+}
+
 async function main() {
   console.log('🌱 Iniciando seed do banco de dados...')
 
@@ -407,6 +485,7 @@ async function main() {
         executionMode: 'paper',
         isSystemManaged: true,
         status: 'online',
+        parameters: JSON.stringify(botData.parameters ?? {}),
       },
       create: {
         id: botData.id,
@@ -417,7 +496,8 @@ async function main() {
         description: botData.description,
         executionMode: 'paper',
         isSystemManaged: true,
-        status: 'online'
+        status: 'online',
+        parameters: JSON.stringify(botData.parameters ?? {}),
       }
     })
 
@@ -425,7 +505,7 @@ async function main() {
       userId: user.id,
       botId: bot.id,
       botName: bot.name,
-      allowedPairs: defaultAllowedPairs.slice(0, 5),
+      allowedPairs: resolveSeedBotAllowedPairs(botData, defaultAllowedPairs),
     })
 
     await prisma.botModelArtifact.updateMany({

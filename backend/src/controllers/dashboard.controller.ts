@@ -27,6 +27,10 @@ const editableBotParametersSchema = z.object({
   allowedPairs: z.array(z.string().min(3).max(24)).max(30).optional(),
   maxPairsToAnalyze: z.number().int().min(1).max(500).optional(),
   maxExecutableOpportunitiesPerCycle: z.number().int().min(1).max(20).optional(),
+  minVolume: z.number().min(0).max(1000000000).optional(),
+  maxSpreadPercent: z.number().min(0).max(5).optional(),
+  microMomentumThresholdPercent: z.number().min(0).max(5).optional(),
+  orderImbalanceThreshold: z.number().min(0).max(1).optional(),
   stopLossPercent: z.number().min(0).max(50).optional(),
   takeProfitPercent: z.number().min(0).max(100).optional(),
   circuitBreakerDailyLossPercent: z.number().min(0).max(100).optional(),
@@ -125,6 +129,21 @@ function normalizePairs(value: unknown): string[] {
   ))
 }
 
+function resolveAllowedPairsSource(
+  instanceAllowedPairs: string[],
+  templateAllowedPairs: string[],
+): 'instance' | 'template' | 'global' {
+  if (instanceAllowedPairs.length > 0) {
+    return 'instance'
+  }
+
+  if (templateAllowedPairs.length > 0) {
+    return 'template'
+  }
+
+  return 'global'
+}
+
 function sanitizeParametersPatch(
   input: Record<string, unknown> | undefined,
   currentParameters: Record<string, unknown>,
@@ -182,7 +201,13 @@ async function mapBotDetail(bot: BotDetailSource, configurationAllowedPairs: str
   const templateParameters = safeJsonParse<Record<string, unknown>>(bot.template?.defaultParameters, {})
   const instanceParameters = safeJsonParse<Record<string, unknown>>(bot.parameters, {})
   const instanceAllowedPairs = normalizePairs(instanceParameters.allowedPairs)
-  const effectiveAllowedPairs = instanceAllowedPairs.length > 0 ? instanceAllowedPairs : configurationAllowedPairs
+  const templateAllowedPairs = normalizePairs(templateParameters.allowedPairs)
+  const allowedPairsSource = resolveAllowedPairsSource(instanceAllowedPairs, templateAllowedPairs)
+  const effectiveAllowedPairs = allowedPairsSource === 'instance'
+    ? instanceAllowedPairs
+    : allowedPairsSource === 'template'
+      ? templateAllowedPairs
+      : configurationAllowedPairs
   const effectiveParameters = {
     ...templateParameters,
     ...instanceParameters,
@@ -237,7 +262,7 @@ async function mapBotDetail(bot: BotDetailSource, configurationAllowedPairs: str
     instanceParameters,
     effectiveParameters,
     effectiveAllowedPairs,
-    allowedPairsSource: instanceAllowedPairs.length > 0 ? 'instance' : 'global',
+    allowedPairsSource,
   }
 }
 

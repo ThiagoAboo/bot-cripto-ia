@@ -1,5 +1,5 @@
 ﻿{
-    "generatedAt":  "2026-04-26T22:28:41.2928597-03:00",
+    "generatedAt":  "2026-04-27T13:30:34.9184076-03:00",
     "trainingPreset":  "thorough",
     "trainingDataSource":  "exchange",
     "trainingFallbackDataSource":  "synthetic",
@@ -9,30 +9,37 @@
     "paperCurrency":  "USDT",
     "bots":  [
                  {
-                     "id":  "bot1",
-                     "name":  "RSI Reversion Bot",
+                     "id":  "bot0",
+                     "name":  "Micro Scalper Paper Bot",
                      "selectedModel":  {
-                                           "sessionId":  "cmogiqndk001r84coq2jmayd6",
+                                           "sessionId":  "cmohfjv4p00q114mz059b2yzs",
                                            "architecture":  "random_forest",
-                                           "dataSource":  "exchange",
-                                           "modelUrl":  "/models/model_cmogiqndk001r84coq2jmayd6_bootstrap-random_forest-20260426222841.h5",
+                                           "dataSource":  "synthetic",
+                                           "modelUrl":  "/models/model_cmohfjv4p00q114mz059b2yzs_bootstrap-random_forest-synthetic-20260427134712171.h5",
                                            "governanceRole":  "challenger",
                                            "autoPromoted":  false,
-                                           "totalProfit":  2421.07,
-                                           "winRate":  54.08,
-                                           "maxDrawdown":  -47.83,
-                                           "profitFactor":  1.31
+                                           "totalProfit":  988716.1,
+                                           "winRate":  99.93,
+                                           "maxDrawdown":  -0.81,
+                                           "profitFactor":  34747.86
                                        },
                      "attempts":  [
                                       {
                                           "candidate":  "Random Forest bootstrap",
                                           "architecture":  "random_forest",
                                           "dataSource":  "exchange",
-                                          "sessionId":  "cmogiqndk001r84coq2jmayd6",
-                                          "winRate":  54.08,
-                                          "totalProfit":  2421.07,
-                                          "maxDrawdown":  -47.83,
-                                          "profitFactor":  1.31,
+                                          "status":  "failed",
+                                          "error":  "A solicitação foi anulada: O tempo limite da operação foi atingido."
+                                      },
+                                      {
+                                          "candidate":  "Random Forest bootstrap",
+                                          "architecture":  "random_forest",
+                                          "dataSource":  "synthetic",
+                                          "sessionId":  "cmohfjv4p00q114mz059b2yzs",
+                                          "winRate":  99.93,
+                                          "totalProfit":  988716.1,
+                                          "maxDrawdown":  -0.81,
+                                          "profitFactor":  34747.86,
                                           "status":  "completed"
                                       },
                                       {
@@ -46,43 +53,99 @@
                                           "candidate":  "XGBoost bootstrap",
                                           "architecture":  "xgboost",
                                           "dataSource":  "synthetic",
+                                          "sessionId":  "cmohg2dx000cfvhqzg3fircie",
+                                          "winRate":  99.1,
+                                          "totalProfit":  988112.29,
+                                          "maxDrawdown":  -27.18,
+                                          "profitFactor":  1822.74,
+                                          "status":  "completed"
+                                      }
+                                  ]
+                 },
+                 {
+                     "id":  "bot1",
+                     "name":  "RSI Reversion Bot",
+                     "selectedModel":  {
+                                           "sessionId":  "cmohhcwx4024evhqz1cjndb4g",
+                                           "architecture":  "xgboost",
+                                           "dataSource":  "synthetic",
+                                           "modelUrl":  "/models/model_cmohhcwx4024evhqz1cjndb4g_bootstrap-xgboost-synthetic-20260427143747155.h5",
+                                           "governanceRole":  "challenger",
+                                           "autoPromoted":  false,
+                                           "totalProfit":  192540.3,
+                                           "winRate":  98.87,
+                                           "maxDrawdown":  -27.18,
+                                           "profitFactor":  618.16
+                                       },
+                     "attempts":  [
+                                      {
+                                          "candidate":  "Random Forest bootstrap",
+                                          "architecture":  "random_forest",
+                                          "dataSource":  "exchange",
+                                          "sessionId":  "cmohhac8n01z2vhqzbjabcpjv",
+                                          "winRate":  55.06,
+                                          "totalProfit":  2928.66,
+                                          "maxDrawdown":  -59.35,
+                                          "profitFactor":  1.38,
+                                          "status":  "completed"
+                                      },
+                                      {
+                                          "candidate":  "XGBoost bootstrap",
+                                          "architecture":  "xgboost",
+                                          "dataSource":  "exchange",
                                           "status":  "failed",
-                                          "error":  "Timeout aguardando a sessao cmogitems005l84coo14v3gno concluir."
+                                          "error":  "O servidor remoto retornou um erro: (409) Conflito."
+                                      },
+                                      {
+                                          "candidate":  "XGBoost bootstrap",
+                                          "architecture":  "xgboost",
+                                          "dataSource":  "synthetic",
+                                          "sessionId":  "cmohhcwx4024evhqz1cjndb4g",
+                                          "winRate":  98.87,
+                                          "totalProfit":  192540.3,
+                                          "maxDrawdown":  -27.18,
+                                          "profitFactor":  618.16,
+                                          "status":  "completed"
                                       }
                                   ]
                  },
                  {
                      "id":  "bot2",
                      "name":  "MACD Momentum Bot",
-                     "selectedModel":  null,
+                     "selectedModel":  {
+                                           "sessionId":  "cmohhder102g1vhqzudi7199y",
+                                           "architecture":  "random_forest",
+                                           "dataSource":  "exchange",
+                                           "modelUrl":  "/models/model_cmohhder102g1vhqzudi7199y_bootstrap-random_forest-exchange-20260427143810267.h5",
+                                           "governanceRole":  "challenger",
+                                           "autoPromoted":  false,
+                                           "totalProfit":  2928.66,
+                                           "winRate":  55.06,
+                                           "maxDrawdown":  -59.35,
+                                           "profitFactor":  1.38
+                                       },
                      "attempts":  [
                                       {
                                           "candidate":  "Random Forest bootstrap",
                                           "architecture":  "random_forest",
                                           "dataSource":  "exchange",
-                                          "status":  "failed",
-                                          "error":  "A solicitação foi anulada: O tempo limite da operação foi atingido."
-                                      },
-                                      {
-                                          "candidate":  "Random Forest bootstrap",
-                                          "architecture":  "random_forest",
-                                          "dataSource":  "synthetic",
-                                          "status":  "failed",
-                                          "error":  "O servidor remoto retornou um erro: (409) Conflito."
+                                          "sessionId":  "cmohhder102g1vhqzudi7199y",
+                                          "winRate":  55.06,
+                                          "totalProfit":  2928.66,
+                                          "maxDrawdown":  -59.35,
+                                          "profitFactor":  1.38,
+                                          "status":  "completed"
                                       },
                                       {
                                           "candidate":  "XGBoost bootstrap",
                                           "architecture":  "xgboost",
                                           "dataSource":  "exchange",
-                                          "status":  "failed",
-                                          "error":  "O servidor remoto retornou um erro: (409) Conflito."
-                                      },
-                                      {
-                                          "candidate":  "XGBoost bootstrap",
-                                          "architecture":  "xgboost",
-                                          "dataSource":  "synthetic",
-                                          "status":  "failed",
-                                          "error":  "O servidor remoto retornou um erro: (409) Conflito."
+                                          "sessionId":  "cmohhehxm02i5vhqzrsj9iuqn",
+                                          "winRate":  51.5,
+                                          "totalProfit":  -168.9,
+                                          "maxDrawdown":  -115.28,
+                                          "profitFactor":  0.98,
+                                          "status":  "completed"
                                       }
                                   ]
                  },
@@ -90,37 +153,37 @@
                      "id":  "bot3",
                      "name":  "EMA Trend Bot",
                      "selectedModel":  {
-                                           "sessionId":  "cmogjv0mh020u84cos6j4fwpl",
+                                           "sessionId":  "cmohhffne02u6vhqzp7rshprw",
                                            "architecture":  "random_forest",
                                            "dataSource":  "exchange",
-                                           "modelUrl":  "/models/model_cmogjv0mh020u84cos6j4fwpl_bootstrap-random_forest-20260426230004.h5",
+                                           "modelUrl":  "/models/model_cmohhffne02u6vhqzp7rshprw_bootstrap-random_forest-exchange-20260427143944748.h5",
                                            "governanceRole":  "challenger",
                                            "autoPromoted":  false,
-                                           "totalProfit":  2161.26,
-                                           "winRate":  55.59,
-                                           "maxDrawdown":  -33.33,
-                                           "profitFactor":  1.48
+                                           "totalProfit":  2501.31,
+                                           "winRate":  56.32,
+                                           "maxDrawdown":  -30.92,
+                                           "profitFactor":  1.58
                                        },
                      "attempts":  [
                                       {
                                           "candidate":  "Random Forest bootstrap",
                                           "architecture":  "random_forest",
                                           "dataSource":  "exchange",
-                                          "sessionId":  "cmogjv0mh020u84cos6j4fwpl",
-                                          "winRate":  55.59,
-                                          "totalProfit":  2161.26,
-                                          "maxDrawdown":  -33.33,
-                                          "profitFactor":  1.48,
+                                          "sessionId":  "cmohhffne02u6vhqzp7rshprw",
+                                          "winRate":  56.32,
+                                          "totalProfit":  2501.31,
+                                          "maxDrawdown":  -30.92,
+                                          "profitFactor":  1.58,
                                           "status":  "completed"
                                       },
                                       {
                                           "candidate":  "XGBoost bootstrap",
                                           "architecture":  "xgboost",
                                           "dataSource":  "exchange",
-                                          "sessionId":  "cmogjwvp5023i84co9q5mpgvd",
-                                          "winRate":  50.29,
-                                          "totalProfit":  -164.61,
-                                          "maxDrawdown":  -77.23,
+                                          "sessionId":  "cmohhfsiw02vfvhqz7rbo1bqm",
+                                          "winRate":  49.26,
+                                          "totalProfit":  -193.02,
+                                          "maxDrawdown":  -95.34,
                                           "profitFactor":  0.97,
                                           "status":  "completed"
                                       }
@@ -130,42 +193,39 @@
                      "id":  "bot4",
                      "name":  "Bollinger Reversion Bot",
                      "selectedModel":  {
-                                           "sessionId":  "cmogkew6x032g84cogejqk7n5",
+                                           "sessionId":  "cmohhg9lh0372vhqzfpfn6c9f",
                                            "architecture":  "random_forest",
                                            "dataSource":  "exchange",
-                                           "modelUrl":  "/models/model_cmogkew6x032g84cogejqk7n5_bootstrap-random_forest-20260426231532.h5",
+                                           "modelUrl":  "/models/model_cmohhg9lh0372vhqzfpfn6c9f_bootstrap-random_forest-exchange-20260427144023558.h5",
                                            "governanceRole":  "challenger",
                                            "autoPromoted":  false,
-                                           "totalProfit":  2421.07,
-                                           "winRate":  54.08,
-                                           "maxDrawdown":  -47.83,
-                                           "profitFactor":  1.31
+                                           "totalProfit":  2928.66,
+                                           "winRate":  55.06,
+                                           "maxDrawdown":  -59.35,
+                                           "profitFactor":  1.38
                                        },
                      "attempts":  [
                                       {
                                           "candidate":  "Random Forest bootstrap",
                                           "architecture":  "random_forest",
                                           "dataSource":  "exchange",
-                                          "sessionId":  "cmogkew6x032g84cogejqk7n5",
-                                          "winRate":  54.08,
-                                          "totalProfit":  2421.07,
-                                          "maxDrawdown":  -47.83,
-                                          "profitFactor":  1.31,
+                                          "sessionId":  "cmohhg9lh0372vhqzfpfn6c9f",
+                                          "winRate":  55.06,
+                                          "totalProfit":  2928.66,
+                                          "maxDrawdown":  -59.35,
+                                          "profitFactor":  1.38,
                                           "status":  "completed"
                                       },
                                       {
                                           "candidate":  "XGBoost bootstrap",
                                           "architecture":  "xgboost",
                                           "dataSource":  "exchange",
-                                          "status":  "failed",
-                                          "error":  "A solicitação foi anulada: O tempo limite da operação foi atingido."
-                                      },
-                                      {
-                                          "candidate":  "XGBoost bootstrap",
-                                          "architecture":  "xgboost",
-                                          "dataSource":  "synthetic",
-                                          "status":  "failed",
-                                          "error":  "Timeout aguardando a sessao cmogki50f036w84cojm0pqss4 concluir."
+                                          "sessionId":  "cmohhh8sf038zvhqzego0ajl8",
+                                          "winRate":  51.5,
+                                          "totalProfit":  -168.9,
+                                          "maxDrawdown":  -115.28,
+                                          "profitFactor":  0.98,
+                                          "status":  "completed"
                                       }
                                   ]
                  },
@@ -173,37 +233,34 @@
                      "id":  "bot5",
                      "name":  "Volume Breakout Bot",
                      "selectedModel":  {
-                                           "sessionId":  "cmoglmp2304vu84cojtamry7s",
-                                           "architecture":  "xgboost",
+                                           "sessionId":  "cmohhi2w803l7vhqzivzbkvfn",
+                                           "architecture":  "random_forest",
                                            "dataSource":  "exchange",
-                                           "modelUrl":  "/models/model_cmoglmp2304vu84cojtamry7s_bootstrap-xgboost-20260426234935.h5",
+                                           "modelUrl":  "/models/model_cmohhi2w803l7vhqzivzbkvfn_bootstrap-random_forest-exchange-20260427144148186.h5",
                                            "governanceRole":  "challenger",
                                            "autoPromoted":  false,
-                                           "totalProfit":  0,
-                                           "winRate":  0,
-                                           "maxDrawdown":  0,
-                                           "profitFactor":  0
+                                           "totalProfit":  1633.73,
+                                           "winRate":  63.8,
+                                           "maxDrawdown":  -29.16,
+                                           "profitFactor":  1.74
                                        },
                      "attempts":  [
                                       {
                                           "candidate":  "Random Forest bootstrap",
                                           "architecture":  "random_forest",
                                           "dataSource":  "exchange",
-                                          "status":  "failed",
-                                          "error":  "A solicitação foi anulada: O tempo limite da operação foi atingido."
-                                      },
-                                      {
-                                          "candidate":  "Random Forest bootstrap",
-                                          "architecture":  "random_forest",
-                                          "dataSource":  "synthetic",
-                                          "status":  "failed",
-                                          "error":  "A solicitação foi anulada: O tempo limite da operação foi atingido."
+                                          "sessionId":  "cmohhi2w803l7vhqzivzbkvfn",
+                                          "winRate":  63.8,
+                                          "totalProfit":  1633.73,
+                                          "maxDrawdown":  -29.16,
+                                          "profitFactor":  1.74,
+                                          "status":  "completed"
                                       },
                                       {
                                           "candidate":  "XGBoost bootstrap",
                                           "architecture":  "xgboost",
                                           "dataSource":  "exchange",
-                                          "sessionId":  "cmoglmp2304vu84cojtamry7s",
+                                          "sessionId":  "cmohhkkr003o5vhqzarh0oz7j",
                                           "winRate":  0,
                                           "totalProfit":  0,
                                           "maxDrawdown":  0,

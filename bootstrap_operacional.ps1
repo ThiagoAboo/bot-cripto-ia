@@ -19,6 +19,9 @@ Set-StrictMode -Version Latest
 $rootDir = $PSScriptRoot
 $backendBaseUrl = 'http://localhost:3001'
 $reportPath = Join-Path $rootDir 'bootstrap-operacional-report.json'
+$script:BackendAdminEmail = 'admin@botcrypto.com'
+$script:BackendAdminPassword = 'admin123'
+$script:BackendAuthToken = $null
 
 function Write-Step {
     param([string]$Index, [string]$Message)
@@ -85,15 +88,20 @@ function Clear-ManagedDirectory {
 }
 
 function Wait-ForBackendReady {
-    param([int]$TimeoutSeconds = 180)
+    param(
+        [int]$TimeoutSeconds = 180,
+        [switch]$Quiet
+    )
 
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 
     do {
         try {
-            $response = Invoke-RestMethod -Method Get -Uri "$backendBaseUrl/health/ready" -TimeoutSec 15
+            $response = Invoke-RestMethod -Method Get -Uri "$backendBaseUrl/health/ready" -TimeoutSec 15 -DisableKeepAlive
             if ($null -ne $response) {
-                Write-Ok 'Backend respondeu em /health/ready'
+                if (-not $Quiet) {
+                    Write-Ok 'Backend respondeu em /health/ready'
+                }
                 return
             }
         } catch {
@@ -105,6 +113,135 @@ function Wait-ForBackendReady {
     throw 'Timeout aguardando backend responder em /health/ready.'
 }
 
+function Test-IsTransientBackendError {
+    param([System.Exception]$Exception)
+
+    if ($null -eq $Exception) {
+        return $false
+    }
+
+    $message = $Exception.Message
+    if (-not $message) {
+        return $false
+    }
+
+    return $message -like '*A conexão subjacente estava fechada*' `
+        -or $message -like '*A conexão foi fechada de modo inesperado*' `
+        -or $message -like '*The underlying connection was closed*' `
+        -or $message -like '*Unable to connect to the remote server*' `
+        -or $message -like '*Não é possível conectar ao servidor remoto*' `
+        -or $message -like '*O tempo limite da operação foi atingido*' `
+        -or $message -like '*The operation has timed out*'
+}
+
+function Test-IsUnauthorizedBackendError {
+    param([System.Exception]$Exception)
+
+    if ($null -eq $Exception) {
+        return $false
+    }
+
+    $message = $Exception.Message
+    if (-not $message) {
+        return $false
+    }
+
+    return $message -like '*(401)*' `
+        -or $message -like '*401*' `
+        -or $message -like '*Token invalido ou expirado*' `
+        -or $message -like '*Token invÃ¡lido ou expirado*' `
+        -or $message -like '*Token inválido ou expirado*' `
+        -or $message -like '*Nao Autorizado*' `
+        -or $message -like '*NÃ£o Autorizado*' `
+        -or $message -like '*Não Autorizado*' `
+        -or $message -like '*Unauthorized*'
+}
+
+function Invoke-BackendLogin {
+    $loginResponse = Invoke-RestMethod -Method POST -Uri "$backendBaseUrl/api/auth/login" -TimeoutSec 60 -DisableKeepAlive -ContentType 'application/json' -Body (@{
+        email = $script:BackendAdminEmail
+        password = $script:BackendAdminPassword
+    } | ConvertTo-Json -Depth 4)
+
+    $token = [string]$loginResponse.token
+    if (-not $token) {
+        throw 'Token de autenticacao nao retornado pelo backend.'
+    }
+
+    $script:BackendAuthToken = $token
+    return $token
+}
+
+function Test-IsTransientBackendError {
+    param([System.Exception]$Exception)
+
+    if ($null -eq $Exception) {
+        return $false
+    }
+
+    $message = $Exception.Message
+    if (-not $message) {
+        return $false
+    }
+
+    $normalizedMessage = $message.ToLowerInvariant()
+
+    return $normalizedMessage -like '*conex*subjac*fechad*' `
+        -or $normalizedMessage -like '*fechada de modo inesperado*' `
+        -or $normalizedMessage -like '*the underlying connection was closed*' `
+        -or $normalizedMessage -like '*unable to connect to the remote server*' `
+        -or $normalizedMessage -like '*nao e possivel conectar ao servidor remoto*' `
+        -or $normalizedMessage -like '*não é possível conectar ao servidor remoto*' `
+        -or $normalizedMessage -like '*o tempo limite da operacao foi atingido*' `
+        -or $normalizedMessage -like '*o tempo limite da operação foi atingido*' `
+        -or $normalizedMessage -like '*the operation has timed out*' `
+        -or $normalizedMessage -like '*a solicitacao foi anulada*' `
+        -or $normalizedMessage -like '*a solicitação foi anulada*' `
+        -or $normalizedMessage -like '*the request was aborted*'
+}
+
+function Test-IsUnauthorizedBackendError {
+    param([System.Exception]$Exception)
+
+    if ($null -eq $Exception) {
+        return $false
+    }
+
+    $message = $Exception.Message
+    if (-not $message) {
+        return $false
+    }
+
+    $normalizedMessage = $message.ToLowerInvariant()
+
+    return $normalizedMessage -like '*(401)*' `
+        -or $normalizedMessage -like '*401*' `
+        -or $normalizedMessage -like '*token*invalid*expirad*' `
+        -or $normalizedMessage -like '*token*inválid*expirad*' `
+        -or $normalizedMessage -like '*nao autorizado*' `
+        -or $normalizedMessage -like '*não autorizado*' `
+        -or $normalizedMessage -like '*unauthorized*'
+}
+
+function Test-IsConflictBackendError {
+    param([System.Exception]$Exception)
+
+    if ($null -eq $Exception) {
+        return $false
+    }
+
+    $message = $Exception.Message
+    if (-not $message) {
+        return $false
+    }
+
+    $normalizedMessage = $message.ToLowerInvariant()
+
+    return $normalizedMessage -like '*(409)*' `
+        -or $normalizedMessage -like '*409*' `
+        -or $normalizedMessage -like '*conflit*'
+}
+
 function Invoke-BackendRequest {
     param(
         [Parameter(Mandatory = $true)]
@@ -114,20 +251,24 @@ function Invoke-BackendRequest {
         [string]$Path,
         [object]$Body,
         [string]$Token,
+        [int]$TimeoutSec = 60,
+        [int]$RetryCount = 3,
         [switch]$ReturnRaw
     )
 
     $uri = "$backendBaseUrl$Path"
+    $effectiveToken = if ($script:BackendAuthToken) { [string]$script:BackendAuthToken } else { [string]$Token }
     $headers = @{}
-    if ($Token) {
-        $headers.Authorization = "Bearer $Token"
+    if ($effectiveToken) {
+        $headers.Authorization = "Bearer $effectiveToken"
     }
 
     $requestParams = @{
         Method = $Method
         Uri = $uri
         Headers = $headers
-        TimeoutSec = 60
+        TimeoutSec = $TimeoutSec
+        DisableKeepAlive = $true
     }
 
     if ($PSBoundParameters.ContainsKey('Body')) {
@@ -135,7 +276,41 @@ function Invoke-BackendRequest {
         $requestParams.Body = ($Body | ConvertTo-Json -Depth 12)
     }
 
-    $response = Invoke-RestMethod @requestParams
+    $response = $null
+    $lastError = $null
+
+    for ($attempt = 1; $attempt -le [Math]::Max(1, $RetryCount); $attempt++) {
+        try {
+            $response = Invoke-RestMethod @requestParams
+            $lastError = $null
+            break
+        } catch {
+            $lastError = $_.Exception
+
+            if ($attempt -lt $RetryCount -and $effectiveToken -and (Test-IsUnauthorizedBackendError -Exception $lastError)) {
+                Write-WarnLine "Token administrativo recusado em $Method $Path. Renovando sessao e tentando novamente."
+                $effectiveToken = Invoke-BackendLogin
+                $requestParams.Headers.Authorization = "Bearer $effectiveToken"
+                continue
+            }
+
+            if ($attempt -ge $RetryCount -or -not (Test-IsTransientBackendError -Exception $lastError)) {
+                throw
+            }
+
+            Write-WarnLine "Falha transitória em $Method $Path (tentativa $attempt/$RetryCount): $($lastError.Message)"
+            Start-Sleep -Seconds ([Math]::Min(5 * $attempt, 15))
+
+            try {
+                Wait-ForBackendReady -TimeoutSeconds 90 -Quiet
+            } catch {
+            }
+        }
+    }
+
+    if ($null -eq $response -and $null -ne $lastError) {
+        throw $lastError
+    }
 
     if ($ReturnRaw) {
         return $response
@@ -151,6 +326,181 @@ function Invoke-BackendRequest {
     }
 
     return $response
+}
+
+function Get-ActiveTrainingSessionForBot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BotId,
+        [Parameter(Mandatory = $true)]
+        [string]$Token
+    )
+
+    $sessions = @((Invoke-BackendRequest -Method GET -Path "/api/training/sessions?botId=$BotId" -Token $Token))
+    return $sessions | Where-Object { $_.status -in @('pending', 'running', 'paused') } | Select-Object -First 1
+}
+
+function Wait-TrainingSessionTerminalState {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SessionId,
+        [Parameter(Mandatory = $true)]
+        [string]$Token,
+        [int]$TimeoutSeconds = 90
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+
+    do {
+        try {
+            $session = Invoke-BackendRequest -Method GET -Path "/api/training/sessions/$SessionId" -Token $Token
+            if ($session.status -in @('completed', 'failed', 'cancelled', 'error')) {
+                return $session
+            }
+        } catch {
+        }
+
+        Start-Sleep -Seconds 3
+    } while ((Get-Date) -lt $deadline)
+
+    return $null
+}
+
+function Get-TrainingSessionById {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SessionId,
+        [Parameter(Mandatory = $true)]
+        [string]$Token
+    )
+
+    return Invoke-BackendRequest -Method GET -Path "/api/training/sessions/$SessionId" -Token $Token
+}
+
+function Get-TrainingSessionsForBot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BotId,
+        [Parameter(Mandatory = $true)]
+        [string]$Token
+    )
+
+    return @((Invoke-BackendRequest -Method GET -Path "/api/training/sessions?botId=$BotId" -Token $Token))
+}
+
+function Get-ActiveTrainingSessionForBot {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BotId,
+        [Parameter(Mandatory = $true)]
+        [string]$Token
+    )
+
+    $sessions = @(Get-TrainingSessionsForBot -BotId $BotId -Token $Token)
+    return $sessions | Where-Object { $_.status -in @('pending', 'running', 'paused') } | Select-Object -First 1
+}
+
+function Find-TrainingSessionByModelVersion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BotId,
+        [Parameter(Mandatory = $true)]
+        [string]$ModelVersion,
+        [Parameter(Mandatory = $true)]
+        [string]$Token,
+        [string[]]$AllowedStatuses = @()
+    )
+
+    $sessions = @(Get-TrainingSessionsForBot -BotId $BotId -Token $Token)
+    $matchingSessions = @(
+        $sessions | Where-Object {
+            $config = Get-ValueOrDefault -Value $_.config -DefaultValue @{}
+            $sessionModelVersion = [string](Get-ValueOrDefault -Value $config.modelVersion -DefaultValue '')
+            $statusMatches = $AllowedStatuses.Count -eq 0 -or $AllowedStatuses -contains $_.status
+
+            $sessionModelVersion -eq $ModelVersion -and $statusMatches
+        }
+    )
+
+    return $matchingSessions | Select-Object -First 1
+}
+
+function Wait-TrainingSessionRegistration {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BotId,
+        [Parameter(Mandatory = $true)]
+        [string]$ModelVersion,
+        [Parameter(Mandatory = $true)]
+        [string]$Token,
+        [int]$TimeoutSeconds = 90
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+
+    do {
+        try {
+            $session = Find-TrainingSessionByModelVersion -BotId $BotId -ModelVersion $ModelVersion -Token $Token
+            if ($null -ne $session) {
+                return $session
+            }
+        } catch {
+        }
+
+        Start-Sleep -Seconds 3
+    } while ((Get-Date) -lt $deadline)
+
+    return $null
+}
+
+function Cancel-TrainingSessionBestEffort {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SessionId,
+        [Parameter(Mandatory = $true)]
+        [string]$Token
+    )
+
+    try {
+        Invoke-BackendRequest -Method POST -Path "/api/training/sessions/$SessionId/cancel" -Body @{} -Token $Token -TimeoutSec 30 | Out-Null
+        $terminalSession = Wait-TrainingSessionTerminalState -SessionId $SessionId -Token $Token -TimeoutSeconds 90
+        if ($null -ne $terminalSession) {
+            Write-WarnLine "Sessao $SessionId encerrada em status $($terminalSession.status) apos cancelamento."
+        } else {
+            Write-WarnLine "Cancelamento solicitado para a sessao $SessionId, mas sem confirmacao terminal dentro do prazo."
+        }
+    } catch {
+        Write-WarnLine "Nao foi possivel cancelar a sessao $SessionId automaticamente: $($_.Exception.Message)"
+    }
+}
+
+function Resolve-SaveableTrainingResult {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object[]]$Results,
+        [Parameter(Mandatory = $true)]
+        [string]$Token
+    )
+
+    $preferredResult = @(Select-BestTrainingResult -Results $Results)[0]
+    if ($null -eq $preferredResult) {
+        return $null
+    }
+
+    $remainingResults = @($Results | Where-Object { $_.session.id -ne $preferredResult.session.id })
+    $candidates = @($preferredResult) + $remainingResults
+
+    foreach ($candidate in $candidates) {
+        $latestSession = Get-TrainingSessionById -SessionId $candidate.session.id -Token $Token
+        if ($latestSession.status -eq 'completed') {
+            $candidate.session = $latestSession
+            return $candidate
+        }
+
+        Write-WarnLine "Sessao $($candidate.session.id) nao esta apta para save (status atual: $($latestSession.status)). Tentando proximo candidato concluido."
+    }
+
+    return $null
 }
 
 function Get-TrainingCandidates {
@@ -285,7 +635,7 @@ function Start-TrainingAttempt {
     }
     $includedPairs = $pairList | Select-Object -First ([Math]::Max(1, $MaxPairsPerTraining))
     $strategyId = if ($Bot.templateId) { $Bot.templateId } elseif ($Bot.strategyId) { $Bot.strategyId } else { throw "Bot $($Bot.name) sem strategyId/templateId" }
-    $modelVersion = 'bootstrap-' + $Candidate.architecture + '-' + (Get-Date -Format 'yyyyMMddHHmmss')
+    $modelVersion = 'bootstrap-' + $Candidate.architecture + '-' + $DataSource + '-' + (Get-Date -Format 'yyyyMMddHHmmssfff')
 
     $payload = @{
         botId = $Bot.id
@@ -304,21 +654,179 @@ function Start-TrainingAttempt {
     }
 
     Write-Info "Criando treino $($Candidate.architecture) para $($Bot.name) com $DataSource em $($payload.timeframe)"
-    $session = Invoke-BackendRequest -Method POST -Path '/api/training/sessions' -Body $payload -Token $Token
-    $completedSession = Wait-TrainingSessionCompletion -SessionId $session.id -Token $Token -TimeoutMinutes $SessionTimeoutMinutes
+    $session = $null
 
-    if ($completedSession.status -ne 'completed') {
-        throw "Sessao $($session.id) terminou em status $($completedSession.status)"
+    try {
+        $session = Invoke-BackendRequest -Method POST -Path '/api/training/sessions' -Body $payload -Token $Token
+    } catch {
+        $activeSession = Get-ActiveTrainingSessionForBot -BotId $Bot.id -Token $Token
+        if ($_.Exception.Message -like '*409*' -or $_.Exception.Message -like '*Conflito*') {
+            if ($null -ne $activeSession) {
+                throw "Ja existe treinamento ativo para $($Bot.name): sessao $($activeSession.id) em status $($activeSession.status)"
+            }
+        }
+
+        throw
     }
 
-    $backtest = Invoke-BackendRequest -Method POST -Path "/api/training/sessions/$($session.id)/test" -Body @{} -Token $Token
+    try {
+        $completedSession = Wait-TrainingSessionCompletion -SessionId $session.id -Token $Token -TimeoutMinutes $SessionTimeoutMinutes
 
-    return [pscustomobject]@{
-        candidate = $Candidate.label
+        if ($completedSession.status -ne 'completed') {
+            throw "Sessao $($session.id) terminou em status $($completedSession.status)"
+        }
+
+        $backtest = Invoke-BackendRequest -Method POST -Path "/api/training/sessions/$($session.id)/test" -Body @{} -Token $Token -TimeoutSec 180
+
+        return [pscustomobject]@{
+            candidate = $Candidate.label
+            architecture = $Candidate.architecture
+            dataSource = $DataSource
+            session = $completedSession
+            backtest = $backtest
+        }
+    } catch {
+        if ($null -ne $session -and $_.Exception.Message -like '*Timeout aguardando a sessao*') {
+            Cancel-TrainingSessionBestEffort -SessionId $session.id -Token $Token
+        }
+
+        throw
+    }
+}
+
+function Wait-TrainingSessionCompletion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SessionId,
+        [Parameter(Mandatory = $true)]
+        [string]$Token,
+        [int]$TimeoutMinutes = 25,
+        [string]$BotId,
+        [string]$ModelVersion
+    )
+
+    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+
+    do {
+        $session = $null
+
+        try {
+            $session = Invoke-BackendRequest -Method GET -Path "/api/training/sessions/$SessionId" -Token $Token
+        } catch {
+            $canRecoverByLookup = $PSBoundParameters.ContainsKey('BotId') -and $PSBoundParameters.ContainsKey('ModelVersion')
+
+            if (-not $canRecoverByLookup) {
+                throw
+            }
+
+            Write-WarnLine "Falha ao consultar a sessao ${SessionId}: $($_.Exception.Message). Tentando reencontrar a sessao pelo modelVersion."
+
+            try {
+                $session = Find-TrainingSessionByModelVersion -BotId $BotId -ModelVersion $ModelVersion -Token $Token
+            } catch {
+                $session = $null
+            }
+
+            if ($null -eq $session) {
+                Start-Sleep -Seconds 5
+                continue
+            }
+        }
+
+        Write-Info "Sessao $($session.id) em status $($session.status)"
+
+        if ($session.status -in @('completed', 'failed', 'cancelled', 'error')) {
+            return $session
+        }
+
+        Start-Sleep -Seconds 5
+    } while ((Get-Date) -lt $deadline)
+
+    throw "Timeout aguardando a sessao $SessionId concluir."
+}
+
+function Start-TrainingAttempt {
+    param(
+        [Parameter(Mandatory = $true)]
+        [pscustomobject]$Bot,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Candidate,
+        [Parameter(Mandatory = $true)]
+        [string]$DataSource,
+        [Parameter(Mandatory = $true)]
+        [string]$Token
+    )
+
+    $startDate = (Get-Date).AddDays(-1 * [Math]::Abs($TrainingLookbackDays)).ToString('yyyy-MM-dd')
+    $endDate = (Get-Date).ToString('yyyy-MM-dd')
+    $pairList = @($Bot.effectiveAllowedPairs)
+    if ($pairList.Count -eq 0) {
+        $pairList = @('BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT')
+    }
+    $includedPairs = $pairList | Select-Object -First ([Math]::Max(1, $MaxPairsPerTraining))
+    $strategyId = if ($Bot.templateId) { $Bot.templateId } elseif ($Bot.strategyId) { $Bot.strategyId } else { throw "Bot $($Bot.name) sem strategyId/templateId" }
+    $modelVersion = 'bootstrap-' + $Candidate.architecture + '-' + $DataSource + '-' + (Get-Date -Format 'yyyyMMddHHmmssfff')
+
+    $payload = @{
+        botId = $Bot.id
+        strategyId = $strategyId
         architecture = $Candidate.architecture
+        modelVersion = $modelVersion
         dataSource = $DataSource
-        session = $completedSession
-        backtest = $backtest
+        trainingPeriod = @{
+            startDate = $startDate
+            endDate = $endDate
+        }
+        includedPairs = @($includedPairs)
+        indicators = @('SMA_7', 'SMA_14', 'EMA_7', 'RSI', 'MACD', 'BB_upper', 'BB_lower')
+        timeframe = if ($Bot.effectiveParameters.timeframe) { $Bot.effectiveParameters.timeframe } else { '1h' }
+        hyperparameters = $Candidate.hyperparameters
+    }
+
+    Write-Info "Criando treino $($Candidate.architecture) para $($Bot.name) com $DataSource em $($payload.timeframe)"
+    $session = $null
+
+    try {
+        $session = Invoke-BackendRequest -Method POST -Path '/api/training/sessions' -Body $payload -Token $Token
+    } catch {
+        $recoveredSession = Wait-TrainingSessionRegistration -BotId $Bot.id -ModelVersion $modelVersion -Token $Token -TimeoutSeconds 60
+        if ($null -ne $recoveredSession) {
+            $session = $recoveredSession
+            Write-WarnLine "A criacao do treino perdeu a conexao, mas a sessao $($session.id) foi recuperada para $($Bot.name)."
+        } else {
+            $activeSession = Get-ActiveTrainingSessionForBot -BotId $Bot.id -Token $Token
+            if (Test-IsConflictBackendError -Exception $_.Exception) {
+                if ($null -ne $activeSession) {
+                    throw "Ja existe treinamento ativo para $($Bot.name): sessao $($activeSession.id) em status $($activeSession.status)"
+                }
+            }
+
+            throw
+        }
+    }
+
+    try {
+        $completedSession = Wait-TrainingSessionCompletion -SessionId $session.id -Token $Token -TimeoutMinutes $SessionTimeoutMinutes -BotId $Bot.id -ModelVersion $modelVersion
+
+        if ($completedSession.status -ne 'completed') {
+            throw "Sessao $($session.id) terminou em status $($completedSession.status)"
+        }
+
+        $backtest = Invoke-BackendRequest -Method POST -Path "/api/training/sessions/$($session.id)/test" -Body @{} -Token $Token -TimeoutSec 180
+
+        return [pscustomobject]@{
+            candidate = $Candidate.label
+            architecture = $Candidate.architecture
+            dataSource = $DataSource
+            session = $completedSession
+            backtest = $backtest
+        }
+    } catch {
+        if ($null -ne $session -and $_.Exception.Message -like '*Timeout aguardando a sessao*') {
+            Cancel-TrainingSessionBestEffort -SessionId $session.id -Token $Token
+        }
+
+        throw
     }
 }
 
@@ -340,14 +848,7 @@ Write-Step '2/6' 'Subindo stack base com init.ps1'
 
 Write-Step '3/6' 'Aguardando backend e autenticando'
 Wait-ForBackendReady
-$login = Invoke-BackendRequest -Method POST -Path '/api/auth/login' -Body @{
-    email = 'admin@botcrypto.com'
-    password = 'admin123'
-} -ReturnRaw
-$token = [string]$login.token
-if (-not $token) {
-    throw 'Token de autenticacao nao retornado pelo backend.'
-}
+$token = Invoke-BackendLogin
 Write-Ok 'Login administrativo concluido'
 
 Write-Step '4/6' 'Resetando carteira paper para capital inicial limpo'
@@ -442,28 +943,43 @@ if (-not $SkipTraining) {
             }
         }
 
+        $activeTrainingSession = Get-ActiveTrainingSessionForBot -BotId $botDetail.id -Token $token
+        if ($null -ne $activeTrainingSession) {
+            Write-WarnLine "Sessao ativa remanescente para $($botDetail.name): $($activeTrainingSession.id) em status $($activeTrainingSession.status). Solicitando cancelamento antes do encerramento do bootstrap."
+            Cancel-TrainingSessionBestEffort -SessionId $activeTrainingSession.id -Token $token
+        }
+
         if ($successfulAttempts.Count -gt 0) {
-            $best = Select-BestTrainingResult -Results $successfulAttempts
-            $saved = Invoke-BackendRequest -Method POST -Path "/api/training/sessions/$($best.session.id)/save" -Body @{} -Token $token
-            $botSummary.selectedModel = [ordered]@{
-                sessionId = $best.session.id
-                architecture = $best.architecture
-                dataSource = $best.dataSource
-                modelUrl = $saved.modelUrl
-                governanceRole = $saved.governanceRole
-                autoPromoted = $saved.autoPromoted
-                totalProfit = $best.backtest.totalProfit
-                winRate = $best.backtest.winRate
-                maxDrawdown = $best.backtest.maxDrawdown
-                profitFactor = $best.backtest.profitFactor
+            $saveableResult = Resolve-SaveableTrainingResult -Results $successfulAttempts -Token $token
+
+            if ($null -ne $saveableResult) {
+                $saved = Invoke-BackendRequest -Method POST -Path "/api/training/sessions/$($saveableResult.session.id)/save" -Body @{} -Token $token
+                $botSummary.selectedModel = [ordered]@{
+                    sessionId = $saveableResult.session.id
+                    architecture = $saveableResult.architecture
+                    dataSource = $saveableResult.dataSource
+                    modelUrl = $saved.modelUrl
+                    governanceRole = $saved.governanceRole
+                    autoPromoted = $saved.autoPromoted
+                    totalProfit = $saveableResult.backtest.totalProfit
+                    winRate = $saveableResult.backtest.winRate
+                    maxDrawdown = $saveableResult.backtest.maxDrawdown
+                    profitFactor = $saveableResult.backtest.profitFactor
+                }
+                Write-Ok ("Melhor candidato salvo para {0}: {1} via {2}" -f $botDetail.name, $saveableResult.architecture, $saveableResult.dataSource)
+            } else {
+                Write-WarnLine "Os candidatos concluidos de $($botDetail.name) nao estavam mais aptos para save ao final da rodada. Mantendo champion atual."
             }
-            Write-Ok ("Melhor candidato salvo para {0}: {1} via {2}" -f $botDetail.name, $best.architecture, $best.dataSource)
         } else {
             Write-WarnLine "Nenhum treino concluido para $($botDetail.name); o bot permanece com o champion bootstrap do seed."
         }
 
-        Invoke-BackendRequest -Method POST -Path "/api/dashboard/bots/$($botDetail.id)/run" -Body @{} -Token $token | Out-Null
-        Write-Info "Ciclo manual disparado para $($botDetail.name) ao final do bootstrap"
+        try {
+            Invoke-BackendRequest -Method POST -Path "/api/dashboard/bots/$($botDetail.id)/run" -Body @{} -Token $token -TimeoutSec 180 | Out-Null
+            Write-Info "Ciclo manual disparado para $($botDetail.name) ao final do bootstrap"
+        } catch {
+            Write-WarnLine "Ciclo manual de $($botDetail.name) nao concluiu dentro do bootstrap: $($_.Exception.Message)"
+        }
 
         $bootstrapSummary.bots += $botSummary
     }

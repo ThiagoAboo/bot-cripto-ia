@@ -54,14 +54,19 @@ const {
     },
   }],
   botTemplatesMock: [{
-    id: 'template-rsi',
-    slug: 'rsi-specialist',
-    name: 'RSI Specialist',
-    strategyType: 'rsi',
-    indicatorType: 'RSI',
-    specialization: 'mean_reversion',
-    description: 'Template RSI',
-    defaultParameters: { timeframe: '1h' },
+    id: 'template-micro-scalper-paper',
+    slug: 'micro-scalper-paper',
+    name: 'Micro Scalper Paper',
+    strategyType: 'scalper',
+    indicatorType: 'OrderBook',
+    specialization: 'micro_scalping',
+    description: 'Preset de micro trades',
+    defaultParameters: {
+      timeframe: '1m',
+      allowedPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
+      maxPairsToAnalyze: 3,
+      maxExecutableOpportunitiesPerCycle: 1,
+    },
     source: 'template',
   }],
   botModelsMock: {
@@ -703,6 +708,30 @@ describe('BotsPage', () => {
       expect(archiveBotModelMutateAsync).toHaveBeenCalledWith({
         botId: 'bot-1',
         modelId: 'model-2',
+      })
+    })
+  })
+
+  it('prefills the micro scalper template when creating a new bot', async () => {
+    createBotMutateAsync.mockResolvedValue({ id: 'bot-created-1' })
+
+    render(<BotsPage />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Novo bot' }))
+    fireEvent.click(screen.getAllByRole('button', { name: 'Criar bot' })[1])
+
+    await waitFor(() => {
+      expect(createBotMutateAsync).toHaveBeenCalledWith({
+        templateId: 'template-micro-scalper-paper',
+        name: 'Micro Scalper Paper',
+        description: 'Preset de micro trades',
+        executionMode: 'paper',
+        status: 'offline',
+        parameters: {
+          allowedPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
+          maxPairsToAnalyze: 3,
+          maxExecutableOpportunitiesPerCycle: 1,
+        },
       })
     })
   })
