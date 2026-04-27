@@ -189,6 +189,7 @@ export async function analyzeBotInstance(
         id: userId,
         email: user?.email ?? '',
       }),
+      runtimeKey: process.env.BOT_RUNTIME_SHARED_SECRET || undefined,
       timeoutSeconds: Number(process.env.PYTHON_BOT_RUNTIME_TIMEOUT_SECONDS ?? 15),
     },
     bot: {

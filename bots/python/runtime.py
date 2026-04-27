@@ -270,6 +270,7 @@ def request_json(
     body: Optional[Dict[str, Any]] = None,
     timeout: float = 15.0,
     retries: int = 2,
+    internal_key: Optional[str] = None,
 ) -> Any:
     query = build_query_string(params or {})
     url = f"{base_url.rstrip('/')}{path}"
@@ -282,6 +283,8 @@ def request_json(
             encoded_body = json.dumps(body).encode("utf-8") if body is not None else None
             request = urllib.request.Request(url, data=encoded_body, method=method.upper())
             request.add_header("Authorization", f"Bearer {token}")
+            if internal_key:
+                request.add_header("x-bot-runtime-key", internal_key)
             request.add_header("Accept", "application/json")
             if encoded_body is not None:
                 request.add_header("Content-Type", "application/json")
@@ -318,6 +321,7 @@ def best_effort_post_json(
             body=body,
             timeout=backend.get("timeoutSeconds", 15.0),
             retries=0,
+            internal_key=backend.get("runtimeKey"),
         )
     except Exception:
         return
@@ -340,6 +344,7 @@ def fetch_social_signals(backend: Dict[str, Any]) -> List[Dict[str, Any]]:
         backend["accessToken"],
         "/api/social/latest",
         timeout=backend.get("timeoutSeconds", 15.0),
+        internal_key=backend.get("runtimeKey"),
     )
 
     signals: List[Dict[str, Any]] = []
@@ -369,6 +374,7 @@ def fetch_candles(backend: Dict[str, Any], pair: str, period: str, limit: int) -
             "limit": limit,
         },
         timeout=backend.get("timeoutSeconds", 15.0),
+        internal_key=backend.get("runtimeKey"),
     )
     return [normalize_candle(entry) for entry in (data or []) if isinstance(entry, dict)]
 
@@ -380,6 +386,7 @@ def fetch_price(backend: Dict[str, Any], pair: str) -> float:
         "/api/exchange/price",
         params={"pair": pair},
         timeout=backend.get("timeoutSeconds", 15.0),
+        internal_key=backend.get("runtimeKey"),
     )
     return to_float((data or {}).get("price"))
 
@@ -394,6 +401,7 @@ def fetch_exchange_rate(backend: Dict[str, Any], from_currency: str, to_currency
             "to": to_currency,
         },
         timeout=backend.get("timeoutSeconds", 15.0),
+        internal_key=backend.get("runtimeKey"),
     )
     return to_float((data or {}).get("rate"))
 
@@ -405,6 +413,7 @@ def fetch_orderbook(backend: Dict[str, Any], pair: str, limit: int = 20) -> Dict
         "/api/exchange/orderbook",
         params={"pair": pair, "limit": limit},
         timeout=backend.get("timeoutSeconds", 15.0),
+        internal_key=backend.get("runtimeKey"),
     )
 
     bids = []

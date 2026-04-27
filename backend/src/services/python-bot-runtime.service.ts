@@ -156,6 +156,7 @@ export async function runPythonBotAnalysis(payload: {
   backend: {
     baseUrl: string
     accessToken: string
+    runtimeKey?: string
     timeoutSeconds?: number
   }
   bot: {
@@ -184,6 +185,7 @@ export async function runPythonBotCycle(payload: {
   backend: {
     baseUrl: string
     accessToken: string
+    runtimeKey?: string
     timeoutSeconds?: number
   }
   bot: {

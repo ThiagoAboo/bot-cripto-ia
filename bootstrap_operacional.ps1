@@ -1,6 +1,3 @@
-$ErrorActionPreference = 'Stop'
-Set-StrictMode -Version Latest
-
 param(
     [ValidateSet('quick', 'thorough')]
     [string]$TrainingPreset = 'quick',
@@ -15,6 +12,9 @@ param(
     [string]$PaperCurrency = 'USDT',
     [switch]$SkipTraining
 )
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
 
 $rootDir = $PSScriptRoot
 $backendBaseUrl = 'http://localhost:3001'
@@ -38,6 +38,19 @@ function Write-Info {
 function Write-WarnLine {
     param([string]$Message)
     Write-Host "      ! $Message" -ForegroundColor DarkYellow
+}
+
+function Get-ValueOrDefault {
+    param(
+        [object]$Value,
+        [object]$DefaultValue
+    )
+
+    if ($null -ne $Value) {
+        return $Value
+    }
+
+    return $DefaultValue
 }
 
 function Test-PathInsideRoot {
@@ -129,7 +142,8 @@ function Invoke-BackendRequest {
     }
 
     if ($null -ne $response.success -and -not $response.success) {
-        throw ($response.error ?? "Falha ao executar $Method $Path")
+        $errorMessage = Get-ValueOrDefault -Value $response.error -DefaultValue "Falha ao executar $Method $Path"
+        throw $errorMessage
     }
 
     if ($null -ne $response.data) {
@@ -244,10 +258,10 @@ function Select-BestTrainingResult {
 
     return $Results |
         Sort-Object `
-            @{ Expression = { [double]($_.backtest.totalProfit ?? 0) }; Descending = $true }, `
-            @{ Expression = { [double]($_.backtest.winRate ?? 0) }; Descending = $true }, `
-            @{ Expression = { [double]($_.backtest.maxDrawdown ?? 0) }; Descending = $false }, `
-            @{ Expression = { [double]($_.backtest.profitFactor ?? 0) }; Descending = $true } |
+            @{ Expression = { [double](Get-ValueOrDefault -Value $_.backtest.totalProfit -DefaultValue 0) }; Descending = $true }, `
+            @{ Expression = { [double](Get-ValueOrDefault -Value $_.backtest.winRate -DefaultValue 0) }; Descending = $true }, `
+            @{ Expression = { [double](Get-ValueOrDefault -Value $_.backtest.maxDrawdown -DefaultValue 0) }; Descending = $false }, `
+            @{ Expression = { [double](Get-ValueOrDefault -Value $_.backtest.profitFactor -DefaultValue 0) }; Descending = $true } |
         Select-Object -First 1
 }
 

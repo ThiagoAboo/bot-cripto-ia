@@ -2,7 +2,7 @@ import { NextFunction, Request, Response } from 'express'
 
 import { logger } from '../utils/logger'
 
-function resolveBotRuntimeSharedSecret(): string {
+export function resolveBotRuntimeSharedSecret(): string {
   return String(process.env.BOT_RUNTIME_SHARED_SECRET || '').trim()
 }
 
@@ -25,6 +25,16 @@ function readProvidedSecret(req: Request): string {
   return token.trim()
 }
 
+export function hasValidBotRuntimeSecret(req: Request): boolean {
+  const configuredSecret = resolveBotRuntimeSharedSecret()
+  if (!configuredSecret) {
+    return false
+  }
+
+  const providedSecret = readProvidedSecret(req)
+  return Boolean(providedSecret) && providedSecret === configuredSecret
+}
+
 export function botRuntimeAuthMiddleware(
   req: Request,
   res: Response,
@@ -32,7 +42,7 @@ export function botRuntimeAuthMiddleware(
 ): Response | void {
   const configuredSecret = resolveBotRuntimeSharedSecret()
   if (!configuredSecret) {
-    logger.error('[bot-runtime] Segredo compartilhado não configurado', {
+    logger.error('[bot-runtime] Segredo compartilhado nao configurado', {
       module: 'bot-runtime',
       event: 'bot_runtime_missing_shared_secret',
       method: req.method,
@@ -41,12 +51,11 @@ export function botRuntimeAuthMiddleware(
 
     return res.status(503).json({
       success: false,
-      error: 'Serviço de runtime dos bots indisponível',
+      error: 'Servico de runtime dos bots indisponivel',
     })
   }
 
-  const providedSecret = readProvidedSecret(req)
-  if (!providedSecret || providedSecret !== configuredSecret) {
+  if (!hasValidBotRuntimeSecret(req)) {
     logger.warn('[bot-runtime] Acesso negado ao contrato interno do runtime', {
       module: 'bot-runtime',
       event: 'bot_runtime_forbidden',

@@ -8,7 +8,7 @@ import { Server } from 'socket.io'
 
 import { prisma } from './config/database'
 import { authMiddleware, resolveAuthenticatedUserFromToken, type AuthenticatedUser } from './middleware/auth.middleware'
-import { botRuntimeAuthMiddleware } from './middleware/bot-runtime-auth.middleware'
+import { botRuntimeAuthMiddleware, hasValidBotRuntimeSecret } from './middleware/bot-runtime-auth.middleware'
 import {
   getScopedRoom,
   getSystemLogsRoom,
@@ -75,6 +75,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }))
 const limiter = rateLimit({
   windowMs: 60 * 1000,
   max: 300,
+  skip: (req) => hasValidBotRuntimeSecret(req),
   message: { success: false, error: 'Muitas requisições, tente novamente mais tarde' },
   handler: (req, res) => {
     logger.warn('[app] Limite de requisições excedido', {

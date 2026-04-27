@@ -141,6 +141,15 @@ export function TraceTerminal({ traces, isLoading, total, onLoadMore }: TraceTer
     return acc
   }, {} as Record<string, TraceEntry[]>)
 
+  const orderedTraceIds = Object.keys(groupedTraces).sort((left, right) => {
+    const leftTimestamp = groupedTraces[left]
+      .reduce((latest, trace) => Math.max(latest, Date.parse(trace.timestamp) || 0), 0)
+    const rightTimestamp = groupedTraces[right]
+      .reduce((latest, trace) => Math.max(latest, Date.parse(trace.timestamp) || 0), 0)
+
+    return rightTimestamp - leftTimestamp
+  })
+
   if (isLoading && traces.length === 0) {
     return (
       <Card>
@@ -173,12 +182,12 @@ export function TraceTerminal({ traces, isLoading, total, onLoadMore }: TraceTer
       
       <CardContent>
         <div className="space-y-2 max-h-[600px] overflow-y-auto pr-2">
-          {Object.keys(groupedTraces).length === 0 ? (
+          {orderedTraceIds.length === 0 ? (
             <div className="text-center py-8 text-gray-500">
               Nenhum trace encontrado
             </div>
           ) : (
-            Object.keys(groupedTraces).map((traceId) => (
+            orderedTraceIds.map((traceId) => (
               <TraceGroupItem key={traceId} traceId={traceId} />
             ))
           )}

@@ -539,7 +539,7 @@ export async function getTraces(req: AuthRequest, res: Response) {
     const [traces, total] = await Promise.all([
       prisma.trace.findMany({
         where,
-        orderBy: { timestamp: 'asc' },
+        orderBy: { timestamp: 'desc' },
         skip,
         take: limit,
         include: {
@@ -768,7 +768,7 @@ export async function exportTraces(req: AuthRequest, res: Response) {
 
     const traces = await prisma.trace.findMany({
       where,
-      orderBy: { timestamp: 'asc' },
+      orderBy: { timestamp: 'desc' },
     })
 
     const headers = [
