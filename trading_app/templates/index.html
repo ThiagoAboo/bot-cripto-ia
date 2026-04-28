@@ -1,0 +1,817 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Micro Trade AI Simulator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="metrics-grid metrics-grid-top" id="metrics-grid"></section>
+
+      <section class="panel chart-panel">
+        <div class="section-head">
+          <h2>Curva de patrimonio</h2>
+          <p>Total, caixa e PnL acumulado em <span data-quote-asset>{{ quote_asset }}</span>.</p>
+        </div>
+        <div id="equity-chart" class="chart"></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-head">
+          <h2>Moedas</h2>
+          <p>Todos os pares selecionados para trade, ordenados por quantidade em carteira e usando a ultima marcacao a mercado disponivel.</p>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table positions-table">
+            <thead>
+              <tr>
+                <th>Par</th>
+                <th>Qtd</th>
+                <th>Preco atual</th>
+                <th>Preco de compra</th>
+                <th>Preco de venda</th>
+                <th>Valor</th>
+                <th>PnL realizado</th>
+                <th>PnL nao realizado</th>
+                <th>PnL total</th>
+              </tr>
+            </thead>
+            <tbody id="positions-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel config-panel">
+        <div class="section-head">
+          <div class="section-head-title">
+            <div class="section-head-inline">
+              <h2>Configuracao</h2>
+              <button
+                type="button"
+                id="open-config-help"
+                class="info-button"
+                aria-haspopup="dialog"
+                aria-controls="config-help-modal"
+                title="Abrir guia das configuracoes"
+              >
+                i
+              </button>
+            </div>
+            <p>Salvar persiste a configuracao sem apagar historico. Reiniciar reaplica os parametros mantendo os dados. Resetar volta tudo ao default do projeto.</p>
+          </div>
+        </div>
+
+        <div class="config-stack">
+          <section class="config-block">
+            <div class="config-block-head">
+              <h3>Base operacional</h3>
+              <p>Capital, taxa, ritmo de ciclo e dimensao das entradas.</p>
+            </div>
+            <div class="config-grid">
+              <label>
+                <span class="label-head">
+                  <span>Capital inicial (<span data-quote-asset>{{ quote_asset }}</span>)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-initial-capital" aria-label="Ajuda sobre Capital inicial">i</button>
+                </span>
+                <input id="initial-capital" type="number" min="0.000001" step="any">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Moeda de cotacao</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-quote-asset" aria-label="Ajuda sobre Moeda de cotacao">i</button>
+                </span>
+                <select id="quote-asset"></select>
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Taxa por transacao (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-fee-rate-percent" aria-label="Ajuda sobre Taxa por transacao">i</button>
+                </span>
+                <input id="fee-rate-percent" type="number" min="0" max="5" step="0.001">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Intervalo entre ciclos (segundos)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-poll-seconds" aria-label="Ajuda sobre Intervalo entre ciclos">i</button>
+                </span>
+                <input id="poll-seconds" type="number" min="5" step="1">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Alocacao por trade (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-trade-size-fraction" aria-label="Ajuda sobre Alocacao por trade">i</button>
+                </span>
+                <input id="trade-size-fraction" type="number" min="5" max="90" step="1">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Maximo de posicoes abertas</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-max-open-positions" aria-label="Ajuda sobre Maximo de posicoes abertas">i</button>
+                </span>
+                <input id="max-open-positions" type="number" min="1" step="1">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Lote minimo fallback (<span data-quote-asset>{{ quote_asset }}</span>)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-min-trade-notional" aria-label="Ajuda sobre Lote minimo fallback">i</button>
+                </span>
+                <input id="min-trade-notional" type="number" min="0.000001" step="any">
+              </label>
+            </div>
+          </section>
+
+          <section class="config-block">
+            <div class="config-block-head">
+              <h3>Candles e aprendizado</h3>
+              <p>Timeframes, amostragem e memoria usada pela IA.</p>
+            </div>
+            <div class="config-grid">
+              <label>
+                <span class="label-head">
+                  <span>Intervalo primario</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-primary-kline-interval" aria-label="Ajuda sobre Intervalo primario">i</button>
+                </span>
+                <input id="primary-kline-interval" type="text" spellcheck="false">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Limite de candles primarios</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-primary-kline-limit" aria-label="Ajuda sobre Limite de candles primarios">i</button>
+                </span>
+                <input id="primary-kline-limit" type="number" min="60" step="1">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Intervalo de confirmacao</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-confirm-kline-interval" aria-label="Ajuda sobre Intervalo de confirmacao">i</button>
+                </span>
+                <input id="confirm-kline-interval" type="text" spellcheck="false">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Limite de candles de confirmacao</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-confirm-kline-limit" aria-label="Ajuda sobre Limite de candles de confirmacao">i</button>
+                </span>
+                <input id="confirm-kline-limit" type="number" min="60" step="1">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Historico por moeda (ciclos)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-cycle-history-limit" aria-label="Ajuda sobre Historico por moeda">i</button>
+                </span>
+                <input id="cycle-history-limit" type="number" min="50" max="5000" step="10">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Horizonte de aprendizado (ciclos)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-learning-horizon-cycles" aria-label="Ajuda sobre Horizonte de aprendizado">i</button>
+                </span>
+                <input id="learning-horizon-cycles" type="number" min="1" step="1">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Aquecimento da IA (ciclos)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-learning-warmup-cycles" aria-label="Ajuda sobre Aquecimento da IA">i</button>
+                </span>
+                <input id="learning-warmup-cycles" type="number" min="5" step="1">
+              </label>
+            </div>
+          </section>
+
+          <section class="config-block">
+            <div class="config-block-head">
+              <h3>Risco e saida</h3>
+              <p>Thresholds principais, alvo de lucro, perda maxima e tempo de exposicao.</p>
+            </div>
+            <div class="config-grid">
+              <label>
+                <span class="label-head">
+                  <span>Perfil da estrategia</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-strategy-profile" aria-label="Ajuda sobre Perfil da estrategia">i</button>
+                </span>
+                <select id="strategy-profile">
+                  <option value="conservador">Conservador</option>
+                  <option value="equilibrado">Equilibrado</option>
+                  <option value="agressivo">Agressivo</option>
+                  <option value="customizado">Customizado</option>
+                </select>
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Threshold de compra</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-buy-threshold" aria-label="Ajuda sobre Threshold de compra">i</button>
+                </span>
+                <input id="buy-threshold" type="number" step="0.01">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Threshold de venda</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-sell-threshold" aria-label="Ajuda sobre Threshold de venda">i</button>
+                </span>
+                <input id="sell-threshold" type="number" step="0.01">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Take profit (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-take-profit-percent" aria-label="Ajuda sobre Take profit">i</button>
+                </span>
+                <input id="take-profit-percent" type="number" min="0.01" step="0.01">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Stop loss (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-stop-loss-percent" aria-label="Ajuda sobre Stop loss">i</button>
+                </span>
+                <input id="stop-loss-percent" type="number" min="0.01" step="0.01">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Idade maxima da posicao (min, 0 desativa)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-max-position-age-minutes" aria-label="Ajuda sobre Idade maxima da posicao">i</button>
+                </span>
+                <input id="max-position-age-minutes" type="number" min="0" step="1">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Cooldown apos saida ruim (ciclos, 0 desativa)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-cooldown-after-loss-cycles" aria-label="Ajuda sobre Cooldown apos saida ruim">i</button>
+                </span>
+                <input id="cooldown-after-loss-cycles" type="number" min="0" max="500" step="1">
+              </label>
+            </div>
+          </section>
+
+          <section class="config-block">
+            <div class="config-block-head">
+              <h3>Alinhamento e entrada</h3>
+              <p>Quao exigente a IA fica no RSI, na qualidade do sinal e na confirmacao do timeframe maior.</p>
+            </div>
+            <div class="config-grid">
+              <label>
+                <span class="label-head">
+                  <span>RSI maximo da entrada</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-entry-rsi-limit" aria-label="Ajuda sobre RSI maximo da entrada">i</button>
+                </span>
+                <input id="entry-rsi-limit" type="number" min="40" max="100" step="0.1">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Qualidade minima sinal (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-entry-signal-quality-min-percent" aria-label="Ajuda sobre Qualidade minima do sinal">i</button>
+                </span>
+                <input id="entry-signal-quality-min-percent" type="number" min="0" max="100" step="0.1">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Trend min. confirmacao (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-entry-confirm-trend-min-percent" aria-label="Ajuda sobre Trend minimo da confirmacao">i</button>
+                </span>
+                <input id="entry-confirm-trend-min-percent" type="number" min="-5" max="5" step="0.001">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Momentum min. confirmacao (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-entry-confirm-momentum-min-percent" aria-label="Ajuda sobre Momentum minimo da confirmacao">i</button>
+                </span>
+                <input id="entry-confirm-momentum-min-percent" type="number" min="-10" max="10" step="0.01">
+              </label>
+            </div>
+          </section>
+
+          <section class="config-block">
+            <div class="config-block-head">
+              <h3>Breakout e continuidade</h3>
+              <p>Gatilhos especiais que liberam compras quando o mercado mostra expansao ou tendencia persistente.</p>
+            </div>
+            <div class="config-grid">
+              <label>
+                <span class="label-head">
+                  <span>Delta score breakout</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-breakout-score-delta" aria-label="Ajuda sobre Delta score breakout">i</button>
+                </span>
+                <input id="breakout-score-delta" type="number" min="0" step="0.01">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Trend 1m min. breakout (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-breakout-trend-fast-min-percent" aria-label="Ajuda sobre Trend 1m minimo breakout">i</button>
+                </span>
+                <input id="breakout-trend-fast-min-percent" type="number" min="-5" max="5" step="0.001">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Trend 5m min. breakout (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-breakout-confirm-trend-min-percent" aria-label="Ajuda sobre Trend 5m minimo breakout">i</button>
+                </span>
+                <input id="breakout-confirm-trend-min-percent" type="number" min="-5" max="5" step="0.001">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Momentum 15c breakout (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-breakout-momentum-15-min-percent" aria-label="Ajuda sobre Momentum 15 candles breakout">i</button>
+                </span>
+                <input id="breakout-momentum-15-min-percent" type="number" min="-10" max="20" step="0.01">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Volume min. breakout (x)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-breakout-volume-ratio-min" aria-label="Ajuda sobre Volume minimo breakout">i</button>
+                </span>
+                <input id="breakout-volume-ratio-min" type="number" min="0" step="0.01">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Fechamento min. breakout (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-breakout-close-location-min-percent" aria-label="Ajuda sobre Fechamento minimo breakout">i</button>
+                </span>
+                <input id="breakout-close-location-min-percent" type="number" min="0" max="100" step="0.1">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Delta score continuidade</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-trend-cont-score-delta" aria-label="Ajuda sobre Delta score continuidade">i</button>
+                </span>
+                <input id="trend-cont-score-delta" type="number" min="0" step="0.01">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Qualidade min. continuidade (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-trend-cont-signal-quality-min-percent" aria-label="Ajuda sobre Qualidade minima continuidade">i</button>
+                </span>
+                <input id="trend-cont-signal-quality-min-percent" type="number" min="0" max="100" step="0.1">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Trend 5m min. continuidade (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-trend-cont-confirm-trend-min-percent" aria-label="Ajuda sobre Trend 5m minimo continuidade">i</button>
+                </span>
+                <input id="trend-cont-confirm-trend-min-percent" type="number" min="-5" max="5" step="0.001">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Volume min. continuidade (x)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-trend-cont-volume-ratio-min" aria-label="Ajuda sobre Volume minimo continuidade">i</button>
+                </span>
+                <input id="trend-cont-volume-ratio-min" type="number" min="0" step="0.01">
+              </label>
+            </div>
+          </section>
+
+          <section class="config-block">
+            <div class="config-block-head">
+              <h3>Filtros do sinal</h3>
+              <p>Ruido, volatilidade, volume relativo e estrutura minima do candle.</p>
+            </div>
+            <div class="config-grid">
+              <label>
+                <span class="label-head">
+                  <span>Volatilidade maxima 1m (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-max-primary-volatility-percent" aria-label="Ajuda sobre Volatilidade maxima 1m">i</button>
+                </span>
+                <input id="max-primary-volatility-percent" type="number" min="0.01" step="0.01">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Flip ratio maximo (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-max-direction-flip-ratio-percent" aria-label="Ajuda sobre Flip ratio maximo">i</button>
+                </span>
+                <input id="max-direction-flip-ratio-percent" type="number" min="0" max="100" step="0.1">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Volume relativo minimo (x media)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-min-volume-ratio" aria-label="Ajuda sobre Volume relativo minimo">i</button>
+                </span>
+                <input id="min-volume-ratio" type="number" min="0.01" step="0.01">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Corpo minimo do candle (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-min-candle-body-ratio-percent" aria-label="Ajuda sobre Corpo minimo do candle">i</button>
+                </span>
+                <input id="min-candle-body-ratio-percent" type="number" min="0.01" max="100" step="0.1">
+              </label>
+            </div>
+          </section>
+        </div>
+
+        <div class="selector-shell">
+          <div class="selector-head">
+            <div>
+              <div class="section-head-inline">
+                <h3>Moedas analisadas</h3>
+                <button type="button" class="field-help-button" data-field-help-target="help-selected-symbols" aria-label="Ajuda sobre Moedas analisadas">i</button>
+              </div>
+              <p>Escolha os pares spot com cotacao em <span data-quote-asset>{{ quote_asset }}</span> que a estrategia pode operar.</p>
+            </div>
+            <div class="search-with-help">
+              <input id="symbol-search" type="search" placeholder="Buscar moeda...">
+              <button type="button" class="field-help-button" data-field-help-target="help-symbol-search" aria-label="Ajuda sobre Busca de moeda">i</button>
+            </div>
+          </div>
+          <div id="symbol-selector" class="symbol-selector"></div>
+        </div>
+
+        <div class="action-row action-row-settings">
+          <button id="save-settings" class="btn btn-primary">Salvar</button>
+          <button id="restart-settings" class="btn btn-secondary">Reiniciar</button>
+          <button id="reset-settings" class="btn btn-ghost">Resetar</button>
+        </div>
+
+        <div class="action-row action-row-controls">
+          <button id="start-sim" class="btn btn-secondary">Iniciar simulacao</button>
+          <button id="stop-sim" class="btn btn-ghost">Parar</button>
+          <button id="run-cycle" class="btn btn-ghost">Rodar ciclo agora</button>
+        </div>
+        <p id="status-line" class="status-line"></p>
+      </section>
+
+      <section class="panel table-panel tabbed-panel">
+        <div class="section-head">
+          <div>
+            <h2>Historico operacional</h2>
+            <p id="tab-description">A estrategia registra a leitura do ciclo, a confianca bruta do momento e a confianca estabilizada pelo historico persistente.</p>
+          </div>
+          <div class="tab-switcher" role="tablist" aria-label="Historico operacional">
+            <button
+              type="button"
+              class="tab-button is-active"
+              data-tab-target="decisions-tab"
+              data-tab-description="A estrategia registra a leitura do ciclo, a confianca bruta do momento e a confianca estabilizada pelo historico persistente."
+              aria-selected="true"
+            >
+              Decisoes
+            </button>
+            <button
+              type="button"
+              class="tab-button"
+              data-tab-target="transactions-tab"
+              data-tab-description="Ordens gravadas no arquivo fisico local com a taxa configurada por transacao."
+              aria-selected="false"
+            >
+              Transacoes
+            </button>
+          </div>
+        </div>
+
+        <div id="decisions-tab" class="tab-pane is-active">
+          <div class="table-wrap">
+            <table class="data-table decisions-table">
+              <thead>
+                <tr>
+                  <th>Horario</th>
+                  <th>Par</th>
+                  <th>Acao</th>
+                  <th>Score</th>
+                  <th>Confianca</th>
+                  <th>Regime</th>
+                  <th>Executou?</th>
+                  <th>Racional</th>
+                </tr>
+              </thead>
+              <tbody id="decisions-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="transactions-tab" class="tab-pane">
+          <div class="table-wrap">
+            <table class="data-table transactions-table">
+              <thead>
+                <tr>
+                  <th>Horario</th>
+                  <th>Par</th>
+                  <th>Lado</th>
+                  <th>Preco</th>
+                  <th>Qtd</th>
+                  <th>Taxa</th>
+                  <th>PnL realizado</th>
+                  <th>Saldo apos</th>
+                </tr>
+              </thead>
+              <tbody id="transactions-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div id="config-help-modal" class="modal-shell" aria-hidden="true">
+      <div class="modal-backdrop" data-close-modal></div>
+      <section
+        class="modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="config-help-title"
+      >
+        <div class="modal-head">
+          <div>
+            <h3 id="config-help-title">Guia completo da configuracao</h3>
+            <p>Explicacao dos campos e exemplos praticos para ajustar a estrategia sem depender do codigo.</p>
+          </div>
+          <button type="button" id="close-config-help" class="modal-close" aria-label="Fechar">x</button>
+        </div>
+
+        <div class="modal-body">
+          <section class="help-group">
+            <h4>Como ler este guia</h4>
+            <div class="help-grid help-grid-wide">
+              <article class="help-item">
+                <h5>Regra geral</h5>
+                <p>Cada explicacao abaixo segue este formato: <strong>o que o campo controla</strong>, <strong>como isso afeta a estrategia</strong> e <strong>um exemplo pratico</strong>. Se voce quiser um comportamento mais previsivel, altere um campo por vez e observe alguns ciclos antes de mexer de novo.</p>
+              </article>
+              <article class="help-item">
+                <h5>Leitura dos exemplos</h5>
+                <p>Os exemplos usam cenarios simples, como <strong>capital de R$ 10.000</strong>, <strong>taxa de 0,075%</strong> e <strong>alocacao de 10%</strong>. Eles nao prometem resultado; servem para mostrar como o parametro mexe no jeito que a IA compra, segura ou vende.</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="help-group">
+            <h4>Base operacional</h4>
+            <div class="help-grid">
+              <article class="help-item" id="help-initial-capital">
+                <h5>Capital inicial</h5>
+                <p>Define o patrimonio de partida da simulacao. Esse valor vira a referencia para calcular <strong>saldo total</strong>, <strong>PnL</strong> e o tamanho proporcional das entradas.</p>
+                <p><strong>Exemplo:</strong> com <strong>R$ 10.000</strong> e <strong>Alocacao por trade = 10%</strong>, cada compra tenta usar perto de <strong>R$ 1.000</strong> do caixa livre.</p>
+              </article>
+              <article class="help-item" id="help-quote-asset">
+                <h5>Moeda de cotacao</h5>
+                <p>Escolhe o mercado base da simulacao, como <strong>BRL</strong> ou <strong>USDT</strong>. Ela define quais pares podem ser analisados, como os valores aparecem na tela e em qual contexto a IA esta aprendendo.</p>
+                <p><strong>Exemplo:</strong> com <strong>BRL</strong>, voce trabalha com pares como <strong>BTCBRL</strong> e <strong>ETHBRL</strong>. Com <strong>USDT</strong>, a mesma logica passa a usar <strong>BTCUSDT</strong> e afins.</p>
+              </article>
+              <article class="help-item" id="help-fee-rate-percent">
+                <h5>Taxa por transacao</h5>
+                <p>Percentual que o simulador desconta em <strong>cada compra</strong> e em <strong>cada venda</strong>. Esse custo entra no break-even da operacao.</p>
+                <p><strong>Exemplo:</strong> com taxa de <strong>0,075%</strong>, a operacao paga taxa na entrada e na saida. Se o preco subir pouco, ainda assim o PnL pode ficar negativo por causa desse custo total.</p>
+              </article>
+              <article class="help-item" id="help-poll-seconds">
+                <h5>Intervalo entre ciclos</h5>
+                <p>Tempo entre cada rodada de analise da IA. Em cada ciclo, ela rele os candles, reavalia as moedas e decide se compra, segura ou vende.</p>
+                <p><strong>Exemplo:</strong> em <strong>15 segundos</strong>, a estrategia toma uma nova decisao a cada 15 s. Em <strong>60 segundos</strong>, ela fica menos reativa e faz menos leituras.</p>
+              </article>
+              <article class="help-item" id="help-trade-size-fraction">
+                <h5>Alocacao por trade</h5>
+                <p>Percentual do <strong>caixa livre</strong> que a estrategia tenta colocar em cada nova compra.</p>
+                <p><strong>Exemplo:</strong> com caixa de <strong>R$ 8.000</strong> e alocacao de <strong>10%</strong>, a entrada tenta usar aproximadamente <strong>R$ 800</strong>. Se o caixa cair, o valor das proximas entradas tambem cai.</p>
+              </article>
+              <article class="help-item" id="help-max-open-positions">
+                <h5>Maximo de posicoes abertas</h5>
+                <p>Limita quantas moedas podem ficar compradas ao mesmo tempo. Ele funciona como um freio de diversificacao e evita espalhar demais o capital.</p>
+                <p><strong>Exemplo:</strong> com limite <strong>4</strong>, se ja existirem 4 posicoes abertas, uma nova compra so sera permitida quando alguma delas for vendida.</p>
+              </article>
+              <article class="help-item" id="help-min-trade-notional">
+                <h5>Lote minimo fallback</h5>
+                <p>Valor minimo que o simulador usa quando nao consegue descobrir o lote minimo do par pela exchange. Serve para evitar compras pequenas demais.</p>
+                <p><strong>Exemplo:</strong> se estiver em <strong>R$ 20</strong> e a alocacao calculada para uma compra for de <strong>R$ 12</strong>, a entrada nao acontece.</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="help-group">
+            <h4>Candles e aprendizado</h4>
+            <div class="help-grid">
+              <article class="help-item" id="help-primary-kline-interval">
+                <h5>Intervalo primario</h5>
+                <p>Timeframe principal da leitura rapida. A maior parte do score de curtissimo prazo nasce daqui.</p>
+                <p><strong>Exemplo:</strong> em <strong>1m</strong>, a IA fica mais sensivel a micro movimentos. Em <strong>3m</strong>, ela reduz ruído, mas reage mais devagar.</p>
+              </article>
+              <article class="help-item" id="help-primary-kline-limit">
+                <h5>Limite de candles primarios</h5>
+                <p>Quantidade de candles do timeframe principal que entram na analise a cada ciclo.</p>
+                <p><strong>Exemplo:</strong> <strong>120</strong> candles de <strong>1m</strong> representam cerca de <strong>2 horas</strong> de historico para tendencia, volatilidade e momentum.</p>
+              </article>
+              <article class="help-item" id="help-confirm-kline-interval">
+                <h5>Intervalo de confirmacao</h5>
+                <p>Timeframe mais lento usado para confirmar se a leitura curta faz sentido no contexto maior.</p>
+                <p><strong>Exemplo:</strong> um candle bonito no <strong>1m</strong> pode parecer compra, mas se o <strong>5m</strong> estiver claramente contra, a estrategia costuma bloquear a entrada.</p>
+              </article>
+              <article class="help-item" id="help-confirm-kline-limit">
+                <h5>Limite de candles de confirmacao</h5>
+                <p>Quantidade de candles do timeframe de confirmacao que a IA usa para validar a tendencia maior.</p>
+                <p><strong>Exemplo:</strong> <strong>120</strong> candles de <strong>5m</strong> representam perto de <strong>10 horas</strong> de historico.</p>
+              </article>
+              <article class="help-item" id="help-cycle-history-limit">
+                <h5>Historico por moeda</h5>
+                <p>Numero maximo de ciclos que o banco guarda por moeda para manter o aprendizado persistente sem crescer indefinidamente.</p>
+                <p><strong>Exemplo:</strong> em <strong>400</strong>, a IA pode lembrar varias centenas de leituras por ativo; ao passar disso, os registros mais antigos sao descartados.</p>
+              </article>
+              <article class="help-item" id="help-learning-horizon-cycles">
+                <h5>Horizonte de aprendizado</h5>
+                <p>Quantidade de ciclos que a IA espera antes de julgar se uma decisao antiga foi boa ou ruim. Esse valor define o “futuro” usado no aprendizado.</p>
+                <p><strong>Exemplo:</strong> se estiver em <strong>6</strong> e o ciclo roda a cada <strong>15 s</strong>, a decisao de agora sera comparada com o mercado de aproximadamente <strong>90 s</strong> a frente.</p>
+              </article>
+              <article class="help-item" id="help-learning-warmup-cycles">
+                <h5>Aquecimento da IA</h5>
+                <p>Quantidade minima de casos resolvidos que a IA quer acumular antes de confiar mais no historico aprendido do que na leitura “crua” do candle atual.</p>
+                <p><strong>Exemplo:</strong> em <strong>30</strong>, a confianca estabilizada ainda pesa pouco no inicio; depois de 30 casos resolvidos por moeda, o aprendizado passa a influenciar mais.</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="help-group">
+            <h4>Risco e saida</h4>
+            <div class="help-grid">
+              <article class="help-item" id="help-strategy-profile">
+                <h5>Perfil da estrategia</h5>
+                <p>Atalho para preencher automaticamente <strong>todos os campos expostos da decisao da IA</strong> que alteram compra e venda: thresholds, take profit, stop loss, tempo maximo, cooldown, filtros de ruido, RSI, confirmacao do 5m e os gatilhos especiais de breakout e continuidade.</p>
+                <p><strong>Conservador:</strong> exige alinhamento mais limpo, confirma melhor o 5m e libera menos entradas especiais.<br><strong>Equilibrado:</strong> abre mais espaco para micro trades, mas ainda filtra bastante ruido.<br><strong>Agressivo:</strong> continua buscando mais oportunidades, mas agora ja nasce com filtros menos soltos para evitar entrar em qualquer serrilhado e acumular perdas desnecessarias.</p>
+              </article>
+              <article class="help-item" id="help-buy-threshold">
+                <h5>Threshold de compra</h5>
+                <p>Nota minima do score interno para a IA considerar uma compra. Nao e percentual de preco; e um corte sobre a forca do sinal.</p>
+                <p><strong>Exemplo:</strong> subir de <strong>0,80</strong> para <strong>1,15</strong> deixa a estrategia mais seletiva. Ela compra menos, mas tende a exigir sinais mais fortes.</p>
+              </article>
+              <article class="help-item" id="help-sell-threshold">
+                <h5>Threshold de venda</h5>
+                <p>Nota de enfraquecimento da posicao aberta. Quanto menos negativo ele for, mais cedo a estrategia aceita sair por perda de forca.</p>
+                <p><strong>Exemplo:</strong> em <strong>-0,35</strong> a venda tende a acontecer antes do que em <strong>-0,85</strong>, porque a tolerancia ao enfraquecimento fica menor.</p>
+              </article>
+              <article class="help-item" id="help-take-profit-percent">
+                <h5>Take profit</h5>
+                <p>Lucro alvo que habilita realizacao. Se a tendencia ainda estiver muito favoravel, a estrategia pode continuar segurando a moeda em vez de vender imediatamente.</p>
+                <p><strong>Exemplo:</strong> com <strong>0,65%</strong>, uma posicao que atinge esse ganho pode ser vendida; mas se o contexto ainda estiver forte, ela pode seguir aberta para tentar extrair mais movimento.</p>
+              </article>
+              <article class="help-item" id="help-stop-loss-percent">
+                <h5>Stop loss</h5>
+                <p>Perda maxima tolerada por posicao. Quando o prejuizo atinge esse nivel, a estrategia tenta encerrar o trade para conter a queda.</p>
+                <p><strong>Exemplo:</strong> em <strong>0,50%</strong>, se a moeda cair o suficiente para gerar perda aproximada de 0,50% na posicao, o sistema tenta vender.</p>
+              </article>
+              <article class="help-item" id="help-max-position-age-minutes">
+                <h5>Idade maxima da posicao</h5>
+                <p>Tempo maximo que a posicao pode ficar aberta antes de a regra de tempo ganhar permissao para agir. Esse campo sozinho liga ou desliga essa regra.</p>
+                <p><strong>Exemplo:</strong> em <strong>35 min</strong>, uma posicao morna e velha pode ser encerrada depois desse prazo. Em <strong>0</strong>, essa regra fica desativada.</p>
+              </article>
+              <article class="help-item" id="help-cooldown-after-loss-cycles">
+                <h5>Cooldown apos saida ruim</h5>
+                <p>Numero de ciclos em que uma moeda fica temporariamente bloqueada para <strong>novas compras</strong> depois que uma venda fecha no prejuizo. Serve para evitar reentrada rapida no mesmo ruido logo apos uma perda.</p>
+                <p><strong>Exemplo:</strong> se estiver em <strong>18</strong> e `DOGEBRL` sair no prejuizo agora, essa moeda pode continuar sendo analisada, mas a estrategia nao abre nova compra nela pelos proximos <strong>18 ciclos</strong>. Em <strong>0</strong>, o bloqueio fica desativado.</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="help-group">
+            <h4>Alinhamento e entrada</h4>
+            <div class="help-grid">
+              <article class="help-item" id="help-entry-rsi-limit">
+                <h5>RSI maximo da entrada</h5>
+                <p>Limite de RSI do timeframe principal para a <strong>entrada padrao</strong>. Se o RSI estiver acima disso, a compra normal e bloqueada, a menos que um gatilho especial de breakout ou continuidade assuma a decisao.</p>
+                <p><strong>Exemplo:</strong> em <strong>78</strong>, a IA ainda aceita um ativo forte, mas evita compras comuns quando o 1m ja esticou demais. Em <strong>90</strong>, ela aceita sinais mais quentes.</p>
+              </article>
+              <article class="help-item" id="help-entry-signal-quality-min-percent">
+                <h5>Qualidade minima do sinal</h5>
+                <p>Percentual minimo de qualidade agregado antes de a entrada padrao ser considerada valida. Essa qualidade mistura alinhamento, volume, estrutura do candle e penalidade por ruido.</p>
+                <p><strong>Exemplo:</strong> em <strong>42%</strong>, a estrategia aceita um sinal razoavel. Em <strong>60%</strong>, ela passa a cobrar uma leitura bem mais coesa antes de comprar.</p>
+              </article>
+              <article class="help-item" id="help-entry-confirm-trend-min-percent">
+                <h5>Trend minimo da confirmacao</h5>
+                <p>Quanto o trend do timeframe de confirmacao pode ficar negativo antes de bloquear a compra. Esse campo e o principal ajuste para deixar o 5m mais flexivel ou mais rigido.</p>
+                <p><strong>Exemplo:</strong> em <strong>0,00%</strong>, a confirmacao precisa estar positiva. Em <strong>-0,03%</strong>, a IA ainda aceita uma leve respiracao no 5m se o 1m estiver muito bom.</p>
+              </article>
+              <article class="help-item" id="help-entry-confirm-momentum-min-percent">
+                <h5>Momentum minimo da confirmacao</h5>
+                <p>Define quanta perda de impulso no timeframe de confirmacao ainda e tolerada antes de bloquear a entrada. Serve para nao exigir um 5m perfeito o tempo todo.</p>
+                <p><strong>Exemplo:</strong> em <strong>-0,30%</strong>, uma confirmacao um pouco fraca ainda pode passar. Em <strong>0,00%</strong>, qualquer perda de impulso no 5m ja bloqueia a entrada padrao.</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="help-group">
+            <h4>Breakout e continuidade</h4>
+            <div class="help-grid">
+              <article class="help-item" id="help-breakout-score-delta">
+                <h5>Delta score breakout</h5>
+                <p>Quanto acima do threshold de compra o score precisa ficar para a IA liberar uma entrada especial de breakout.</p>
+                <p><strong>Exemplo:</strong> se o threshold de compra estiver em <strong>0,80</strong> e o delta em <strong>0,45</strong>, o breakout so entra em cena com score de pelo menos <strong>1,25</strong>.</p>
+              </article>
+              <article class="help-item" id="help-breakout-trend-fast-min-percent">
+                <h5>Trend 1m minimo breakout</h5>
+                <p>Tendencia rapida minima do timeframe principal para validar um breakout. Ele impede que um candle isolado dispare compra sem base curta suficiente.</p>
+                <p><strong>Exemplo:</strong> em <strong>0,07%</strong>, o 1m precisa mostrar inclinacao real. Em <strong>0,04%</strong>, a regra fica mais permissiva.</p>
+              </article>
+              <article class="help-item" id="help-breakout-confirm-trend-min-percent">
+                <h5>Trend 5m minimo breakout</h5>
+                <p>Trend minimo do timeframe de confirmacao para o gatilho de breakout. Ele resolve justamente o caso em que o 5m esta quase neutro, mas o 1m explodiu para cima.</p>
+                <p><strong>Exemplo:</strong> em <strong>-0,02%</strong>, o breakout ainda pode passar mesmo com confirmacao levemente abaixo de zero. Em <strong>0,00%</strong>, o 5m precisa estar positivo.</p>
+              </article>
+              <article class="help-item" id="help-breakout-momentum-15-min-percent">
+                <h5>Momentum 15 candles breakout</h5>
+                <p>Ganho minimo acumulado nas ultimas 15 velas do timeframe principal para caracterizar aceleracao suficiente de breakout.</p>
+                <p><strong>Exemplo:</strong> em <strong>0,40%</strong>, a estrategia exige uma expansao perceptivel, mas bem menor que os antigos <strong>1,50%</strong>, que quase nunca apareciam no BRL.</p>
+              </article>
+              <article class="help-item" id="help-breakout-volume-ratio-min">
+                <h5>Volume minimo breakout</h5>
+                <p>Volume relativo minimo para a compra de breakout. Isso evita que um rompimento sem participacao real do mercado seja tratado como valido.</p>
+                <p><strong>Exemplo:</strong> em <strong>1,00x</strong>, basta o volume atual estar perto da media. Em <strong>1,20x</strong>, o breakout precisa vir com mais fluxo.</p>
+              </article>
+              <article class="help-item" id="help-breakout-close-location-min-percent">
+                <h5>Fechamento minimo breakout</h5>
+                <p>Posicao minima do fechamento dentro do candle para caracterizar pressao compradora no rompimento. Quanto maior, mais perto da maxima a barra precisa fechar.</p>
+                <p><strong>Exemplo:</strong> em <strong>66%</strong>, o candle precisa fechar na metade superior forte da barra. Em <strong>75%</strong>, ele precisa fechar ainda mais perto da maxima.</p>
+              </article>
+              <article class="help-item" id="help-trend-cont-score-delta">
+                <h5>Delta score continuidade</h5>
+                <p>Quanto acima do threshold de compra o score precisa ficar para a entrada especial de continuidade ser avaliada.</p>
+                <p><strong>Exemplo:</strong> com threshold de compra em <strong>0,80</strong> e delta em <strong>0,28</strong>, a continuidade passa a ser considerada a partir de <strong>1,08</strong>.</p>
+              </article>
+              <article class="help-item" id="help-trend-cont-signal-quality-min-percent">
+                <h5>Qualidade minima continuidade</h5>
+                <p>Qualidade minima do sinal para liberar uma compra por continuidade de tendencia. Ela costuma ser mais alta que a entrada normal porque a estrategia quer ver um contexto realmente limpo.</p>
+                <p><strong>Exemplo:</strong> em <strong>62%</strong>, a tendencia precisa vir relativamente organizada. Em <strong>55%</strong>, a continuidade entra com mais facilidade.</p>
+              </article>
+              <article class="help-item" id="help-trend-cont-confirm-trend-min-percent">
+                <h5>Trend 5m minimo continuidade</h5>
+                <p>Trend minimo do timeframe de confirmacao para liberar a entrada por continuidade. Quanto maior esse valor, mais forte o 5m precisa estar para a IA aceitar seguir a tendencia.</p>
+                <p><strong>Exemplo:</strong> em <strong>0,06%</strong>, o 5m ainda precisa estar positivo, mas bem menos do que os antigos <strong>0,80%</strong>, que eram duros demais para micro trade em BRL.</p>
+              </article>
+              <article class="help-item" id="help-trend-cont-volume-ratio-min">
+                <h5>Volume minimo continuidade</h5>
+                <p>Volume relativo minimo para a entrada por continuidade. Ajuda a evitar seguir uma tendencia que ja perdeu participacao.</p>
+                <p><strong>Exemplo:</strong> em <strong>1,00x</strong>, o volume atual precisa estar pelo menos na media recente. Em <strong>0,90x</strong>, a regra aceita uma perda leve de fluxo.</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="help-group">
+            <h4>Filtros do sinal</h4>
+            <div class="help-grid">
+              <article class="help-item" id="help-max-primary-volatility-percent">
+                <h5>Volatilidade maxima 1m</h5>
+                <p>Define o quanto o mercado pode oscilar no curtissimo prazo antes de a IA considerar o ambiente ruidoso demais para comprar.</p>
+                <p><strong>Exemplo:</strong> em <strong>1,20%</strong>, se a volatilidade recente do <strong>1m</strong> ficar acima disso, a estrategia pode bloquear novas entradas.</p>
+              </article>
+              <article class="help-item" id="help-max-direction-flip-ratio-percent">
+                <h5>Flip ratio maximo</h5>
+                <p>Mede quantas vezes a direcao dos retornos fica alternando entre sobe e desce. Quanto maior, mais “serrilhado” o mercado parece.</p>
+                <p><strong>Exemplo:</strong> em <strong>58%</strong>, um ativo que passa muito tempo em “vai e volta” pode ser descartado para evitar entradas em chop.</p>
+              </article>
+              <article class="help-item" id="help-min-volume-ratio">
+                <h5>Volume relativo minimo</h5>
+                <p>Compara o volume atual com a media recente. Ele serve para evitar sinais tecnicos fracos em candles sem participacao suficiente do mercado.</p>
+                <p><strong>Exemplo:</strong> em <strong>0,90</strong>, a IA exige pelo menos 90% do volume medio recente. Em <strong>1,20</strong>, ela passa a pedir um volume atual bem acima da media.</p>
+              </article>
+              <article class="help-item" id="help-min-candle-body-ratio-percent">
+                <h5>Corpo minimo do candle</h5>
+                <p>Exige que o candle tenha um corpo minimamente relevante em relacao ao tamanho total da barra. Isso ajuda a evitar velas indecisas demais.</p>
+                <p><strong>Exemplo:</strong> em <strong>22%</strong>, um candle com range grande, mas corpo muito pequeno, pode ser ignorado por parecer indecisao ou puro ruído.</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="help-group">
+            <h4>Universo monitorado</h4>
+            <div class="help-grid">
+              <article class="help-item" id="help-selected-symbols">
+                <h5>Moedas analisadas</h5>
+                <p>Define quais pares a IA pode observar e operar. Isso nao obriga compra; apenas diz quais moedas entram no radar da estrategia.</p>
+                <p><strong>Exemplo:</strong> se voce marcar apenas <strong>BTCBRL</strong> e <strong>ETHBRL</strong>, nenhuma outra moeda sera avaliada para novas entradas.</p>
+              </article>
+              <article class="help-item" id="help-symbol-search">
+                <h5>Busca de moeda</h5>
+                <p>Campo usado para filtrar rapidamente a lista de pares disponiveis no mercado selecionado.</p>
+                <p><strong>Exemplo:</strong> digitando <strong>BTC</strong>, a lista mostra primeiro os pares relacionados a Bitcoin dentro da cotacao ativa.</p>
+              </article>
+            </div>
+          </section>
+        </div>
+      </section>
+    </div>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+  </body>
+  </html>
