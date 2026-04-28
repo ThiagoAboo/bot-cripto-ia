@@ -183,6 +183,8 @@ class TradingSimulator:
             primary_kline_limit = settings["primary_kline_limit"]
             confirm_kline_interval = settings["confirm_kline_interval"]
             confirm_kline_limit = settings["confirm_kline_limit"]
+            reversal_kline_interval = settings["reversal_kline_interval"]
+            reversal_kline_limit = settings["reversal_kline_limit"]
             learning_horizon_cycles = settings["learning_horizon_cycles"]
             max_open_positions = settings["max_open_positions"]
             min_trade_notional = settings["min_trade_notional"]
@@ -207,6 +209,11 @@ class TradingSimulator:
                         interval=confirm_kline_interval,
                         limit=confirm_kline_limit,
                     )
+                    reversal_klines = self.market_client.get_klines(
+                        symbol,
+                        interval=reversal_kline_interval,
+                        limit=reversal_kline_limit,
+                    )
                     current_price = primary_klines[-1]["close"] if primary_klines else 0.0
 
                     learning_state = self.database.get_learning_state(symbol)
@@ -229,6 +236,7 @@ class TradingSimulator:
                         symbol=symbol,
                         primary_klines=primary_klines,
                         confirm_klines=confirm_klines,
+                        reversal_klines=reversal_klines,
                         existing_position=current_position,
                         learning_state=learning_state,
                         fee_rate=fee_rate,

@@ -86,6 +86,58 @@ function formatDate(value) {
   return new Date(value).toLocaleString("pt-BR");
 }
 
+function formatDateParts(value) {
+  if (!value) {
+    return { date: "--", time: "--" };
+  }
+  const date = new Date(value);
+  return {
+    date: date.toLocaleDateString("pt-BR"),
+    time: date.toLocaleTimeString("pt-BR"),
+  };
+}
+
+function formatPriceAsset(value) {
+  const amount = Number(value || 0);
+  if (state.quoteAsset === "BRL") {
+    const absolute = Math.abs(amount);
+    let digits = 2;
+    if (absolute > 0 && absolute < 0.0001) {
+      digits = 8;
+    } else if (absolute < 0.01) {
+      digits = 8;
+    } else if (absolute < 1) {
+      digits = 6;
+    } else if (absolute < 100) {
+      digits = 4;
+    }
+    return `R$ ${amount.toLocaleString("pt-BR", {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    })}`;
+  }
+  return `${amount.toFixed(amount < 1 ? 8 : 6)} ${state.quoteAsset}`;
+}
+
+function formatQuantityValue(value) {
+  const amount = Number(value || 0);
+  const absolute = Math.abs(amount);
+  let digits = 6;
+  if (absolute >= 1_000_000) {
+    digits = 3;
+  } else if (absolute >= 1_000) {
+    digits = 2;
+  } else if (absolute >= 1) {
+    digits = 4;
+  } else if (absolute > 0 && absolute < 0.01) {
+    digits = 8;
+  }
+  return amount.toLocaleString("pt-BR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: digits,
+  });
+}
+
 function setFieldValue(id, value) {
   const field = document.getElementById(id);
   if (field) {
@@ -152,6 +204,7 @@ function resolveStrategyProfileSelection() {
   const minCandleBodyRatio = readNumber("min-candle-body-ratio-percent") / 100;
   const entryRsiLimit = readNumber("entry-rsi-limit");
   const entrySignalQualityMin = readNumber("entry-signal-quality-min-percent") / 100;
+  const rangeEntrySignalQualityMin = readNumber("range-entry-signal-quality-min-percent") / 100;
   const entryConfirmTrendMin = readNumber("entry-confirm-trend-min-percent") / 100;
   const entryConfirmMomentumMin = readNumber("entry-confirm-momentum-min-percent") / 100;
   const breakoutScoreDelta = readNumber("breakout-score-delta");
@@ -164,6 +217,17 @@ function resolveStrategyProfileSelection() {
   const trendContSignalQualityMin = readNumber("trend-cont-signal-quality-min-percent") / 100;
   const trendContConfirmTrendMin = readNumber("trend-cont-confirm-trend-min-percent") / 100;
   const trendContVolumeRatioMin = readNumber("trend-cont-volume-ratio-min");
+  const reversalScoreFloor = readNumber("reversal-score-floor");
+  const reversalConfirmTrendFloor = readNumber("reversal-confirm-trend-floor-percent") / 100;
+  const reversalRsi15mMax = readNumber("reversal-rsi-15m-max");
+  const reversalRsi1mMin = readNumber("reversal-rsi-1m-min");
+  const reversalRsi1mMax = readNumber("reversal-rsi-1m-max");
+  const reversalLowerWickMin = readNumber("reversal-lower-wick-min-percent") / 100;
+  const reversalCloseLocationMin = readNumber("reversal-close-location-min-percent") / 100;
+  const reversalDistanceFromLowMax = readNumber("reversal-distance-from-low-max-percent") / 100;
+  const reversalVolumeRatioMin = readNumber("reversal-volume-ratio-min");
+  const reversalSwingWindow = readNumber("reversal-swing-window");
+  const minWeaknessExitAgeMinutes = readNumber("min-weakness-exit-age-minutes");
 
   for (const [profileKey, preset] of Object.entries(profiles)) {
     if (
@@ -179,6 +243,7 @@ function resolveStrategyProfileSelection() {
       && nearlyEqual(preset.min_candle_body_ratio, minCandleBodyRatio)
       && nearlyEqual(preset.entry_rsi_limit, entryRsiLimit)
       && nearlyEqual(preset.entry_signal_quality_min, entrySignalQualityMin)
+      && nearlyEqual(preset.range_entry_signal_quality_min, rangeEntrySignalQualityMin)
       && nearlyEqual(preset.entry_confirm_trend_min, entryConfirmTrendMin)
       && nearlyEqual(preset.entry_confirm_momentum_min, entryConfirmMomentumMin)
       && nearlyEqual(preset.breakout_score_delta, breakoutScoreDelta)
@@ -191,6 +256,17 @@ function resolveStrategyProfileSelection() {
       && nearlyEqual(preset.trend_cont_signal_quality_min, trendContSignalQualityMin)
       && nearlyEqual(preset.trend_cont_confirm_trend_min, trendContConfirmTrendMin)
       && nearlyEqual(preset.trend_cont_volume_ratio_min, trendContVolumeRatioMin)
+      && nearlyEqual(preset.reversal_score_floor, reversalScoreFloor)
+      && nearlyEqual(preset.reversal_confirm_trend_floor, reversalConfirmTrendFloor)
+      && nearlyEqual(preset.reversal_rsi_15m_max, reversalRsi15mMax)
+      && nearlyEqual(preset.reversal_rsi_1m_min, reversalRsi1mMin)
+      && nearlyEqual(preset.reversal_rsi_1m_max, reversalRsi1mMax)
+      && nearlyEqual(preset.reversal_lower_wick_min, reversalLowerWickMin)
+      && nearlyEqual(preset.reversal_close_location_min, reversalCloseLocationMin)
+      && nearlyEqual(preset.reversal_distance_from_low_max, reversalDistanceFromLowMax)
+      && nearlyEqual(preset.reversal_volume_ratio_min, reversalVolumeRatioMin)
+      && Number(preset.reversal_swing_window) === Number(reversalSwingWindow)
+      && nearlyEqual(preset.min_weakness_exit_age_minutes, minWeaknessExitAgeMinutes)
     ) {
       return profileKey;
     }
@@ -227,6 +303,10 @@ function applyStrategyProfile(profileKey, shouldMarkDirty = true) {
   setFieldValue(
     "entry-signal-quality-min-percent",
     toPercentInput(preset.entry_signal_quality_min, 1)
+  );
+  setFieldValue(
+    "range-entry-signal-quality-min-percent",
+    toPercentInput(preset.range_entry_signal_quality_min, 1)
   );
   setFieldValue(
     "entry-confirm-trend-min-percent",
@@ -270,6 +350,35 @@ function applyStrategyProfile(profileKey, shouldMarkDirty = true) {
     "trend-cont-volume-ratio-min",
     Number(preset.trend_cont_volume_ratio_min).toFixed(2)
   );
+  setFieldValue("reversal-score-floor", Number(preset.reversal_score_floor).toFixed(2));
+  setFieldValue(
+    "reversal-confirm-trend-floor-percent",
+    toPercentInput(preset.reversal_confirm_trend_floor, 3)
+  );
+  setFieldValue("reversal-rsi-15m-max", Number(preset.reversal_rsi_15m_max).toFixed(1));
+  setFieldValue("reversal-rsi-1m-min", Number(preset.reversal_rsi_1m_min).toFixed(1));
+  setFieldValue("reversal-rsi-1m-max", Number(preset.reversal_rsi_1m_max).toFixed(1));
+  setFieldValue(
+    "reversal-lower-wick-min-percent",
+    toPercentInput(preset.reversal_lower_wick_min, 1)
+  );
+  setFieldValue(
+    "reversal-close-location-min-percent",
+    toPercentInput(preset.reversal_close_location_min, 1)
+  );
+  setFieldValue(
+    "reversal-distance-from-low-max-percent",
+    toPercentInput(preset.reversal_distance_from_low_max, 2)
+  );
+  setFieldValue(
+    "reversal-volume-ratio-min",
+    Number(preset.reversal_volume_ratio_min).toFixed(2)
+  );
+  setFieldValue("reversal-swing-window", preset.reversal_swing_window);
+  setFieldValue(
+    "min-weakness-exit-age-minutes",
+    Number(preset.min_weakness_exit_age_minutes).toFixed(1)
+  );
   setFieldValue("strategy-profile", profileKey);
   if (shouldMarkDirty) {
     markFormDirty();
@@ -290,6 +399,8 @@ function buildSettingsPayload(action) {
     primary_kline_limit: readNumber("primary-kline-limit"),
     confirm_kline_interval: document.getElementById("confirm-kline-interval").value.trim(),
     confirm_kline_limit: readNumber("confirm-kline-limit"),
+    reversal_kline_interval: document.getElementById("reversal-kline-interval").value.trim(),
+    reversal_kline_limit: readNumber("reversal-kline-limit"),
     cycle_history_limit: readNumber("cycle-history-limit"),
     learning_horizon_cycles: readNumber("learning-horizon-cycles"),
     learning_warmup_cycles: readNumber("learning-warmup-cycles"),
@@ -306,6 +417,7 @@ function buildSettingsPayload(action) {
     min_candle_body_ratio: readNumber("min-candle-body-ratio-percent") / 100,
     entry_rsi_limit: readNumber("entry-rsi-limit"),
     entry_signal_quality_min: readNumber("entry-signal-quality-min-percent") / 100,
+    range_entry_signal_quality_min: readNumber("range-entry-signal-quality-min-percent") / 100,
     entry_confirm_trend_min: readNumber("entry-confirm-trend-min-percent") / 100,
     entry_confirm_momentum_min: readNumber("entry-confirm-momentum-min-percent") / 100,
     breakout_score_delta: readNumber("breakout-score-delta"),
@@ -318,6 +430,17 @@ function buildSettingsPayload(action) {
     trend_cont_signal_quality_min: readNumber("trend-cont-signal-quality-min-percent") / 100,
     trend_cont_confirm_trend_min: readNumber("trend-cont-confirm-trend-min-percent") / 100,
     trend_cont_volume_ratio_min: readNumber("trend-cont-volume-ratio-min"),
+    reversal_score_floor: readNumber("reversal-score-floor"),
+    reversal_confirm_trend_floor: readNumber("reversal-confirm-trend-floor-percent") / 100,
+    reversal_rsi_15m_max: readNumber("reversal-rsi-15m-max"),
+    reversal_rsi_1m_min: readNumber("reversal-rsi-1m-min"),
+    reversal_rsi_1m_max: readNumber("reversal-rsi-1m-max"),
+    reversal_lower_wick_min: readNumber("reversal-lower-wick-min-percent") / 100,
+    reversal_close_location_min: readNumber("reversal-close-location-min-percent") / 100,
+    reversal_distance_from_low_max: readNumber("reversal-distance-from-low-max-percent") / 100,
+    reversal_volume_ratio_min: readNumber("reversal-volume-ratio-min"),
+    reversal_swing_window: readNumber("reversal-swing-window"),
+    min_weakness_exit_age_minutes: readNumber("min-weakness-exit-age-minutes"),
     selected_symbols: Array.from(state.selectedSymbols),
   };
 }
@@ -483,18 +606,24 @@ function mountTransactions(transactions) {
 
   target.innerHTML = transactions
     .slice(0, 80)
-    .map((tx) => `
-      <tr>
-        <td>${formatDate(tx.timestamp)}</td>
-        <td>${tx.symbol}</td>
-        <td>${actionPill(tx.side)}</td>
-        <td>${formatAsset(tx.price)}</td>
-        <td>${Number(tx.quantity).toFixed(6)}</td>
-        <td>${formatAsset(tx.fee)}</td>
-        <td class="${tx.realized_pnl >= 0 ? "gain" : "loss"}">${formatSignedAsset(tx.realized_pnl)}</td>
-        <td>${formatAsset(tx.balance_after)}</td>
-      </tr>
-    `)
+    .map((tx) => {
+      const parts = formatDateParts(tx.timestamp);
+      return `
+        <tr>
+          <td class="cell-datetime">
+            <span class="cell-primary">${parts.date}</span>
+            <span class="cell-secondary">${parts.time}</span>
+          </td>
+          <td class="cell-symbol">${tx.symbol}</td>
+          <td class="cell-side">${actionPill(tx.side)}</td>
+          <td class="cell-money" title="${tx.price}">${formatPriceAsset(tx.price)}</td>
+          <td class="cell-number" title="${tx.quantity}">${formatQuantityValue(tx.quantity)}</td>
+          <td class="cell-money" title="${tx.fee}">${formatAsset(tx.fee)}</td>
+          <td class="cell-money ${tx.realized_pnl >= 0 ? "gain" : "loss"}" title="${tx.realized_pnl}">${formatSignedAsset(tx.realized_pnl)}</td>
+          <td class="cell-money" title="${tx.balance_after}">${formatAsset(tx.balance_after)}</td>
+        </tr>
+      `;
+    })
     .join("");
 }
 
@@ -750,6 +879,8 @@ async function loadDashboard(showStatus = false) {
     setFieldValue("primary-kline-limit", settings.primary_kline_limit);
     setFieldValue("confirm-kline-interval", settings.confirm_kline_interval);
     setFieldValue("confirm-kline-limit", settings.confirm_kline_limit);
+    setFieldValue("reversal-kline-interval", settings.reversal_kline_interval);
+    setFieldValue("reversal-kline-limit", settings.reversal_kline_limit);
     setFieldValue("cycle-history-limit", settings.cycle_history_limit);
     setFieldValue("learning-horizon-cycles", settings.learning_horizon_cycles);
     setFieldValue("learning-warmup-cycles", settings.learning_warmup_cycles);
@@ -786,6 +917,10 @@ async function loadDashboard(showStatus = false) {
     setFieldValue(
       "entry-signal-quality-min-percent",
       toPercentInput(settings.entry_signal_quality_min, 1)
+    );
+    setFieldValue(
+      "range-entry-signal-quality-min-percent",
+      toPercentInput(settings.range_entry_signal_quality_min, 1)
     );
     setFieldValue(
       "entry-confirm-trend-min-percent",
@@ -831,6 +966,35 @@ async function loadDashboard(showStatus = false) {
     setFieldValue(
       "trend-cont-volume-ratio-min",
       Number(settings.trend_cont_volume_ratio_min).toFixed(2)
+    );
+    setFieldValue("reversal-score-floor", Number(settings.reversal_score_floor).toFixed(2));
+    setFieldValue(
+      "reversal-confirm-trend-floor-percent",
+      toPercentInput(settings.reversal_confirm_trend_floor, 3)
+    );
+    setFieldValue("reversal-rsi-15m-max", Number(settings.reversal_rsi_15m_max).toFixed(1));
+    setFieldValue("reversal-rsi-1m-min", Number(settings.reversal_rsi_1m_min).toFixed(1));
+    setFieldValue("reversal-rsi-1m-max", Number(settings.reversal_rsi_1m_max).toFixed(1));
+    setFieldValue(
+      "reversal-lower-wick-min-percent",
+      toPercentInput(settings.reversal_lower_wick_min, 1)
+    );
+    setFieldValue(
+      "reversal-close-location-min-percent",
+      toPercentInput(settings.reversal_close_location_min, 1)
+    );
+    setFieldValue(
+      "reversal-distance-from-low-max-percent",
+      toPercentInput(settings.reversal_distance_from_low_max, 2)
+    );
+    setFieldValue(
+      "reversal-volume-ratio-min",
+      Number(settings.reversal_volume_ratio_min).toFixed(2)
+    );
+    setFieldValue("reversal-swing-window", settings.reversal_swing_window);
+    setFieldValue(
+      "min-weakness-exit-age-minutes",
+      Number(settings.min_weakness_exit_age_minutes).toFixed(1)
     );
     syncStrategyProfileSelection();
     renderSymbolSelector(document.getElementById("symbol-search").value);
@@ -948,6 +1112,7 @@ function bindEvents() {
     "min-candle-body-ratio-percent",
     "entry-rsi-limit",
     "entry-signal-quality-min-percent",
+    "range-entry-signal-quality-min-percent",
     "entry-confirm-trend-min-percent",
     "entry-confirm-momentum-min-percent",
     "breakout-score-delta",
@@ -960,6 +1125,17 @@ function bindEvents() {
     "trend-cont-signal-quality-min-percent",
     "trend-cont-confirm-trend-min-percent",
     "trend-cont-volume-ratio-min",
+    "reversal-score-floor",
+    "reversal-confirm-trend-floor-percent",
+    "reversal-rsi-15m-max",
+    "reversal-rsi-1m-min",
+    "reversal-rsi-1m-max",
+    "reversal-lower-wick-min-percent",
+    "reversal-close-location-min-percent",
+    "reversal-distance-from-low-max-percent",
+    "reversal-volume-ratio-min",
+    "reversal-swing-window",
+    "min-weakness-exit-age-minutes",
   ].forEach((fieldId) => {
     document.getElementById(fieldId).addEventListener("input", () => {
       syncStrategyProfileSelection();

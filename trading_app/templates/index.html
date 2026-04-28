@@ -168,6 +168,22 @@
 
               <label>
                 <span class="label-head">
+                  <span>Intervalo de reversao</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-reversal-kline-interval" aria-label="Ajuda sobre Intervalo de reversao">i</button>
+                </span>
+                <input id="reversal-kline-interval" type="text" spellcheck="false">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Limite de candles de reversao</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-reversal-kline-limit" aria-label="Ajuda sobre Limite de candles de reversao">i</button>
+                </span>
+                <input id="reversal-kline-limit" type="number" min="60" step="1">
+              </label>
+
+              <label>
+                <span class="label-head">
                   <span>Historico por moeda (ciclos)</span>
                   <button type="button" class="field-help-button" data-field-help-target="help-cycle-history-limit" aria-label="Ajuda sobre Historico por moeda">i</button>
                 </span>
@@ -258,6 +274,14 @@
                 </span>
                 <input id="cooldown-after-loss-cycles" type="number" min="0" max="500" step="1">
               </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Idade min. saida fraqueza (min, 0 desativa)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-min-weakness-exit-age-minutes" aria-label="Ajuda sobre Idade minima da saida por fraqueza">i</button>
+                </span>
+                <input id="min-weakness-exit-age-minutes" type="number" min="0" step="0.5">
+              </label>
             </div>
           </section>
 
@@ -281,6 +305,14 @@
                   <button type="button" class="field-help-button" data-field-help-target="help-entry-signal-quality-min-percent" aria-label="Ajuda sobre Qualidade minima do sinal">i</button>
                 </span>
                 <input id="entry-signal-quality-min-percent" type="number" min="0" max="100" step="0.1">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Qualidade min. em range (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-range-entry-signal-quality-min-percent" aria-label="Ajuda sobre Qualidade minima em range">i</button>
+                </span>
+                <input id="range-entry-signal-quality-min-percent" type="number" min="0" max="100" step="0.1">
               </label>
 
               <label>
@@ -385,6 +417,94 @@
                   <button type="button" class="field-help-button" data-field-help-target="help-trend-cont-volume-ratio-min" aria-label="Ajuda sobre Volume minimo continuidade">i</button>
                 </span>
                 <input id="trend-cont-volume-ratio-min" type="number" min="0" step="0.01">
+              </label>
+            </div>
+          </section>
+
+          <section class="config-block">
+            <div class="config-block-head">
+              <h3>Reversao 15m</h3>
+              <p>Leitura de rejeicao de fundo e reaceleracao para entradas que um humano costuma enxergar no grafico maior.</p>
+            </div>
+            <div class="config-grid">
+              <label>
+                <span class="label-head">
+                  <span>Score min. reversao</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-reversal-score-floor" aria-label="Ajuda sobre Score minimo da reversao">i</button>
+                </span>
+                <input id="reversal-score-floor" type="number" min="0.1" step="0.01">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Trend 5m min. reversao (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-reversal-confirm-trend-floor-percent" aria-label="Ajuda sobre Trend 5m minimo da reversao">i</button>
+                </span>
+                <input id="reversal-confirm-trend-floor-percent" type="number" min="-5" max="5" step="0.001">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>RSI 15m max. reversao</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-reversal-rsi-15m-max" aria-label="Ajuda sobre RSI 15m maximo da reversao">i</button>
+                </span>
+                <input id="reversal-rsi-15m-max" type="number" min="10" max="100" step="0.1">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>RSI 1m min. reaceleracao</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-reversal-rsi-1m-min" aria-label="Ajuda sobre RSI 1m minimo da reaceleracao">i</button>
+                </span>
+                <input id="reversal-rsi-1m-min" type="number" min="10" max="100" step="0.1">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>RSI 1m max. reversao</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-reversal-rsi-1m-max" aria-label="Ajuda sobre RSI 1m maximo da reversao">i</button>
+                </span>
+                <input id="reversal-rsi-1m-max" type="number" min="10" max="100" step="0.1">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Pavio inf. min. 15m (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-reversal-lower-wick-min-percent" aria-label="Ajuda sobre Pavio inferior minimo do 15m">i</button>
+                </span>
+                <input id="reversal-lower-wick-min-percent" type="number" min="0" max="100" step="0.1">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Fechamento min. 15m (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-reversal-close-location-min-percent" aria-label="Ajuda sobre Fechamento minimo do 15m">i</button>
+                </span>
+                <input id="reversal-close-location-min-percent" type="number" min="0" max="100" step="0.1">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Dist. max. do fundo 15m (%)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-reversal-distance-from-low-max-percent" aria-label="Ajuda sobre Distancia maxima do fundo 15m">i</button>
+                </span>
+                <input id="reversal-distance-from-low-max-percent" type="number" min="0" max="20" step="0.01">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Volume min. reversao 15m (x)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-reversal-volume-ratio-min" aria-label="Ajuda sobre Volume minimo da reversao 15m">i</button>
+                </span>
+                <input id="reversal-volume-ratio-min" type="number" min="0" step="0.01">
+              </label>
+
+              <label>
+                <span class="label-head">
+                  <span>Janela do fundo 15m (candles)</span>
+                  <button type="button" class="field-help-button" data-field-help-target="help-reversal-swing-window" aria-label="Ajuda sobre Janela do fundo 15m">i</button>
+                </span>
+                <input id="reversal-swing-window" type="number" min="2" max="100" step="1">
               </label>
             </div>
           </section>
@@ -626,6 +746,16 @@
                 <p>Quantidade de candles do timeframe de confirmacao que a IA usa para validar a tendencia maior.</p>
                 <p><strong>Exemplo:</strong> <strong>120</strong> candles de <strong>5m</strong> representam perto de <strong>10 horas</strong> de historico.</p>
               </article>
+              <article class="help-item" id="help-reversal-kline-interval">
+                <h5>Intervalo de reversao</h5>
+                <p>Timeframe mais alto usado para procurar <strong>rejeicao de fundo</strong>, flush e recuperacao que costumam aparecer melhor no grafico maior.</p>
+                <p><strong>Exemplo:</strong> em <strong>15m</strong>, a IA consegue enxergar um pavio de rejeicao que passa quase despercebido no <strong>1m</strong>. Se voce subir para <strong>30m</strong>, a leitura fica mais lenta e seletiva.</p>
+              </article>
+              <article class="help-item" id="help-reversal-kline-limit">
+                <h5>Limite de candles de reversao</h5>
+                <p>Quantidade de candles do timeframe de reversao que entram no calculo do fundo recente, do RSI 15m e da estrutura da barra de rejeicao.</p>
+                <p><strong>Exemplo:</strong> com <strong>120</strong> candles de <strong>15m</strong>, a IA olha aproximadamente <strong>30 horas</strong> de contexto para decidir se o movimento atual parece mesmo uma reversao ou apenas ruido.</p>
+              </article>
               <article class="help-item" id="help-cycle-history-limit">
                 <h5>Historico por moeda</h5>
                 <p>Numero maximo de ciclos que o banco guarda por moeda para manter o aprendizado persistente sem crescer indefinidamente.</p>
@@ -649,8 +779,8 @@
             <div class="help-grid">
               <article class="help-item" id="help-strategy-profile">
                 <h5>Perfil da estrategia</h5>
-                <p>Atalho para preencher automaticamente <strong>todos os campos expostos da decisao da IA</strong> que alteram compra e venda: thresholds, take profit, stop loss, tempo maximo, cooldown, filtros de ruido, RSI, confirmacao do 5m e os gatilhos especiais de breakout e continuidade.</p>
-                <p><strong>Conservador:</strong> exige alinhamento mais limpo, confirma melhor o 5m e libera menos entradas especiais.<br><strong>Equilibrado:</strong> abre mais espaco para micro trades, mas ainda filtra bastante ruido.<br><strong>Agressivo:</strong> continua buscando mais oportunidades, mas agora ja nasce com filtros menos soltos para evitar entrar em qualquer serrilhado e acumular perdas desnecessarias.</p>
+                <p>Atalho para preencher automaticamente <strong>todos os campos expostos da decisao da IA</strong> que alteram compra e venda: thresholds, take profit, stop loss, cooldown, filtros de ruido, RSI, confirmacao do 5m, gatilhos de breakout, continuidade e agora tambem a <strong>leitura de reversao no 15m</strong>.</p>
+                <p><strong>Conservador:</strong> pede alinhamento limpo e so aceita reversao quando a rejeicao do 15m e muito clara.<br><strong>Equilibrado:</strong> tenta equilibrar continuacao e reversao sem soltar demais o filtro.<br><strong>Agressivo:</strong> procura mais oportunidades, inclusive reversoes, mas com freios suficientes para nao comprar qualquer repique fraco.</p>
               </article>
               <article class="help-item" id="help-buy-threshold">
                 <h5>Threshold de compra</h5>
@@ -682,6 +812,11 @@
                 <p>Numero de ciclos em que uma moeda fica temporariamente bloqueada para <strong>novas compras</strong> depois que uma venda fecha no prejuizo. Serve para evitar reentrada rapida no mesmo ruido logo apos uma perda.</p>
                 <p><strong>Exemplo:</strong> se estiver em <strong>18</strong> e `DOGEBRL` sair no prejuizo agora, essa moeda pode continuar sendo analisada, mas a estrategia nao abre nova compra nela pelos proximos <strong>18 ciclos</strong>. Em <strong>0</strong>, o bloqueio fica desativado.</p>
               </article>
+              <article class="help-item" id="help-min-weakness-exit-age-minutes">
+                <h5>Idade minima da saida por fraqueza</h5>
+                <p>Tempo minimo que a posicao precisa ficar aberta antes de a regra de <strong>weakness</strong> poder vender por enfraquecimento de score. Isso nao bloqueia <strong>stop loss</strong>, nem saidas por confirmacao forte contra ou por <strong>chop</strong>; ele so evita vender cedo demais por uma respiracao logo apos a entrada.</p>
+                <p><strong>Exemplo:</strong> em <strong>6 min</strong>, se a compra enfraquecer com <strong>2 min</strong> de vida, a estrategia segura a posicao e reavalia nos ciclos seguintes. Em <strong>0</strong>, a venda por fraqueza pode acontecer assim que o gatilho aparecer.</p>
+              </article>
             </div>
           </section>
 
@@ -697,6 +832,11 @@
                 <h5>Qualidade minima do sinal</h5>
                 <p>Percentual minimo de qualidade agregado antes de a entrada padrao ser considerada valida. Essa qualidade mistura alinhamento, volume, estrutura do candle e penalidade por ruido.</p>
                 <p><strong>Exemplo:</strong> em <strong>42%</strong>, a estrategia aceita um sinal razoavel. Em <strong>60%</strong>, ela passa a cobrar uma leitura bem mais coesa antes de comprar.</p>
+              </article>
+              <article class="help-item" id="help-range-entry-signal-quality-min-percent">
+                <h5>Qualidade minima em range</h5>
+                <p>Exigencia extra aplicada somente quando o regime atual e <strong>range</strong>. A ideia e endurecer a entrada padrao em mercado lateral, onde o score pode parecer bom no curtissimo prazo, mas sem deslocamento suficiente para sustentar o trade.</p>
+                <p><strong>Exemplo:</strong> se a qualidade geral minima estiver em <strong>42%</strong>, mas a qualidade em range estiver em <strong>56%</strong>, a entrada padrao so passa no range quando o sinal estiver mais limpo do que o minimo normal.</p>
               </article>
               <article class="help-item" id="help-entry-confirm-trend-min-percent">
                 <h5>Trend minimo da confirmacao</h5>
@@ -763,6 +903,62 @@
                 <h5>Volume minimo continuidade</h5>
                 <p>Volume relativo minimo para a entrada por continuidade. Ajuda a evitar seguir uma tendencia que ja perdeu participacao.</p>
                 <p><strong>Exemplo:</strong> em <strong>1,00x</strong>, o volume atual precisa estar pelo menos na media recente. Em <strong>0,90x</strong>, a regra aceita uma perda leve de fluxo.</p>
+              </article>
+            </div>
+          </section>
+
+          <section class="help-group">
+            <h4>Reversao 15m</h4>
+            <div class="help-grid">
+              <article class="help-item" id="help-reversal-score-floor">
+                <h5>Score minimo da reversao</h5>
+                <p>Nota minima para a IA considerar uma compra especial de reversao. Ela pode ficar abaixo do threshold de compra normal porque a ideia aqui e captar uma virada antes da continuacao ficar obvia.</p>
+                <p><strong>Exemplo:</strong> em <strong>0,52</strong>, a IA ainda exige uma leitura positiva do curto prazo. Se voce subir para <strong>0,80</strong>, a reversao fica muito mais rara.</p>
+              </article>
+              <article class="help-item" id="help-reversal-confirm-trend-floor-percent">
+                <h5>Trend 5m minimo da reversao</h5>
+                <p>Quanto o <strong>5m</strong> pode continuar negativo e mesmo assim a reversao ainda ser aceita. Esse campo existe exatamente para permitir uma compra que o humano enxerga no grafico maior antes de o 5m ficar bonito.</p>
+                <p><strong>Exemplo:</strong> em <strong>-0,18%</strong>, o 5m ainda pode estar levemente contra. Em <strong>0,00%</strong>, a reversao so passa quando o 5m ja virou para cima.</p>
+              </article>
+              <article class="help-item" id="help-reversal-rsi-15m-max">
+                <h5>RSI 15m maximo da reversao</h5>
+                <p>Evita chamar de reversao um ativo que ja esta esticado demais no <strong>15m</strong>. A ideia e procurar alivio de sobrevenda ou recuperacao cedo, nao seguir um movimento que ja andou muito.</p>
+                <p><strong>Exemplo:</strong> em <strong>54</strong>, o 15m ainda pode estar neutro ou levemente pressionado. Em <strong>70</strong>, a IA aceitaria “reversao” ate em ativo ja aquecido demais.</p>
+              </article>
+              <article class="help-item" id="help-reversal-rsi-1m-min">
+                <h5>RSI 1m minimo da reaceleracao</h5>
+                <p>Exige que o curtissimo prazo ja tenha mostrado alguma retomada. Ele evita comprar apenas porque existe um pavio bonito no 15m sem nenhuma resposta no 1m.</p>
+                <p><strong>Exemplo:</strong> em <strong>48</strong>, o 1m precisa pelo menos sair da letargia. Em <strong>60</strong>, a reversao so entra quando o micro impulso ja esta bem mais claro.</p>
+              </article>
+              <article class="help-item" id="help-reversal-rsi-1m-max">
+                <h5>RSI 1m maximo da reversao</h5>
+                <p>Funciona como um teto de temperatura para a entrada de reversao. Ele impede que a estrategia chame de <strong>reversao</strong> uma moeda que ja explodiu tanto no 1m que provavelmente esta comprando tarde demais o repique.</p>
+                <p><strong>Exemplo:</strong> em <strong>66</strong>, um candle de reversao no 15m ainda pode comprar se o 1m estiver reagindo, mas nao se ele ja estiver em <strong>76</strong> ou <strong>80</strong>, porque isso sugere que o curto prazo ja aqueceu demais.</p>
+              </article>
+              <article class="help-item" id="help-reversal-lower-wick-min-percent">
+                <h5>Pavio inferior minimo do 15m</h5>
+                <p>Percentual minimo do pavio inferior da barra de 15 minutos. Esse pavio representa a rejeicao do fundo que um trader humano costuma olhar como “compraram a queda”.</p>
+                <p><strong>Exemplo:</strong> em <strong>34%</strong>, pelo menos um terco do candle precisa ser pavio inferior. Em <strong>50%</strong>, a exigencia de rejeicao fica bem mais forte.</p>
+              </article>
+              <article class="help-item" id="help-reversal-close-location-min-percent">
+                <h5>Fechamento minimo do 15m</h5>
+                <p>Quao perto da maxima o candle de 15m precisa fechar para mostrar recuperacao real depois da rejeicao.</p>
+                <p><strong>Exemplo:</strong> em <strong>68%</strong>, o fechamento precisa acontecer na parte alta da barra. Em <strong>85%</strong>, a IA so considera reversao quando o candle fecha quase na maxima.</p>
+              </article>
+              <article class="help-item" id="help-reversal-distance-from-low-max-percent">
+                <h5>Distancia maxima do fundo 15m</h5>
+                <p>Quao longe o preco atual pode estar do fundo recente do 15m e ainda assim ser tratado como reversao proxima do ponto de inflexao.</p>
+                <p><strong>Exemplo:</strong> em <strong>1,20%</strong>, a compra so entra se o preco ainda estiver relativamente perto do fundo recente. Em <strong>4%</strong>, voce comeca a aceitar reversoes bem mais atrasadas.</p>
+              </article>
+              <article class="help-item" id="help-reversal-volume-ratio-min">
+                <h5>Volume minimo da reversao 15m</h5>
+                <p>Compara o volume do candle de reversao no 15m com a media recente. Ele ajuda a separar rejeicao real de um simples espasmo com pouca participacao.</p>
+                <p><strong>Exemplo:</strong> em <strong>1,00x</strong>, o volume atual precisa estar pelo menos na media. Em <strong>1,30x</strong>, a reversao precisa vir com fluxo claramente acima do normal.</p>
+              </article>
+              <article class="help-item" id="help-reversal-swing-window">
+                <h5>Janela do fundo 15m</h5>
+                <p>Quantidade de candles de 15m usada para definir o “fundo recente” da reversao.</p>
+                <p><strong>Exemplo:</strong> em <strong>10</strong>, a IA compara o preco atual com os ultimos <strong>10 candles</strong> de 15m. Se voce aumentar para <strong>20</strong>, o fundo pode ficar mais distante e a leitura fica mais estrutural.</p>
               </article>
             </div>
           </section>

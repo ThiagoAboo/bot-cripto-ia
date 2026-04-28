@@ -22,6 +22,8 @@ class DatabaseTestCase(unittest.TestCase):
                 primary_kline_limit=180,
                 confirm_kline_interval="15m",
                 confirm_kline_limit=200,
+                reversal_kline_interval="30m",
+                reversal_kline_limit=140,
                 learning_horizon_cycles=9,
                 learning_warmup_cycles=55,
                 max_open_positions=7,
@@ -37,6 +39,7 @@ class DatabaseTestCase(unittest.TestCase):
                 min_candle_body_ratio=0.33,
                 entry_rsi_limit=74.0,
                 entry_signal_quality_min=0.51,
+                range_entry_signal_quality_min=0.6,
                 entry_confirm_trend_min=-0.0004,
                 entry_confirm_momentum_min=-0.0022,
                 breakout_score_delta=0.31,
@@ -49,7 +52,18 @@ class DatabaseTestCase(unittest.TestCase):
                 trend_cont_signal_quality_min=0.58,
                 trend_cont_confirm_trend_min=0.0004,
                 trend_cont_volume_ratio_min=0.96,
+                reversal_score_floor=0.61,
+                reversal_confirm_trend_floor=-0.0011,
+                reversal_rsi_15m_max=51.0,
+                reversal_rsi_1m_min=49.0,
+                reversal_rsi_1m_max=63.0,
+                reversal_lower_wick_min=0.37,
+                reversal_close_location_min=0.73,
+                reversal_distance_from_low_max=0.011,
+                reversal_volume_ratio_min=1.07,
+                reversal_swing_window=11,
                 cooldown_after_loss_cycles=17,
+                min_weakness_exit_age_minutes=7.5,
                 strategy_profile="agressivo",
                 cycle_history_limit=250,
             )
@@ -100,6 +114,8 @@ class DatabaseTestCase(unittest.TestCase):
             self.assertEqual(settings["primary_kline_limit"], 180)
             self.assertEqual(settings["confirm_kline_interval"], "15m")
             self.assertEqual(settings["confirm_kline_limit"], 200)
+            self.assertEqual(settings["reversal_kline_interval"], "30m")
+            self.assertEqual(settings["reversal_kline_limit"], 140)
             self.assertEqual(settings["learning_horizon_cycles"], 9)
             self.assertEqual(settings["learning_warmup_cycles"], 55)
             self.assertEqual(settings["max_open_positions"], 7)
@@ -115,6 +131,7 @@ class DatabaseTestCase(unittest.TestCase):
             self.assertEqual(settings["min_candle_body_ratio"], 0.33)
             self.assertEqual(settings["entry_rsi_limit"], 74.0)
             self.assertEqual(settings["entry_signal_quality_min"], 0.51)
+            self.assertEqual(settings["range_entry_signal_quality_min"], 0.6)
             self.assertEqual(settings["entry_confirm_trend_min"], -0.0004)
             self.assertEqual(settings["entry_confirm_momentum_min"], -0.0022)
             self.assertEqual(settings["breakout_score_delta"], 0.31)
@@ -127,7 +144,18 @@ class DatabaseTestCase(unittest.TestCase):
             self.assertEqual(settings["trend_cont_signal_quality_min"], 0.58)
             self.assertEqual(settings["trend_cont_confirm_trend_min"], 0.0004)
             self.assertEqual(settings["trend_cont_volume_ratio_min"], 0.96)
+            self.assertEqual(settings["reversal_score_floor"], 0.61)
+            self.assertEqual(settings["reversal_confirm_trend_floor"], -0.0011)
+            self.assertEqual(settings["reversal_rsi_15m_max"], 51.0)
+            self.assertEqual(settings["reversal_rsi_1m_min"], 49.0)
+            self.assertEqual(settings["reversal_rsi_1m_max"], 63.0)
+            self.assertEqual(settings["reversal_lower_wick_min"], 0.37)
+            self.assertEqual(settings["reversal_close_location_min"], 0.73)
+            self.assertEqual(settings["reversal_distance_from_low_max"], 0.011)
+            self.assertEqual(settings["reversal_volume_ratio_min"], 1.07)
+            self.assertEqual(settings["reversal_swing_window"], 11)
             self.assertEqual(settings["cooldown_after_loss_cycles"], 17)
+            self.assertEqual(settings["min_weakness_exit_age_minutes"], 7.5)
             self.assertEqual(settings["strategy_profile"], "agressivo")
             self.assertEqual(settings["cycle_history_limit"], 250)
             self.assertEqual(portfolio["initial_capital"], 1200.0)

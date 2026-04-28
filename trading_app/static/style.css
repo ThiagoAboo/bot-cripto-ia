@@ -711,37 +711,87 @@ td {
 
 .transactions-table th:nth-child(1),
 .transactions-table td:nth-child(1) {
-  width: 96px;
+  width: 118px;
 }
 
 .transactions-table th:nth-child(2),
 .transactions-table td:nth-child(2) {
-  width: 84px;
+  width: 92px;
 }
 
 .transactions-table th:nth-child(3),
 .transactions-table td:nth-child(3) {
-  width: 68px;
+  width: 92px;
 }
 
 .transactions-table th:nth-child(4),
 .transactions-table td:nth-child(4) {
-  width: 90px;
+  width: 118px;
 }
 
 .transactions-table th:nth-child(5),
 .transactions-table td:nth-child(5) {
-  width: 82px;
+  width: 126px;
 }
 
 .transactions-table th:nth-child(6),
 .transactions-table td:nth-child(6) {
-  width: 80px;
+  width: 96px;
 }
 
 .transactions-table th:nth-child(7),
 .transactions-table td:nth-child(7) {
-  width: 92px;
+  width: 118px;
+}
+
+.transactions-table th:nth-child(8),
+.transactions-table td:nth-child(8) {
+  width: 126px;
+}
+
+.transactions-table {
+  table-layout: auto;
+}
+
+.transactions-table th,
+.transactions-table td {
+  overflow-wrap: normal;
+  word-break: normal;
+  white-space: nowrap;
+}
+
+.transactions-table .cell-datetime {
+  white-space: normal;
+}
+
+.transactions-table .cell-symbol,
+.transactions-table .cell-side,
+.transactions-table .cell-number,
+.transactions-table .cell-money {
+  white-space: nowrap;
+}
+
+.transactions-table .pill {
+  white-space: nowrap;
+}
+
+.cell-primary,
+.cell-secondary {
+  display: block;
+}
+
+.cell-primary {
+  font-weight: 600;
+}
+
+.cell-secondary {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.cell-number,
+.cell-money {
+  font-variant-numeric: tabular-nums;
 }
 
 tbody tr:hover {

@@ -39,9 +39,23 @@ from .config import (
     MAX_DIRECTION_FLIP_RATIO,
     MAX_POSITION_AGE_MINUTES,
     MAX_PRIMARY_VOLATILITY,
+    MIN_WEAKNESS_EXIT_AGE_MINUTES,
     MIN_CANDLE_BODY_RATIO,
     MIN_TRADE_NOTIONAL,
     MIN_VOLUME_RATIO,
+    RANGE_ENTRY_SIGNAL_QUALITY_MIN,
+    REVERSAL_CLOSE_LOCATION_MIN,
+    REVERSAL_CONFIRM_INTERVAL,
+    REVERSAL_CONFIRM_LIMIT,
+    REVERSAL_CONFIRM_TREND_FLOOR,
+    REVERSAL_DISTANCE_FROM_LOW_MAX,
+    REVERSAL_LOWER_WICK_MIN,
+    REVERSAL_RSI_15M_MAX,
+    REVERSAL_RSI_1M_MIN,
+    REVERSAL_RSI_1M_MAX,
+    REVERSAL_SCORE_FLOOR,
+    REVERSAL_SWING_WINDOW,
+    REVERSAL_VOLUME_RATIO_MIN,
     SELL_THRESHOLD,
     STOP_LOSS_RATIO,
     TAKE_PROFIT_RATIO,
@@ -255,6 +269,8 @@ class Database:
             "primary_kline_limit": str(DEFAULT_KLINE_LIMIT),
             "confirm_kline_interval": TREND_CONFIRM_INTERVAL,
             "confirm_kline_limit": str(TREND_CONFIRM_LIMIT),
+            "reversal_kline_interval": REVERSAL_CONFIRM_INTERVAL,
+            "reversal_kline_limit": str(REVERSAL_CONFIRM_LIMIT),
             "learning_horizon_cycles": str(DEFAULT_LEARNING_HORIZON_CYCLES),
             "learning_warmup_cycles": str(LEARNING_WARMUP_CYCLES),
             "max_open_positions": str(DEFAULT_MAX_OPEN_POSITIONS),
@@ -270,6 +286,7 @@ class Database:
             "min_candle_body_ratio": str(MIN_CANDLE_BODY_RATIO),
             "entry_rsi_limit": str(ENTRY_RSI_LIMIT),
             "entry_signal_quality_min": str(ENTRY_SIGNAL_QUALITY_MIN),
+            "range_entry_signal_quality_min": str(RANGE_ENTRY_SIGNAL_QUALITY_MIN),
             "entry_confirm_trend_min": str(ENTRY_CONFIRM_TREND_MIN),
             "entry_confirm_momentum_min": str(ENTRY_CONFIRM_MOMENTUM_MIN),
             "breakout_score_delta": str(BREAKOUT_SCORE_DELTA),
@@ -282,7 +299,18 @@ class Database:
             "trend_cont_signal_quality_min": str(TREND_CONT_SIGNAL_QUALITY_MIN),
             "trend_cont_confirm_trend_min": str(TREND_CONT_CONFIRM_TREND_MIN),
             "trend_cont_volume_ratio_min": str(TREND_CONT_VOLUME_RATIO_MIN),
+            "reversal_score_floor": str(REVERSAL_SCORE_FLOOR),
+            "reversal_confirm_trend_floor": str(REVERSAL_CONFIRM_TREND_FLOOR),
+            "reversal_rsi_15m_max": str(REVERSAL_RSI_15M_MAX),
+            "reversal_rsi_1m_min": str(REVERSAL_RSI_1M_MIN),
+            "reversal_rsi_1m_max": str(REVERSAL_RSI_1M_MAX),
+            "reversal_lower_wick_min": str(REVERSAL_LOWER_WICK_MIN),
+            "reversal_close_location_min": str(REVERSAL_CLOSE_LOCATION_MIN),
+            "reversal_distance_from_low_max": str(REVERSAL_DISTANCE_FROM_LOW_MAX),
+            "reversal_volume_ratio_min": str(REVERSAL_VOLUME_RATIO_MIN),
+            "reversal_swing_window": str(REVERSAL_SWING_WINDOW),
             "cooldown_after_loss_cycles": str(COOLDOWN_AFTER_LOSS_CYCLES),
+            "min_weakness_exit_age_minutes": str(MIN_WEAKNESS_EXIT_AGE_MINUTES),
             "strategy_profile": DEFAULT_STRATEGY_PROFILE,
             "cycle_history_limit": str(DEFAULT_CYCLE_HISTORY_LIMIT),
             "schema_version": SCHEMA_VERSION,
@@ -342,6 +370,13 @@ class Database:
                 TREND_CONFIRM_INTERVAL,
             ),
             "confirm_kline_limit": int(float(data.get("confirm_kline_limit", TREND_CONFIRM_LIMIT))),
+            "reversal_kline_interval": data.get(
+                "reversal_kline_interval",
+                REVERSAL_CONFIRM_INTERVAL,
+            ),
+            "reversal_kline_limit": int(
+                float(data.get("reversal_kline_limit", REVERSAL_CONFIRM_LIMIT))
+            ),
             "learning_horizon_cycles": int(
                 float(data.get("learning_horizon_cycles", DEFAULT_LEARNING_HORIZON_CYCLES))
             ),
@@ -372,6 +407,12 @@ class Database:
             "entry_rsi_limit": float(data.get("entry_rsi_limit", ENTRY_RSI_LIMIT)),
             "entry_signal_quality_min": float(
                 data.get("entry_signal_quality_min", ENTRY_SIGNAL_QUALITY_MIN)
+            ),
+            "range_entry_signal_quality_min": float(
+                data.get(
+                    "range_entry_signal_quality_min",
+                    RANGE_ENTRY_SIGNAL_QUALITY_MIN,
+                )
             ),
             "entry_confirm_trend_min": float(
                 data.get("entry_confirm_trend_min", ENTRY_CONFIRM_TREND_MIN)
@@ -415,8 +456,53 @@ class Database:
             "trend_cont_volume_ratio_min": float(
                 data.get("trend_cont_volume_ratio_min", TREND_CONT_VOLUME_RATIO_MIN)
             ),
+            "reversal_score_floor": float(
+                data.get("reversal_score_floor", REVERSAL_SCORE_FLOOR)
+            ),
+            "reversal_confirm_trend_floor": float(
+                data.get(
+                    "reversal_confirm_trend_floor",
+                    REVERSAL_CONFIRM_TREND_FLOOR,
+                )
+            ),
+            "reversal_rsi_15m_max": float(
+                data.get("reversal_rsi_15m_max", REVERSAL_RSI_15M_MAX)
+            ),
+            "reversal_rsi_1m_min": float(
+                data.get("reversal_rsi_1m_min", REVERSAL_RSI_1M_MIN)
+            ),
+            "reversal_rsi_1m_max": float(
+                data.get("reversal_rsi_1m_max", REVERSAL_RSI_1M_MAX)
+            ),
+            "reversal_lower_wick_min": float(
+                data.get("reversal_lower_wick_min", REVERSAL_LOWER_WICK_MIN)
+            ),
+            "reversal_close_location_min": float(
+                data.get(
+                    "reversal_close_location_min",
+                    REVERSAL_CLOSE_LOCATION_MIN,
+                )
+            ),
+            "reversal_distance_from_low_max": float(
+                data.get(
+                    "reversal_distance_from_low_max",
+                    REVERSAL_DISTANCE_FROM_LOW_MAX,
+                )
+            ),
+            "reversal_volume_ratio_min": float(
+                data.get("reversal_volume_ratio_min", REVERSAL_VOLUME_RATIO_MIN)
+            ),
+            "reversal_swing_window": int(
+                float(data.get("reversal_swing_window", REVERSAL_SWING_WINDOW))
+            ),
             "cooldown_after_loss_cycles": int(
                 float(data.get("cooldown_after_loss_cycles", COOLDOWN_AFTER_LOSS_CYCLES))
+            ),
+            "min_weakness_exit_age_minutes": float(
+                data.get(
+                    "min_weakness_exit_age_minutes",
+                    MIN_WEAKNESS_EXIT_AGE_MINUTES,
+                )
             ),
             "strategy_profile": data.get(
                 "strategy_profile",
@@ -443,6 +529,8 @@ class Database:
         primary_kline_limit: Optional[int] = None,
         confirm_kline_interval: Optional[str] = None,
         confirm_kline_limit: Optional[int] = None,
+        reversal_kline_interval: Optional[str] = None,
+        reversal_kline_limit: Optional[int] = None,
         learning_horizon_cycles: Optional[int] = None,
         learning_warmup_cycles: Optional[int] = None,
         max_open_positions: Optional[int] = None,
@@ -458,6 +546,7 @@ class Database:
         min_candle_body_ratio: Optional[float] = None,
         entry_rsi_limit: Optional[float] = None,
         entry_signal_quality_min: Optional[float] = None,
+        range_entry_signal_quality_min: Optional[float] = None,
         entry_confirm_trend_min: Optional[float] = None,
         entry_confirm_momentum_min: Optional[float] = None,
         breakout_score_delta: Optional[float] = None,
@@ -470,7 +559,18 @@ class Database:
         trend_cont_signal_quality_min: Optional[float] = None,
         trend_cont_confirm_trend_min: Optional[float] = None,
         trend_cont_volume_ratio_min: Optional[float] = None,
+        reversal_score_floor: Optional[float] = None,
+        reversal_confirm_trend_floor: Optional[float] = None,
+        reversal_rsi_15m_max: Optional[float] = None,
+        reversal_rsi_1m_min: Optional[float] = None,
+        reversal_rsi_1m_max: Optional[float] = None,
+        reversal_lower_wick_min: Optional[float] = None,
+        reversal_close_location_min: Optional[float] = None,
+        reversal_distance_from_low_max: Optional[float] = None,
+        reversal_volume_ratio_min: Optional[float] = None,
+        reversal_swing_window: Optional[int] = None,
         cooldown_after_loss_cycles: Optional[int] = None,
+        min_weakness_exit_age_minutes: Optional[float] = None,
         strategy_profile: Optional[str] = None,
     ) -> None:
         with self.lock, self.connect() as conn:
@@ -533,6 +633,16 @@ class Database:
                 conn.execute(
                     "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
                     ("confirm_kline_limit", str(confirm_kline_limit)),
+                )
+            if reversal_kline_interval is not None:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+                    ("reversal_kline_interval", reversal_kline_interval),
+                )
+            if reversal_kline_limit is not None:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+                    ("reversal_kline_limit", str(reversal_kline_limit)),
                 )
             if learning_horizon_cycles is not None:
                 conn.execute(
@@ -609,6 +719,14 @@ class Database:
                     "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
                     ("entry_signal_quality_min", str(entry_signal_quality_min)),
                 )
+            if range_entry_signal_quality_min is not None:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+                    (
+                        "range_entry_signal_quality_min",
+                        str(range_entry_signal_quality_min),
+                    ),
+                )
             if entry_confirm_trend_min is not None:
                 conn.execute(
                     "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
@@ -675,10 +793,68 @@ class Database:
                     "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
                     ("trend_cont_volume_ratio_min", str(trend_cont_volume_ratio_min)),
                 )
+            if reversal_score_floor is not None:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+                    ("reversal_score_floor", str(reversal_score_floor)),
+                )
+            if reversal_confirm_trend_floor is not None:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+                    ("reversal_confirm_trend_floor", str(reversal_confirm_trend_floor)),
+                )
+            if reversal_rsi_15m_max is not None:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+                    ("reversal_rsi_15m_max", str(reversal_rsi_15m_max)),
+                )
+            if reversal_rsi_1m_min is not None:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+                    ("reversal_rsi_1m_min", str(reversal_rsi_1m_min)),
+                )
+            if reversal_rsi_1m_max is not None:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+                    ("reversal_rsi_1m_max", str(reversal_rsi_1m_max)),
+                )
+            if reversal_lower_wick_min is not None:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+                    ("reversal_lower_wick_min", str(reversal_lower_wick_min)),
+                )
+            if reversal_close_location_min is not None:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+                    ("reversal_close_location_min", str(reversal_close_location_min)),
+                )
+            if reversal_distance_from_low_max is not None:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+                    ("reversal_distance_from_low_max", str(reversal_distance_from_low_max)),
+                )
+            if reversal_volume_ratio_min is not None:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+                    ("reversal_volume_ratio_min", str(reversal_volume_ratio_min)),
+                )
+            if reversal_swing_window is not None:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+                    ("reversal_swing_window", str(reversal_swing_window)),
+                )
             if cooldown_after_loss_cycles is not None:
                 conn.execute(
                     "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
                     ("cooldown_after_loss_cycles", str(cooldown_after_loss_cycles)),
+                )
+            if min_weakness_exit_age_minutes is not None:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+                    (
+                        "min_weakness_exit_age_minutes",
+                        str(min_weakness_exit_age_minutes),
+                    ),
                 )
             if strategy_profile is not None:
                 conn.execute(
@@ -700,6 +876,8 @@ class Database:
         primary_kline_limit: Optional[int] = None,
         confirm_kline_interval: Optional[str] = None,
         confirm_kline_limit: Optional[int] = None,
+        reversal_kline_interval: Optional[str] = None,
+        reversal_kline_limit: Optional[int] = None,
         learning_horizon_cycles: Optional[int] = None,
         learning_warmup_cycles: Optional[int] = None,
         max_open_positions: Optional[int] = None,
@@ -715,6 +893,7 @@ class Database:
         min_candle_body_ratio: Optional[float] = None,
         entry_rsi_limit: Optional[float] = None,
         entry_signal_quality_min: Optional[float] = None,
+        range_entry_signal_quality_min: Optional[float] = None,
         entry_confirm_trend_min: Optional[float] = None,
         entry_confirm_momentum_min: Optional[float] = None,
         breakout_score_delta: Optional[float] = None,
@@ -727,7 +906,18 @@ class Database:
         trend_cont_signal_quality_min: Optional[float] = None,
         trend_cont_confirm_trend_min: Optional[float] = None,
         trend_cont_volume_ratio_min: Optional[float] = None,
+        reversal_score_floor: Optional[float] = None,
+        reversal_confirm_trend_floor: Optional[float] = None,
+        reversal_rsi_15m_max: Optional[float] = None,
+        reversal_rsi_1m_min: Optional[float] = None,
+        reversal_rsi_1m_max: Optional[float] = None,
+        reversal_lower_wick_min: Optional[float] = None,
+        reversal_close_location_min: Optional[float] = None,
+        reversal_distance_from_low_max: Optional[float] = None,
+        reversal_volume_ratio_min: Optional[float] = None,
+        reversal_swing_window: Optional[int] = None,
         cooldown_after_loss_cycles: Optional[int] = None,
+        min_weakness_exit_age_minutes: Optional[float] = None,
         strategy_profile: Optional[str] = None,
         clear_learning: bool = False,
     ) -> None:
@@ -761,6 +951,8 @@ class Database:
             primary_kline_limit=primary_kline_limit,
             confirm_kline_interval=confirm_kline_interval,
             confirm_kline_limit=confirm_kline_limit,
+            reversal_kline_interval=reversal_kline_interval,
+            reversal_kline_limit=reversal_kline_limit,
             learning_horizon_cycles=learning_horizon_cycles,
             learning_warmup_cycles=learning_warmup_cycles,
             max_open_positions=max_open_positions,
@@ -776,6 +968,7 @@ class Database:
             min_candle_body_ratio=min_candle_body_ratio,
             entry_rsi_limit=entry_rsi_limit,
             entry_signal_quality_min=entry_signal_quality_min,
+            range_entry_signal_quality_min=range_entry_signal_quality_min,
             entry_confirm_trend_min=entry_confirm_trend_min,
             entry_confirm_momentum_min=entry_confirm_momentum_min,
             breakout_score_delta=breakout_score_delta,
@@ -788,7 +981,18 @@ class Database:
             trend_cont_signal_quality_min=trend_cont_signal_quality_min,
             trend_cont_confirm_trend_min=trend_cont_confirm_trend_min,
             trend_cont_volume_ratio_min=trend_cont_volume_ratio_min,
+            reversal_score_floor=reversal_score_floor,
+            reversal_confirm_trend_floor=reversal_confirm_trend_floor,
+            reversal_rsi_15m_max=reversal_rsi_15m_max,
+            reversal_rsi_1m_min=reversal_rsi_1m_min,
+            reversal_rsi_1m_max=reversal_rsi_1m_max,
+            reversal_lower_wick_min=reversal_lower_wick_min,
+            reversal_close_location_min=reversal_close_location_min,
+            reversal_distance_from_low_max=reversal_distance_from_low_max,
+            reversal_volume_ratio_min=reversal_volume_ratio_min,
+            reversal_swing_window=reversal_swing_window,
             cooldown_after_loss_cycles=cooldown_after_loss_cycles,
+            min_weakness_exit_age_minutes=min_weakness_exit_age_minutes,
             strategy_profile=strategy_profile,
         )
 

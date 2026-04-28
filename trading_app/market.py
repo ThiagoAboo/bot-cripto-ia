@@ -117,17 +117,19 @@ class BinanceMarketClient:
         interval: str = DEFAULT_KLINE_INTERVAL,
         limit: int = DEFAULT_KLINE_LIMIT,
     ) -> List[Dict[str, float]]:
+        request_limit = max(1, min(int(limit) + 1, 1000))
         try:
             payload = self._get(
                 "/api/v3/klines",
                 symbol=symbol,
                 interval=interval,
-                limit=limit,
+                limit=request_limit,
             )
         except requests.RequestException as exc:
             raise MarketDataError(f"Nao foi possivel carregar candles para {symbol}.") from exc
 
-        return [
+        now_ms = int(time.time() * 1000)
+        candles = [
             {
                 "open_time": item[0],
                 "open": float(item[1]),
@@ -139,6 +141,10 @@ class BinanceMarketClient:
             }
             for item in payload
         ]
+        closed_candles = [item for item in candles if int(item["close_time"]) <= now_ms]
+        if len(closed_candles) >= limit:
+            return closed_candles[-limit:]
+        return candles[-limit:]
 
     def get_last_prices(self, symbols: List[str]) -> Dict[str, float]:
         if not symbols:

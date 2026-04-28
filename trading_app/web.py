@@ -35,9 +35,23 @@ from .config import (
     MAX_DIRECTION_FLIP_RATIO,
     MAX_POSITION_AGE_MINUTES,
     MAX_PRIMARY_VOLATILITY,
+    MIN_WEAKNESS_EXIT_AGE_MINUTES,
     MIN_CANDLE_BODY_RATIO,
     MIN_TRADE_NOTIONAL,
     MIN_VOLUME_RATIO,
+    RANGE_ENTRY_SIGNAL_QUALITY_MIN,
+    REVERSAL_CLOSE_LOCATION_MIN,
+    REVERSAL_CONFIRM_INTERVAL,
+    REVERSAL_CONFIRM_LIMIT,
+    REVERSAL_CONFIRM_TREND_FLOOR,
+    REVERSAL_DISTANCE_FROM_LOW_MAX,
+    REVERSAL_LOWER_WICK_MIN,
+    REVERSAL_RSI_15M_MAX,
+    REVERSAL_RSI_1M_MIN,
+    REVERSAL_RSI_1M_MAX,
+    REVERSAL_SCORE_FLOOR,
+    REVERSAL_SWING_WINDOW,
+    REVERSAL_VOLUME_RATIO_MIN,
     SELL_THRESHOLD,
     STOP_LOSS_RATIO,
     STRATEGY_PROFILES,
@@ -74,6 +88,7 @@ def build_strategy_profiles_payload() -> Dict[str, Dict[str, Any]]:
             "min_candle_body_ratio": float(values["min_candle_body_ratio"]),
             "entry_rsi_limit": float(values["entry_rsi_limit"]),
             "entry_signal_quality_min": float(values["entry_signal_quality_min"]),
+            "range_entry_signal_quality_min": float(values["range_entry_signal_quality_min"]),
             "entry_confirm_trend_min": float(values["entry_confirm_trend_min"]),
             "entry_confirm_momentum_min": float(values["entry_confirm_momentum_min"]),
             "breakout_score_delta": float(values["breakout_score_delta"]),
@@ -86,7 +101,18 @@ def build_strategy_profiles_payload() -> Dict[str, Dict[str, Any]]:
             "trend_cont_signal_quality_min": float(values["trend_cont_signal_quality_min"]),
             "trend_cont_confirm_trend_min": float(values["trend_cont_confirm_trend_min"]),
             "trend_cont_volume_ratio_min": float(values["trend_cont_volume_ratio_min"]),
+            "reversal_score_floor": float(values["reversal_score_floor"]),
+            "reversal_confirm_trend_floor": float(values["reversal_confirm_trend_floor"]),
+            "reversal_rsi_15m_max": float(values["reversal_rsi_15m_max"]),
+            "reversal_rsi_1m_min": float(values["reversal_rsi_1m_min"]),
+            "reversal_rsi_1m_max": float(values["reversal_rsi_1m_max"]),
+            "reversal_lower_wick_min": float(values["reversal_lower_wick_min"]),
+            "reversal_close_location_min": float(values["reversal_close_location_min"]),
+            "reversal_distance_from_low_max": float(values["reversal_distance_from_low_max"]),
+            "reversal_volume_ratio_min": float(values["reversal_volume_ratio_min"]),
+            "reversal_swing_window": int(values["reversal_swing_window"]),
             "cooldown_after_loss_cycles": int(values["cooldown_after_loss_cycles"]),
+            "min_weakness_exit_age_minutes": float(values["min_weakness_exit_age_minutes"]),
         }
     return payload
 
@@ -103,6 +129,7 @@ def infer_strategy_profile(
     min_candle_body_ratio: float,
     entry_rsi_limit: float,
     entry_signal_quality_min: float,
+    range_entry_signal_quality_min: float,
     entry_confirm_trend_min: float,
     entry_confirm_momentum_min: float,
     breakout_score_delta: float,
@@ -115,7 +142,18 @@ def infer_strategy_profile(
     trend_cont_signal_quality_min: float,
     trend_cont_confirm_trend_min: float,
     trend_cont_volume_ratio_min: float,
+    reversal_score_floor: float,
+    reversal_confirm_trend_floor: float,
+    reversal_rsi_15m_max: float,
+    reversal_rsi_1m_min: float,
+    reversal_rsi_1m_max: float,
+    reversal_lower_wick_min: float,
+    reversal_close_location_min: float,
+    reversal_distance_from_low_max: float,
+    reversal_volume_ratio_min: float,
+    reversal_swing_window: int,
     cooldown_after_loss_cycles: int,
+    min_weakness_exit_age_minutes: float,
     requested_profile: str,
 ) -> str:
     normalized = requested_profile.lower().strip()
@@ -133,6 +171,7 @@ def infer_strategy_profile(
             and abs(float(preset["min_candle_body_ratio"]) - min_candle_body_ratio) < 1e-9
             and abs(float(preset["entry_rsi_limit"]) - entry_rsi_limit) < 1e-9
             and abs(float(preset["entry_signal_quality_min"]) - entry_signal_quality_min) < 1e-9
+            and abs(float(preset["range_entry_signal_quality_min"]) - range_entry_signal_quality_min) < 1e-9
             and abs(float(preset["entry_confirm_trend_min"]) - entry_confirm_trend_min) < 1e-9
             and abs(float(preset["entry_confirm_momentum_min"]) - entry_confirm_momentum_min) < 1e-9
             and abs(float(preset["breakout_score_delta"]) - breakout_score_delta) < 1e-9
@@ -145,7 +184,18 @@ def infer_strategy_profile(
             and abs(float(preset["trend_cont_signal_quality_min"]) - trend_cont_signal_quality_min) < 1e-9
             and abs(float(preset["trend_cont_confirm_trend_min"]) - trend_cont_confirm_trend_min) < 1e-9
             and abs(float(preset["trend_cont_volume_ratio_min"]) - trend_cont_volume_ratio_min) < 1e-9
+            and abs(float(preset["reversal_score_floor"]) - reversal_score_floor) < 1e-9
+            and abs(float(preset["reversal_confirm_trend_floor"]) - reversal_confirm_trend_floor) < 1e-9
+            and abs(float(preset["reversal_rsi_15m_max"]) - reversal_rsi_15m_max) < 1e-9
+            and abs(float(preset["reversal_rsi_1m_min"]) - reversal_rsi_1m_min) < 1e-9
+            and abs(float(preset["reversal_rsi_1m_max"]) - reversal_rsi_1m_max) < 1e-9
+            and abs(float(preset["reversal_lower_wick_min"]) - reversal_lower_wick_min) < 1e-9
+            and abs(float(preset["reversal_close_location_min"]) - reversal_close_location_min) < 1e-9
+            and abs(float(preset["reversal_distance_from_low_max"]) - reversal_distance_from_low_max) < 1e-9
+            and abs(float(preset["reversal_volume_ratio_min"]) - reversal_volume_ratio_min) < 1e-9
+            and int(preset["reversal_swing_window"]) == reversal_swing_window
             and int(preset["cooldown_after_loss_cycles"]) == cooldown_after_loss_cycles
+            and abs(float(preset["min_weakness_exit_age_minutes"]) - min_weakness_exit_age_minutes) < 1e-9
         ):
             return normalized
 
@@ -162,6 +212,7 @@ def infer_strategy_profile(
             and abs(float(preset["min_candle_body_ratio"]) - min_candle_body_ratio) < 1e-9
             and abs(float(preset["entry_rsi_limit"]) - entry_rsi_limit) < 1e-9
             and abs(float(preset["entry_signal_quality_min"]) - entry_signal_quality_min) < 1e-9
+            and abs(float(preset["range_entry_signal_quality_min"]) - range_entry_signal_quality_min) < 1e-9
             and abs(float(preset["entry_confirm_trend_min"]) - entry_confirm_trend_min) < 1e-9
             and abs(float(preset["entry_confirm_momentum_min"]) - entry_confirm_momentum_min) < 1e-9
             and abs(float(preset["breakout_score_delta"]) - breakout_score_delta) < 1e-9
@@ -174,7 +225,18 @@ def infer_strategy_profile(
             and abs(float(preset["trend_cont_signal_quality_min"]) - trend_cont_signal_quality_min) < 1e-9
             and abs(float(preset["trend_cont_confirm_trend_min"]) - trend_cont_confirm_trend_min) < 1e-9
             and abs(float(preset["trend_cont_volume_ratio_min"]) - trend_cont_volume_ratio_min) < 1e-9
+            and abs(float(preset["reversal_score_floor"]) - reversal_score_floor) < 1e-9
+            and abs(float(preset["reversal_confirm_trend_floor"]) - reversal_confirm_trend_floor) < 1e-9
+            and abs(float(preset["reversal_rsi_15m_max"]) - reversal_rsi_15m_max) < 1e-9
+            and abs(float(preset["reversal_rsi_1m_min"]) - reversal_rsi_1m_min) < 1e-9
+            and abs(float(preset["reversal_rsi_1m_max"]) - reversal_rsi_1m_max) < 1e-9
+            and abs(float(preset["reversal_lower_wick_min"]) - reversal_lower_wick_min) < 1e-9
+            and abs(float(preset["reversal_close_location_min"]) - reversal_close_location_min) < 1e-9
+            and abs(float(preset["reversal_distance_from_low_max"]) - reversal_distance_from_low_max) < 1e-9
+            and abs(float(preset["reversal_volume_ratio_min"]) - reversal_volume_ratio_min) < 1e-9
+            and int(preset["reversal_swing_window"]) == reversal_swing_window
             and int(preset["cooldown_after_loss_cycles"]) == cooldown_after_loss_cycles
+            and abs(float(preset["min_weakness_exit_age_minutes"]) - min_weakness_exit_age_minutes) < 1e-9
         ):
             return key
     return CUSTOM_STRATEGY_PROFILE
@@ -277,6 +339,8 @@ def create_app() -> Flask:
                 primary_kline_limit=DEFAULT_KLINE_LIMIT,
                 confirm_kline_interval=TREND_CONFIRM_INTERVAL,
                 confirm_kline_limit=TREND_CONFIRM_LIMIT,
+                reversal_kline_interval=REVERSAL_CONFIRM_INTERVAL,
+                reversal_kline_limit=REVERSAL_CONFIRM_LIMIT,
                 learning_horizon_cycles=DEFAULT_LEARNING_HORIZON_CYCLES,
                 learning_warmup_cycles=LEARNING_WARMUP_CYCLES,
                 max_open_positions=DEFAULT_MAX_OPEN_POSITIONS,
@@ -292,6 +356,9 @@ def create_app() -> Flask:
                 min_candle_body_ratio=float(default_profile_values["min_candle_body_ratio"]),
                 entry_rsi_limit=float(default_profile_values["entry_rsi_limit"]),
                 entry_signal_quality_min=float(default_profile_values["entry_signal_quality_min"]),
+                range_entry_signal_quality_min=float(
+                    default_profile_values["range_entry_signal_quality_min"]
+                ),
                 entry_confirm_trend_min=float(default_profile_values["entry_confirm_trend_min"]),
                 entry_confirm_momentum_min=float(default_profile_values["entry_confirm_momentum_min"]),
                 breakout_score_delta=float(default_profile_values["breakout_score_delta"]),
@@ -304,7 +371,20 @@ def create_app() -> Flask:
                 trend_cont_signal_quality_min=float(default_profile_values["trend_cont_signal_quality_min"]),
                 trend_cont_confirm_trend_min=float(default_profile_values["trend_cont_confirm_trend_min"]),
                 trend_cont_volume_ratio_min=float(default_profile_values["trend_cont_volume_ratio_min"]),
+                reversal_score_floor=float(default_profile_values["reversal_score_floor"]),
+                reversal_confirm_trend_floor=float(default_profile_values["reversal_confirm_trend_floor"]),
+                reversal_rsi_15m_max=float(default_profile_values["reversal_rsi_15m_max"]),
+                reversal_rsi_1m_min=float(default_profile_values["reversal_rsi_1m_min"]),
+                reversal_rsi_1m_max=float(default_profile_values["reversal_rsi_1m_max"]),
+                reversal_lower_wick_min=float(default_profile_values["reversal_lower_wick_min"]),
+                reversal_close_location_min=float(default_profile_values["reversal_close_location_min"]),
+                reversal_distance_from_low_max=float(default_profile_values["reversal_distance_from_low_max"]),
+                reversal_volume_ratio_min=float(default_profile_values["reversal_volume_ratio_min"]),
+                reversal_swing_window=int(default_profile_values["reversal_swing_window"]),
                 cooldown_after_loss_cycles=int(default_profile_values["cooldown_after_loss_cycles"]),
+                min_weakness_exit_age_minutes=float(
+                    default_profile_values["min_weakness_exit_age_minutes"]
+                ),
                 strategy_profile=DEFAULT_STRATEGY_PROFILE,
                 cycle_history_limit=DEFAULT_CYCLE_HISTORY_LIMIT,
                 clear_learning=True,
@@ -343,6 +423,12 @@ def create_app() -> Flask:
         confirm_kline_limit = int(
             payload.get("confirm_kline_limit", TREND_CONFIRM_LIMIT)
         )
+        reversal_kline_interval = str(
+            payload.get("reversal_kline_interval", REVERSAL_CONFIRM_INTERVAL)
+        ).strip()
+        reversal_kline_limit = int(
+            payload.get("reversal_kline_limit", REVERSAL_CONFIRM_LIMIT)
+        )
         learning_horizon_cycles = int(
             payload.get("learning_horizon_cycles", DEFAULT_LEARNING_HORIZON_CYCLES)
         )
@@ -373,6 +459,12 @@ def create_app() -> Flask:
         entry_rsi_limit = float(payload.get("entry_rsi_limit", ENTRY_RSI_LIMIT))
         entry_signal_quality_min = float(
             payload.get("entry_signal_quality_min", ENTRY_SIGNAL_QUALITY_MIN)
+        )
+        range_entry_signal_quality_min = float(
+            payload.get(
+                "range_entry_signal_quality_min",
+                RANGE_ENTRY_SIGNAL_QUALITY_MIN,
+            )
         )
         entry_confirm_trend_min = float(
             payload.get("entry_confirm_trend_min", ENTRY_CONFIRM_TREND_MIN)
@@ -416,8 +508,53 @@ def create_app() -> Flask:
         trend_cont_volume_ratio_min = float(
             payload.get("trend_cont_volume_ratio_min", TREND_CONT_VOLUME_RATIO_MIN)
         )
+        reversal_score_floor = float(
+            payload.get("reversal_score_floor", REVERSAL_SCORE_FLOOR)
+        )
+        reversal_confirm_trend_floor = float(
+            payload.get(
+                "reversal_confirm_trend_floor",
+                REVERSAL_CONFIRM_TREND_FLOOR,
+            )
+        )
+        reversal_rsi_15m_max = float(
+            payload.get("reversal_rsi_15m_max", REVERSAL_RSI_15M_MAX)
+        )
+        reversal_rsi_1m_min = float(
+            payload.get("reversal_rsi_1m_min", REVERSAL_RSI_1M_MIN)
+        )
+        reversal_rsi_1m_max = float(
+            payload.get("reversal_rsi_1m_max", REVERSAL_RSI_1M_MAX)
+        )
+        reversal_lower_wick_min = float(
+            payload.get("reversal_lower_wick_min", REVERSAL_LOWER_WICK_MIN)
+        )
+        reversal_close_location_min = float(
+            payload.get(
+                "reversal_close_location_min",
+                REVERSAL_CLOSE_LOCATION_MIN,
+            )
+        )
+        reversal_distance_from_low_max = float(
+            payload.get(
+                "reversal_distance_from_low_max",
+                REVERSAL_DISTANCE_FROM_LOW_MAX,
+            )
+        )
+        reversal_volume_ratio_min = float(
+            payload.get("reversal_volume_ratio_min", REVERSAL_VOLUME_RATIO_MIN)
+        )
+        reversal_swing_window = int(
+            payload.get("reversal_swing_window", REVERSAL_SWING_WINDOW)
+        )
         cooldown_after_loss_cycles = int(
             payload.get("cooldown_after_loss_cycles", COOLDOWN_AFTER_LOSS_CYCLES)
+        )
+        min_weakness_exit_age_minutes = float(
+            payload.get(
+                "min_weakness_exit_age_minutes",
+                MIN_WEAKNESS_EXIT_AGE_MINUTES,
+            )
         )
         requested_strategy_profile = str(
             payload.get(
@@ -440,6 +577,7 @@ def create_app() -> Flask:
             min_candle_body_ratio,
             entry_rsi_limit,
             entry_signal_quality_min,
+            range_entry_signal_quality_min,
             entry_confirm_trend_min,
             entry_confirm_momentum_min,
             breakout_score_delta,
@@ -452,7 +590,18 @@ def create_app() -> Flask:
             trend_cont_signal_quality_min,
             trend_cont_confirm_trend_min,
             trend_cont_volume_ratio_min,
+            reversal_score_floor,
+            reversal_confirm_trend_floor,
+            reversal_rsi_15m_max,
+            reversal_rsi_1m_min,
+            reversal_rsi_1m_max,
+            reversal_lower_wick_min,
+            reversal_close_location_min,
+            reversal_distance_from_low_max,
+            reversal_volume_ratio_min,
+            reversal_swing_window,
             cooldown_after_loss_cycles,
+            min_weakness_exit_age_minutes,
             requested_strategy_profile,
         )
         time_exit_enabled = time_exit_enabled and max_position_age_minutes > 0
@@ -463,7 +612,7 @@ def create_app() -> Flask:
             return jsonify({"error": "O capital inicial deve ser maior que zero."}), 400
         if not quote_asset or len(quote_asset) > 12:
             return jsonify({"error": "Informe uma moeda de cotacao valida."}), 400
-        if not primary_kline_interval or not confirm_kline_interval:
+        if not primary_kline_interval or not confirm_kline_interval or not reversal_kline_interval:
             return jsonify({"error": "Os intervalos de candle nao podem ficar vazios."}), 400
         if not selected_symbols:
             return jsonify({"error": "Selecione pelo menos uma moeda para analise."}), 400
@@ -475,7 +624,7 @@ def create_app() -> Flask:
             return jsonify({"error": "O historico por moeda deve ficar entre 50 e 5000 ciclos."}), 400
         if not 0 <= fee_rate <= MAX_FEE_RATE:
             return jsonify({"error": "A taxa por transacao deve ficar entre 0% e 5%."}), 400
-        if primary_kline_limit < 60 or confirm_kline_limit < 60:
+        if primary_kline_limit < 60 or confirm_kline_limit < 60 or reversal_kline_limit < 60:
             return jsonify({"error": "Os limites de candle devem ser de pelo menos 60."}), 400
         if not 1 <= learning_horizon_cycles <= 500:
             return jsonify({"error": "O horizonte de aprendizado deve ficar entre 1 e 500 ciclos."}), 400
@@ -507,6 +656,8 @@ def create_app() -> Flask:
             return jsonify({"error": "O RSI maximo de entrada deve ficar entre 40 e 100."}), 400
         if not 0 <= entry_signal_quality_min <= 1:
             return jsonify({"error": "A qualidade minima do sinal deve ficar entre 0 e 100%."}), 400
+        if not 0 <= range_entry_signal_quality_min <= 1:
+            return jsonify({"error": "A qualidade minima em range deve ficar entre 0 e 100%."}), 400
         if not -0.05 <= entry_confirm_trend_min <= 0.05:
             return jsonify({"error": "O trend minimo da confirmacao deve ficar entre -5% e 5%."}), 400
         if not -0.1 <= entry_confirm_momentum_min <= 0.1:
@@ -531,8 +682,46 @@ def create_app() -> Flask:
             return jsonify({"error": "O trend minimo da continuidade deve ficar entre -5% e 5%."}), 400
         if not 0 <= trend_cont_volume_ratio_min <= 20:
             return jsonify({"error": "O volume minimo da continuidade deve ficar entre 0 e 20x."}), 400
+        if not 0.1 <= reversal_score_floor <= 10:
+            return jsonify({"error": "O score minimo da reversao deve ficar entre 0.1 e 10."}), 400
+        if not -0.05 <= reversal_confirm_trend_floor <= 0.05:
+            return jsonify({"error": "O trend minimo da reversao deve ficar entre -5% e 5%."}), 400
+        if not 10 <= reversal_rsi_15m_max <= 100:
+            return jsonify({"error": "O RSI maximo da reversao 15m deve ficar entre 10 e 100."}), 400
+        if not 10 <= reversal_rsi_1m_min <= 100:
+            return jsonify({"error": "O RSI minimo de reaceleracao deve ficar entre 10 e 100."}), 400
+        if not 10 <= reversal_rsi_1m_max <= 100:
+            return jsonify({"error": "O RSI maximo da reversao 1m deve ficar entre 10 e 100."}), 400
+        if reversal_rsi_1m_max < reversal_rsi_1m_min:
+            return jsonify(
+                {
+                    "error": (
+                        "O RSI maximo da reversao 1m precisa ser maior ou igual "
+                        "ao RSI minimo de reaceleracao."
+                    )
+                }
+            ), 400
+        if not 0 <= reversal_lower_wick_min <= 1:
+            return jsonify({"error": "O pavio inferior minimo da reversao deve ficar entre 0 e 100%."}), 400
+        if not 0 <= reversal_close_location_min <= 1:
+            return jsonify({"error": "O fechamento minimo da reversao deve ficar entre 0 e 100%."}), 400
+        if not 0 <= reversal_distance_from_low_max <= 0.2:
+            return jsonify({"error": "A distancia maxima do fundo 15m deve ficar entre 0% e 20%."}), 400
+        if not 0 <= reversal_volume_ratio_min <= 20:
+            return jsonify({"error": "O volume minimo da reversao deve ficar entre 0 e 20x."}), 400
+        if not 2 <= reversal_swing_window <= 100:
+            return jsonify({"error": "A janela do fundo 15m deve ficar entre 2 e 100 candles."}), 400
         if not 0 <= cooldown_after_loss_cycles <= 500:
             return jsonify({"error": "O cooldown apos saida ruim deve ficar entre 0 e 500 ciclos."}), 400
+        if not 0 <= min_weakness_exit_age_minutes <= 10080:
+            return jsonify(
+                {
+                    "error": (
+                        "A idade minima da saida por fraqueza deve ficar entre "
+                        "0 e 10080 minutos."
+                    )
+                }
+            ), 400
         if quote_asset != current_settings["quote_asset"]:
             return jsonify(
                 {
@@ -588,6 +777,8 @@ def create_app() -> Flask:
             primary_kline_limit=primary_kline_limit,
             confirm_kline_interval=confirm_kline_interval,
             confirm_kline_limit=confirm_kline_limit,
+            reversal_kline_interval=reversal_kline_interval,
+            reversal_kline_limit=reversal_kline_limit,
             learning_horizon_cycles=learning_horizon_cycles,
             learning_warmup_cycles=learning_warmup_cycles,
             max_open_positions=max_open_positions,
@@ -603,6 +794,7 @@ def create_app() -> Flask:
             min_candle_body_ratio=min_candle_body_ratio,
             entry_rsi_limit=entry_rsi_limit,
             entry_signal_quality_min=entry_signal_quality_min,
+            range_entry_signal_quality_min=range_entry_signal_quality_min,
             entry_confirm_trend_min=entry_confirm_trend_min,
             entry_confirm_momentum_min=entry_confirm_momentum_min,
             breakout_score_delta=breakout_score_delta,
@@ -615,7 +807,18 @@ def create_app() -> Flask:
             trend_cont_signal_quality_min=trend_cont_signal_quality_min,
             trend_cont_confirm_trend_min=trend_cont_confirm_trend_min,
             trend_cont_volume_ratio_min=trend_cont_volume_ratio_min,
+            reversal_score_floor=reversal_score_floor,
+            reversal_confirm_trend_floor=reversal_confirm_trend_floor,
+            reversal_rsi_15m_max=reversal_rsi_15m_max,
+            reversal_rsi_1m_min=reversal_rsi_1m_min,
+            reversal_rsi_1m_max=reversal_rsi_1m_max,
+            reversal_lower_wick_min=reversal_lower_wick_min,
+            reversal_close_location_min=reversal_close_location_min,
+            reversal_distance_from_low_max=reversal_distance_from_low_max,
+            reversal_volume_ratio_min=reversal_volume_ratio_min,
+            reversal_swing_window=reversal_swing_window,
             cooldown_after_loss_cycles=cooldown_after_loss_cycles,
+            min_weakness_exit_age_minutes=min_weakness_exit_age_minutes,
             strategy_profile=strategy_profile,
         )
         if learning_reset:
