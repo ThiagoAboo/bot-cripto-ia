@@ -24,6 +24,7 @@ const timeframeSchema = z.enum(['1m', '5m', '15m', '1h', '4h', '1d'])
 const editableBotParametersSchema = z.object({
   timeframe: timeframeSchema.optional(),
   minConfidence: z.number().min(0).max(100).optional(),
+  useGlobalAllowedPairs: z.boolean().optional(),
   allowedPairs: z.array(z.string().min(3).max(24)).max(30).optional(),
   maxPairsToAnalyze: z.number().int().min(1).max(500).optional(),
   maxExecutableOpportunitiesPerCycle: z.number().int().min(1).max(20).optional(),
@@ -130,9 +131,14 @@ function normalizePairs(value: unknown): string[] {
 }
 
 function resolveAllowedPairsSource(
+  useGlobalAllowedPairs: boolean,
   instanceAllowedPairs: string[],
   templateAllowedPairs: string[],
 ): 'instance' | 'template' | 'global' {
+  if (useGlobalAllowedPairs) {
+    return 'global'
+  }
+
   if (instanceAllowedPairs.length > 0) {
     return 'instance'
   }
@@ -159,6 +165,14 @@ function sanitizeParametersPatch(
 
   if (Object.prototype.hasOwnProperty.call(input, 'allowedPairs')) {
     nextParameters.allowedPairs = normalizePairs(input.allowedPairs)
+  }
+
+  if (Object.prototype.hasOwnProperty.call(input, 'useGlobalAllowedPairs')) {
+    nextParameters.useGlobalAllowedPairs = input.useGlobalAllowedPairs === true
+  }
+
+  if (nextParameters.useGlobalAllowedPairs === true) {
+    nextParameters.allowedPairs = []
   }
 
   return nextParameters
@@ -200,9 +214,10 @@ interface BotDetailSource {
 async function mapBotDetail(bot: BotDetailSource, configurationAllowedPairs: string[], userId: string) {
   const templateParameters = safeJsonParse<Record<string, unknown>>(bot.template?.defaultParameters, {})
   const instanceParameters = safeJsonParse<Record<string, unknown>>(bot.parameters, {})
+  const useGlobalAllowedPairs = instanceParameters.useGlobalAllowedPairs === true
   const instanceAllowedPairs = normalizePairs(instanceParameters.allowedPairs)
   const templateAllowedPairs = normalizePairs(templateParameters.allowedPairs)
-  const allowedPairsSource = resolveAllowedPairsSource(instanceAllowedPairs, templateAllowedPairs)
+  const allowedPairsSource = resolveAllowedPairsSource(useGlobalAllowedPairs, instanceAllowedPairs, templateAllowedPairs)
   const effectiveAllowedPairs = allowedPairsSource === 'instance'
     ? instanceAllowedPairs
     : allowedPairsSource === 'template'
@@ -211,6 +226,7 @@ async function mapBotDetail(bot: BotDetailSource, configurationAllowedPairs: str
   const effectiveParameters = {
     ...templateParameters,
     ...instanceParameters,
+    useGlobalAllowedPairs: allowedPairsSource === 'global',
     allowedPairs: effectiveAllowedPairs,
   }
   const readiness = await resolveBotOperationalReadiness(bot.modelUrl)
@@ -1104,7 +1120,10 @@ export async function createBot(req: AuthRequest, res: Response): Promise<Respon
         isPaused: false,
         parameters: JSON.stringify({
           ...payload.parameters,
-          allowedPairs: normalizePairs(payload.parameters.allowedPairs),
+          useGlobalAllowedPairs: payload.parameters.useGlobalAllowedPairs === true,
+          allowedPairs: payload.parameters.useGlobalAllowedPairs === true
+            ? []
+            : normalizePairs(payload.parameters.allowedPairs),
         }),
       },
       include: {

@@ -82,6 +82,10 @@ function resolveAllowedPairs(
   parameters: Record<string, unknown>,
   configurationAllowedPairs: string[],
 ): string[] {
+  if (parameters.useGlobalAllowedPairs === true) {
+    return configurationAllowedPairs
+  }
+
   const instanceAllowedPairs = normalizePairs(parameters.allowedPairs)
   if (instanceAllowedPairs.length > 0) {
     return instanceAllowedPairs

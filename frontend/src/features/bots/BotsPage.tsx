@@ -193,6 +193,7 @@ function buildUpdatePayload(formState: BotEditorFormState) {
     parameters: {
       timeframe: formState.timeframe as '1m' | '5m' | '15m' | '1h' | '4h' | '1d',
       minConfidence: parseOptionalNumber(formState.minConfidence),
+      useGlobalAllowedPairs: formState.useGlobalAllowedPairs,
       allowedPairs: formState.useGlobalAllowedPairs ? [] : parsePairsInput(formState.allowedPairs),
       maxPairsToAnalyze: parseOptionalNumber(formState.maxPairsToAnalyze, true),
       maxExecutableOpportunitiesPerCycle: parseOptionalNumber(formState.maxExecutableOpportunitiesPerCycle, true),
@@ -1278,6 +1279,7 @@ function CreateBotModal({
       executionMode,
       status,
       parameters: {
+        useGlobalAllowedPairs,
         allowedPairs: useGlobalAllowedPairs ? [] : parsePairsInput(allowedPairs),
         maxPairsToAnalyze: parseOptionalNumber(maxPairsToAnalyze, true),
         maxExecutableOpportunitiesPerCycle: parseOptionalNumber(maxExecutableOpportunitiesPerCycle, true),

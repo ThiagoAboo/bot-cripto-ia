@@ -667,6 +667,7 @@ describe('BotsPage', () => {
           parameters: expect.objectContaining({
             timeframe: '1h',
             minConfidence: 60,
+            useGlobalAllowedPairs: false,
             allowedPairs: ['BTC/USDT', 'ETH/USDT'],
             stopLossPercent: 2,
           }),
@@ -728,11 +729,63 @@ describe('BotsPage', () => {
         executionMode: 'paper',
         status: 'offline',
         parameters: {
+          useGlobalAllowedPairs: false,
           allowedPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
           maxPairsToAnalyze: 3,
           maxExecutableOpportunitiesPerCycle: 1,
         },
       })
+    })
+  })
+
+  it('sends the explicit global-pairs flag when saving a templated bot with global pairs selected', async () => {
+    Object.assign(botDetailMock as any, {
+      templateParameters: {
+        timeframe: '1m',
+        allowedPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
+      },
+      instanceParameters: {
+        useGlobalAllowedPairs: true,
+        allowedPairs: [],
+      },
+      effectiveParameters: {
+        timeframe: '1m',
+        useGlobalAllowedPairs: true,
+        allowedPairs: ['XRP/USDT', 'ADA/USDT'],
+        stopLossPercent: 0.6,
+      },
+      effectiveAllowedPairs: ['XRP/USDT', 'ADA/USDT'],
+      allowedPairsSource: 'global',
+    })
+
+    render(<BotsPage />)
+
+    expect(await screen.findByDisplayValue('RSI Alpha')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Salvar/ }))
+
+    await waitFor(() => {
+      expect(updateBotMutateAsync).toHaveBeenCalledWith({
+        botId: 'bot-1',
+        payload: expect.objectContaining({
+          parameters: expect.objectContaining({
+            useGlobalAllowedPairs: true,
+            allowedPairs: [],
+          }),
+        }),
+      })
+    })
+
+    Object.assign(botDetailMock as any, {
+      templateParameters: { timeframe: '1h', minConfidence: 60 },
+      instanceParameters: { allowedPairs: ['BTC/USDT', 'ETH/USDT'] },
+      effectiveParameters: {
+        timeframe: '1h',
+        minConfidence: 60,
+        allowedPairs: ['BTC/USDT', 'ETH/USDT'],
+        stopLossPercent: 2,
+      },
+      effectiveAllowedPairs: ['BTC/USDT', 'ETH/USDT'],
+      allowedPairsSource: 'instance',
     })
   })
 })

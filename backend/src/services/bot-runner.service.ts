@@ -260,6 +260,10 @@ function resolveEffectiveAllowedPairs(
   parameters: Record<string, unknown>,
   fallbackPairs: string[],
 ): string[] {
+  if (parameters.useGlobalAllowedPairs === true) {
+    return fallbackPairs
+  }
+
   const botPairs = normalizePairs(parameters.allowedPairs)
   if (botPairs.length > 0) {
     return botPairs
