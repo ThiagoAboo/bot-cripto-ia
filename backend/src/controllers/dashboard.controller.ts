@@ -232,7 +232,7 @@ async function mapBotDetail(bot: BotDetailSource, configurationAllowedPairs: str
     useGlobalAllowedPairs: allowedPairsSource === 'global',
     allowedPairs: effectiveAllowedPairs,
   }
-  const readiness = await resolveBotOperationalReadiness(bot.modelUrl)
+  const readiness = await resolveDashboardBotOperationalReadiness(bot, effectiveParameters)
   const paperReadiness = await loadBotPaperReadiness(userId, bot.id)
 
   return {
@@ -285,19 +285,64 @@ async function mapBotDetail(bot: BotDetailSource, configurationAllowedPairs: str
   }
 }
 
+function resolveBotRole(parameters: Record<string, unknown>): 'standard' | 'specialist' | 'orchestrator' {
+  const role = typeof parameters.botRole === 'string'
+    ? parameters.botRole.trim().toLowerCase()
+    : ''
+
+  if (role === 'specialist') {
+    return 'specialist'
+  }
+
+  if (role === 'orchestrator') {
+    return 'orchestrator'
+  }
+
+  return 'standard'
+}
+
+async function resolveDashboardBotOperationalReadiness(
+  bot: {
+    modelUrl: string | null
+    modelVersion?: string | null
+  },
+  parameters: Record<string, unknown>,
+) {
+  if (resolveBotRole(parameters) === 'orchestrator') {
+    return {
+      hasModel: true,
+      modelReady: true,
+      modelVersion: typeof bot.modelVersion === 'string' && bot.modelVersion.trim().length > 0
+        ? bot.modelVersion
+        : 'adaptive-orchestrator-v1',
+      modelUrl: bot.modelUrl ?? undefined,
+      modelArchitecture: 'adaptive_meta_policy',
+      validationStrategy: 'online_learning',
+      forecastHorizonCandles: 5,
+      buyThresholdPercent: 0.3,
+      sellThresholdPercent: -0.3,
+      hasEnginePackage: true,
+      operationalBlockReason: undefined,
+    }
+  }
+
+  return resolveBotOperationalReadiness(bot.modelUrl)
+}
+
 function isExternalBotRuntimeExpected(): boolean {
   return process.env.NODE_ENV !== 'test' && process.env.BOT_RUNTIME_EXPECT_EXTERNAL_SERVICE === 'true'
 }
 
 async function ensureBotCanGoOnline(bot: {
   modelUrl: string | null
+  modelVersion?: string | null
   name: string
-}, status: 'online' | 'offline') {
+}, status: 'online' | 'offline', parameters: Record<string, unknown>) {
   if (status !== 'online') {
     return null
   }
 
-  const readiness = await resolveBotOperationalReadiness(bot.modelUrl)
+  const readiness = await resolveDashboardBotOperationalReadiness(bot, parameters)
   if (!readiness.modelReady) {
     return readiness.operationalBlockReason ?? `O bot ${bot.name} ainda não possui um modelo pronto para operação.`
   }
@@ -310,13 +355,15 @@ async function ensureBotExecutionModeAllowed(params: {
   botId?: string
   bot: {
     modelUrl: string | null
+    modelVersion?: string | null
     name: string
   }
+  parameters: Record<string, unknown>
   validateOnlineReadiness: boolean
   executionMode: 'paper' | 'semi_auto' | 'full_auto'
 }) {
   if (params.validateOnlineReadiness) {
-    const onlineGuardError = await ensureBotCanGoOnline(params.bot, 'online')
+    const onlineGuardError = await ensureBotCanGoOnline(params.bot, 'online', params.parameters)
     if (onlineGuardError) {
       return onlineGuardError
     }
@@ -326,9 +373,13 @@ async function ensureBotExecutionModeAllowed(params: {
     return null
   }
 
-  const onlineGuardError = await ensureBotCanGoOnline(params.bot, 'online')
+  const onlineGuardError = await ensureBotCanGoOnline(params.bot, 'online', params.parameters)
   if (onlineGuardError) {
     return onlineGuardError
+  }
+
+  if (resolveBotRole(params.parameters) === 'orchestrator') {
+    return null
   }
 
   if (!params.botId || !params.bot.modelUrl) {
@@ -566,8 +617,14 @@ export async function getBotsStatus(req: AuthRequest, res: Response): Promise<Re
     const userId = req.userId!
     const bots = await listBotInstances(userId)
     const result = await Promise.all(bots.map(async (bot) => {
+      const readinessParameters = bot.templateId === 'template_adaptive_ai_orchestrator' || bot.strategyType === 'orchestrator'
+        ? { botRole: 'orchestrator' }
+        : {}
       const [readiness, paperReadiness] = await Promise.all([
-        resolveBotOperationalReadiness(bot.modelUrl),
+        resolveDashboardBotOperationalReadiness({
+          modelUrl: bot.modelUrl ?? null,
+          modelVersion: bot.modelVersion,
+        }, readinessParameters),
         loadBotPaperReadiness(userId, bot.id),
       ])
 
@@ -1096,12 +1153,17 @@ export async function createBot(req: AuthRequest, res: Response): Promise<Respon
       return res.status(404).json({ success: false, error: 'Template de bot não encontrado' })
     }
 
+    const templateParameters = safeJsonParse<Record<string, unknown>>(template.defaultParameters, {})
+    const candidateParameters = sanitizeParametersPatch(payload.parameters, templateParameters)
+
     const executionModeGuardError = await ensureBotExecutionModeAllowed({
       userId,
       bot: {
         modelUrl: null,
+        modelVersion: null,
         name: payload.name,
       },
+      parameters: candidateParameters,
       validateOnlineReadiness: payload.status === 'online',
       executionMode: payload.executionMode,
     })
@@ -1122,11 +1184,11 @@ export async function createBot(req: AuthRequest, res: Response): Promise<Respon
         status: payload.status,
         isPaused: false,
         parameters: JSON.stringify({
-          ...payload.parameters,
-          useGlobalAllowedPairs: payload.parameters.useGlobalAllowedPairs === true,
-          allowedPairs: payload.parameters.useGlobalAllowedPairs === true
+          ...candidateParameters,
+          useGlobalAllowedPairs: candidateParameters.useGlobalAllowedPairs === true,
+          allowedPairs: candidateParameters.useGlobalAllowedPairs === true
             ? []
-            : normalizePairs(payload.parameters.allowedPairs),
+            : normalizePairs(candidateParameters.allowedPairs),
         }),
       },
       include: {
@@ -1195,6 +1257,7 @@ export async function updateBot(req: AuthRequest, res: Response): Promise<Respon
       userId,
       botId: materializedBot.bot.id,
       bot: materializedBot.bot,
+      parameters: nextParameters,
       validateOnlineReadiness: validation.data.status === 'online',
       executionMode: nextExecutionMode,
     })
