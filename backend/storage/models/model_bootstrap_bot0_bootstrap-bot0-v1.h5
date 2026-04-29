@@ -1,10 +1,10 @@
 {
   "artifactType": "bot-crypto-ia-training-model",
   "formatVersion": 4,
-  "fingerprint": "ef1c7204a3498b1f4af00300c4d6be58b7f0c4ac56f413ac2d57bf53ecf3195e",
-  "savedAt": "2026-04-27T16:30:23.296Z",
+  "fingerprint": "8c046df4c20e454a3246707433a419dc8d44c449681a59be89745f6ffeb2ba55",
+  "savedAt": "2026-04-29T14:29:06.183Z",
   "sessionId": "bootstrap-bot0-session",
-  "userId": "cmohey8lh0000mpybf0fky7kq",
+  "userId": "cmok5hysb0000ve7t7pkcwfcf",
   "botId": "bot0",
   "modelVersion": "bootstrap-bot0-v1",
   "summary": {
@@ -68,7 +68,9 @@
     "includedPairs": [
       "BTC/USDT",
       "ETH/USDT",
-      "SOL/USDT"
+      "SOL/USDT",
+      "BNB/USDT",
+      "XRP/USDT"
     ],
     "indicators": [
       "close_return_1",
@@ -99,7 +101,9 @@
     "includedPairs": [
       "BTC/USDT",
       "ETH/USDT",
-      "SOL/USDT"
+      "SOL/USDT",
+      "BNB/USDT",
+      "XRP/USDT"
     ],
     "indicators": [
       "close_return_1",

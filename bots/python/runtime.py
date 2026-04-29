@@ -876,24 +876,59 @@ def analyze_scalper(snapshot: Dict[str, Any], params: Dict[str, Any]) -> Dict[st
     micro_momentum_percent = ((price / reference_price) - 1.0) * 100.0 if reference_price > 0 else 0.0
     imbalance = orderbook_stats["imbalance"] or 0.0
 
-    if spread_percent <= max_spread_percent and volume_24h >= min_volume and micro_momentum_percent > micro_momentum_threshold and imbalance > order_imbalance_threshold:
-        confidence = 62 + ((micro_momentum_percent - micro_momentum_threshold) * 90) + (imbalance * 24)
-        return create_insight("scalper", "buy", confidence, "Tight spread, positive micro momentum and bid-side imbalance", {
+    spread_threshold = max(max_spread_percent, 0.01)
+    momentum_threshold = max(micro_momentum_threshold, 0.01)
+    imbalance_threshold = max(order_imbalance_threshold, 0.05)
+    volume_threshold = max(min_volume, 1.0)
+
+    spread_quality = clamp(1.0 - (max(0.0, spread_percent - spread_threshold) / max(spread_threshold * 0.9, 0.01)), 0.0, 1.0)
+    volume_quality = clamp(volume_24h / volume_threshold, 0.0, 1.35)
+    buy_momentum_strength = clamp(max(0.0, micro_momentum_percent) / momentum_threshold, 0.0, 1.8)
+    sell_momentum_strength = clamp(max(0.0, -micro_momentum_percent) / momentum_threshold, 0.0, 1.8)
+    buy_imbalance_strength = clamp(max(0.0, imbalance) / imbalance_threshold, 0.0, 1.8)
+    sell_imbalance_strength = clamp(max(0.0, -imbalance) / imbalance_threshold, 0.0, 1.8)
+
+    buy_edge = (
+        (spread_quality * 0.85)
+        + (volume_quality * 0.55)
+        + (buy_momentum_strength * 1.0)
+        + (buy_imbalance_strength * 0.95)
+    )
+    sell_edge = (
+        (spread_quality * 0.85)
+        + (volume_quality * 0.55)
+        + (sell_momentum_strength * 1.0)
+        + (sell_imbalance_strength * 0.95)
+    )
+
+    has_structural_support = spread_quality >= 0.55 and volume_quality >= 0.6
+    buy_trigger_ready = buy_momentum_strength >= 0.7 or buy_imbalance_strength >= 0.95
+    sell_trigger_ready = sell_momentum_strength >= 0.7 or sell_imbalance_strength >= 0.95
+
+    if has_structural_support and buy_trigger_ready and buy_edge >= 2.25 and buy_edge >= sell_edge + 0.18:
+        confidence = 34 + (buy_edge * 8.5) + (buy_momentum_strength * 2.5) + (buy_imbalance_strength * 2.0)
+        return create_insight("scalper", "buy", confidence, "Microstructure favored a quick long entry with acceptable spread and supportive flow", {
             "price": price,
             "spreadPercent": spread_percent,
             "microMomentumPercent": micro_momentum_percent,
             "orderImbalance": imbalance,
             "volume24h": volume_24h,
+            "spreadQuality": spread_quality,
+            "volumeQuality": volume_quality,
+            "buyEdge": buy_edge,
         })
 
-    if spread_percent <= max_spread_percent and volume_24h >= min_volume and micro_momentum_percent < -micro_momentum_threshold and imbalance < -order_imbalance_threshold:
-        confidence = 62 + ((abs(micro_momentum_percent) - micro_momentum_threshold) * 90) + (abs(imbalance) * 24)
-        return create_insight("scalper", "sell", confidence, "Tight spread, negative micro momentum and ask-side imbalance", {
+    if has_structural_support and sell_trigger_ready and sell_edge >= 2.25 and sell_edge >= buy_edge + 0.18:
+        confidence = 34 + (sell_edge * 8.5) + (sell_momentum_strength * 2.5) + (sell_imbalance_strength * 2.0)
+        return create_insight("scalper", "sell", confidence, "Microstructure favored a quick short exit with acceptable spread and ask-side pressure", {
             "price": price,
             "spreadPercent": spread_percent,
             "microMomentumPercent": micro_momentum_percent,
             "orderImbalance": imbalance,
             "volume24h": volume_24h,
+            "spreadQuality": spread_quality,
+            "volumeQuality": volume_quality,
+            "sellEdge": sell_edge,
         })
 
     return create_insight("scalper", "hold", 41, "Scalping conditions remain incomplete for a clean micro move", {
@@ -902,6 +937,10 @@ def analyze_scalper(snapshot: Dict[str, Any], params: Dict[str, Any]) -> Dict[st
         "microMomentumPercent": micro_momentum_percent,
         "orderImbalance": imbalance,
         "volume24h": volume_24h,
+        "spreadQuality": spread_quality,
+        "volumeQuality": volume_quality,
+        "buyEdge": buy_edge,
+        "sellEdge": sell_edge,
     })
 
 
@@ -1125,6 +1164,31 @@ def build_runtime_summary(opportunities: Sequence[Dict[str, Any]]) -> Dict[str, 
     }
 
 
+def sort_runtime_opportunities(opportunities: List[Dict[str, Any]]) -> None:
+    opportunities.sort(
+        key=lambda item: (
+            1 if str(item.get("action") or "hold").strip().lower() == "hold" else 0,
+            -to_float(item.get("confidence")),
+            str(item.get("pair") or ""),
+        ),
+    )
+
+
+def select_best_opportunity(
+    opportunities: Sequence[Dict[str, Any]],
+    minimum_confidence: float = 55,
+) -> Optional[Dict[str, Any]]:
+    threshold = to_float(minimum_confidence, 55.0)
+    return next(
+        (
+            entry for entry in opportunities
+            if str(entry.get("action") or "hold").strip().lower() != "hold"
+            and to_float(entry.get("confidence")) >= threshold
+        ),
+        None,
+    )
+
+
 def build_heuristic_analysis(
     bot: Dict[str, Any],
     market_snapshots: Sequence[Dict[str, Any]],
@@ -1158,14 +1222,8 @@ def build_heuristic_analysis(
             "specialists": specialist_results,
         })
 
-    opportunities.sort(key=lambda item: (-to_float(item.get("confidence")), str(item.get("pair") or "")))
-    best_opportunity = next(
-        (
-            entry for entry in opportunities
-            if entry.get("action") != "hold" and to_float(entry.get("confidence")) >= 55
-        ),
-        None,
-    )
+    sort_runtime_opportunities(opportunities)
+    best_opportunity = select_best_opportunity(opportunities)
     return {
         "primarySpecialist": primary_specialist,
         "opportunities": opportunities,
@@ -1223,19 +1281,128 @@ def run_model_analysis(
             }],
         })
 
-    opportunities.sort(key=lambda item: (-to_float(item.get("confidence")), str(item.get("pair") or "")))
-    best_opportunity = next(
-        (
-            entry for entry in opportunities
-            if entry.get("action") != "hold" and to_float(entry.get("confidence")) >= 55
-        ),
-        None,
-    )
+    sort_runtime_opportunities(opportunities)
+    best_opportunity = select_best_opportunity(opportunities)
     return {
         "primarySpecialist": str(prediction.get("primarySpecialist") or "python_model"),
         "opportunities": opportunities,
         "bestOpportunity": best_opportunity,
         "summary": build_runtime_summary(opportunities),
+    }
+
+
+def merge_scalper_runtime_analyses(
+    model_analysis: Optional[Dict[str, Any]],
+    heuristic_analysis: Dict[str, Any],
+) -> Dict[str, Any]:
+    if model_analysis is None:
+        return heuristic_analysis
+
+    model_map = {
+        str(entry.get("pair") or "").strip().upper(): entry
+        for entry in (model_analysis.get("opportunities") or [])
+        if str(entry.get("pair") or "").strip()
+    }
+    heuristic_map = {
+        str(entry.get("pair") or "").strip().upper(): entry
+        for entry in (heuristic_analysis.get("opportunities") or [])
+        if str(entry.get("pair") or "").strip()
+    }
+    ordered_pairs = list(dict.fromkeys([
+        *model_map.keys(),
+        *heuristic_map.keys(),
+    ]))
+
+    merged_opportunities: List[Dict[str, Any]] = []
+    for pair in ordered_pairs:
+        model_signal = model_map.get(pair) or {}
+        heuristic_signal = heuristic_map.get(pair) or {}
+        model_action = str(model_signal.get("action") or "hold").strip().lower()
+        heuristic_action = str(heuristic_signal.get("action") or "hold").strip().lower()
+        model_confidence = normalize_confidence(to_float(model_signal.get("confidence")))
+        heuristic_confidence = normalize_confidence(to_float(heuristic_signal.get("confidence")))
+        specialists = list(model_signal.get("specialists") or []) + list(heuristic_signal.get("specialists") or [])
+        price = to_float(model_signal.get("price")) or to_float(heuristic_signal.get("price"))
+
+        if model_action == heuristic_action and model_action != "hold":
+            merged_opportunities.append({
+                "pair": pair,
+                "action": model_action,
+                "confidence": normalize_confidence((model_confidence * 0.55) + (heuristic_confidence * 0.45) + 4.0),
+                "price": round(price, 8),
+                "reason": "Modelo treinado e heurística de microestrutura concordaram nesta entrada",
+                "specialists": specialists,
+            })
+            continue
+
+        if model_action == "hold" and heuristic_action != "hold":
+            action = heuristic_action if heuristic_confidence >= max(56, model_confidence - 4) else "hold"
+            confidence = heuristic_confidence if action != "hold" else max(model_confidence, heuristic_confidence, 44)
+            reason = (
+                "Heurística de microestrutura encontrou oportunidade acionável apesar do modelo neutro"
+                if action != "hold"
+                else "Modelo permaneceu neutro e a heurística não abriu margem suficiente para assumir a entrada"
+            )
+            merged_opportunities.append({
+                "pair": pair,
+                "action": action,
+                "confidence": confidence,
+                "price": round(price, 8),
+                "reason": reason,
+                "specialists": specialists,
+            })
+            continue
+
+        if heuristic_action == "hold" and model_action != "hold":
+            action = model_action if model_confidence >= max(60, heuristic_confidence + 8) else "hold"
+            confidence = normalize_confidence((model_confidence * 0.82) + (heuristic_confidence * 0.18) - 2.0) if action != "hold" else max(model_confidence, heuristic_confidence, 44)
+            reason = (
+                "Modelo treinado encontrou oportunidade sem confirmação completa da microestrutura"
+                if action != "hold"
+                else "Modelo sugeriu entrada, mas a microestrutura ficou fraca demais para sustentar o scalping"
+            )
+            merged_opportunities.append({
+                "pair": pair,
+                "action": action,
+                "confidence": confidence,
+                "price": round(price, 8),
+                "reason": reason,
+                "specialists": specialists,
+            })
+            continue
+
+        confidence_gap = abs(model_confidence - heuristic_confidence)
+        if confidence_gap <= 8:
+            merged_opportunities.append({
+                "pair": pair,
+                "action": "hold",
+                "confidence": max(model_confidence, heuristic_confidence, 46),
+                "price": round(price, 8),
+                "reason": "Modelo e microestrutura divergiram na direção do trade, então o scalper ficou de fora",
+                "specialists": specialists,
+            })
+            continue
+
+        heuristic_wins = heuristic_confidence > model_confidence
+        winner_signal = heuristic_signal if heuristic_wins else model_signal
+        winner_action = heuristic_action if heuristic_wins else model_action
+        winner_confidence = heuristic_confidence if heuristic_wins else model_confidence
+        source_label = "Heurística de microestrutura" if heuristic_wins else "Modelo treinado"
+        merged_opportunities.append({
+            "pair": pair,
+            "action": winner_action,
+            "confidence": normalize_confidence(max(52.0, winner_confidence - 6.0)),
+            "price": round(price, 8),
+            "reason": f"{source_label} prevaleceu mesmo com divergência de direção no outro sinal",
+            "specialists": specialists,
+        })
+
+    sort_runtime_opportunities(merged_opportunities)
+    return {
+        "primarySpecialist": "scalper_hybrid",
+        "opportunities": merged_opportunities,
+        "bestOpportunity": select_best_opportunity(merged_opportunities, 52),
+        "summary": build_runtime_summary(merged_opportunities),
     }
 
 
@@ -1384,6 +1551,7 @@ def normalize_analysis_context(payload: Dict[str, Any]) -> Tuple[Dict[str, Any],
 
 def collect_analysis_context(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any], List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, Any], str]:
     backend, bot, pair_limit, include_social_overlay, timeframe = normalize_analysis_context(payload)
+    primary_specialist = resolve_primary_specialist(bot)
 
     try:
         social_signals = fetch_social_signals(backend)
@@ -1415,9 +1583,12 @@ def collect_analysis_context(payload: Dict[str, Any]) -> Tuple[Dict[str, Any], D
 
     market_snapshots.sort(key=lambda entry: candidate_pairs.index(str(entry.get("pair"))))
 
-    runtime_analysis = run_model_analysis(bot, market_snapshots)
-    if runtime_analysis is None:
-        runtime_analysis = build_heuristic_analysis(bot, market_snapshots, include_social_overlay)
+    heuristic_analysis = build_heuristic_analysis(bot, market_snapshots, include_social_overlay)
+    model_analysis = run_model_analysis(bot, market_snapshots)
+    if primary_specialist == "scalper":
+        runtime_analysis = merge_scalper_runtime_analyses(model_analysis, heuristic_analysis)
+    else:
+        runtime_analysis = model_analysis if model_analysis is not None else heuristic_analysis
 
     analysis = {
         "timeframe": timeframe,
@@ -1628,6 +1799,23 @@ def build_cycle_candidates(
         push(opportunity, False, "analysis")
 
     return candidates
+
+
+def prioritize_candidates_for_portfolio(
+    candidates: Sequence[Tuple[Dict[str, Any], bool, str]],
+    open_positions: Sequence[Dict[str, Any]],
+) -> List[Tuple[Dict[str, Any], bool, str]]:
+    if open_positions:
+        return list(candidates)
+
+    def candidate_sort_key(entry: Tuple[Dict[str, Any], bool, str]) -> Tuple[int, float]:
+        opportunity = entry[0] or {}
+        action = str(opportunity.get("action") or "hold").strip().lower()
+        confidence = to_float(opportunity.get("confidence"))
+        action_priority = 0 if action == "buy" else 1
+        return (action_priority, -confidence)
+
+    return sorted(candidates, key=candidate_sort_key)
 
 
 def build_plan_entry(
@@ -2038,7 +2226,10 @@ def run_cycle(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     open_positions = resolve_open_positions(cycle)
     risk_override = select_risk_override(open_positions, cycle.get("riskConfig") or {})
-    candidate_opportunities = build_cycle_candidates(analysis, risk_override)
+    candidate_opportunities = prioritize_candidates_for_portfolio(
+        build_cycle_candidates(analysis, risk_override),
+        open_positions,
+    )
 
     skip_reason = evaluate_circuit_breaker(cycle)
     if skip_reason:

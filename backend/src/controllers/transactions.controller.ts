@@ -203,7 +203,7 @@ async function calculateSellProfitUsingFifo(
   sellQuantity: number,
   sellPrice: number,
   sellFee: number,
-): Promise<{ profitBrl: number; profitPercent: number }> {
+): Promise<{ profitBrl: number | null; profitPercent: number }> {
   const historicalTransactions = await prisma.transaction.findMany({
     where: {
       userId,
@@ -263,13 +263,31 @@ async function calculateSellProfitUsingFifo(
   }
 
   const { quoteCurrency } = getPairCurrencies(pair)
-  const quoteToBrlRate = await getCurrencyRateToBrl(quoteCurrency)
   const netSellValueInQuote = (sellQuantity * sellPrice) - sellFee
   const profitInQuote = netSellValueInQuote - costBasisInQuote
+  const profitPercent = costBasisInQuote > 0 ? (profitInQuote / costBasisInQuote) * 100 : 0
+
+  let profitBrl: number | null = null
+
+  try {
+    const quoteToBrlRate = await getCurrencyRateToBrl(quoteCurrency)
+    profitBrl = profitInQuote * quoteToBrlRate
+  } catch (error) {
+    logger.warn('[transactions] Falha ao converter lucro FIFO para BRL; a ordem seguira com percentual apenas', {
+      module: 'transactions',
+      event: 'sell_profit_brl_unavailable',
+      userId,
+      pair,
+      quoteCurrency,
+      profitInQuote,
+      error,
+      skipPersistence: true,
+    })
+  }
 
   return {
-    profitBrl: profitInQuote * quoteToBrlRate,
-    profitPercent: costBasisInQuote > 0 ? (profitInQuote / costBasisInQuote) * 100 : 0,
+    profitBrl,
+    profitPercent,
   }
 }
 

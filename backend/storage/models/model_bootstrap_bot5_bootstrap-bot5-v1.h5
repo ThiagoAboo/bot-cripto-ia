@@ -1,10 +1,10 @@
 {
   "artifactType": "bot-crypto-ia-training-model",
   "formatVersion": 4,
-  "fingerprint": "8aa8b5903fdc237523bcaa7c7db8ba9b1c16100a50c24c0098f66f22442f1561",
-  "savedAt": "2026-04-27T16:30:23.429Z",
+  "fingerprint": "1ded3388878941af4bc34bf21227a5fe721327b5e7a8d6a83bb453d79104bcb9",
+  "savedAt": "2026-04-29T14:29:06.329Z",
   "sessionId": "bootstrap-bot5-session",
-  "userId": "cmohey8lh0000mpybf0fky7kq",
+  "userId": "cmok5hysb0000ve7t7pkcwfcf",
   "botId": "bot5",
   "modelVersion": "bootstrap-bot5-v1",
   "summary": {

@@ -1,8 +1,8 @@
-import { Card, CardContent, CardHeader, CardTitle } from '../../../shared/components/ui/Card'
-import { Input } from '../../../shared/components/ui/Input'
-import { Label } from '../../../shared/components/ui/Label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../shared/components/ui/Select'
 import { Shield, TrendingDown, TrendingUp, Gauge, DollarSign } from 'lucide-react'
+import { Card, CardContent, CardHeader, CardTitle } from '../../../shared/components/ui/Card'
+import { FieldLabel } from '../../../shared/components/ui/FieldLabel'
+import { Input } from '../../../shared/components/ui/Input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../shared/components/ui/Select'
 import type { RiskManagement } from '../types/configurations.types'
 
 interface RiskManagementCardProps {
@@ -30,14 +30,22 @@ export function RiskManagementCard({ data, onChange }: RiskManagementCardProps) 
           Gerenciamento de Risco
         </CardTitle>
       </CardHeader>
-      
+
       <CardContent className="space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="stopLoss" className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
               <TrendingDown className="w-4 h-4 text-error" />
-              Stop-loss (%)
-            </Label>
+              <FieldLabel
+                htmlFor="stopLoss"
+                label="Stop-loss (%)"
+                help={{
+                  title: 'Stop-loss (%)',
+                  description: 'Perda máxima a partir do preço de entrada antes do encerramento automático da posição.',
+                  example: '2% significa que uma entrada em 100 pode ser fechada perto de 98.',
+                }}
+              />
+            </div>
             <Input
               id="stopLoss"
               type="number"
@@ -47,16 +55,21 @@ export function RiskManagementCard({ data, onChange }: RiskManagementCardProps) 
               value={data.stopLossPercent}
               onChange={(e) => handleChange('stopLossPercent', parseFloat(e.target.value))}
             />
-            <p className="text-xs text-gray-500">
-              Percentual de perda máxima a partir do preço de entrada
-            </p>
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="takeProfit" className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
               <TrendingUp className="w-4 h-4 text-success" />
-              Take-profit (%)
-            </Label>
+              <FieldLabel
+                htmlFor="takeProfit"
+                label="Take-profit (%)"
+                help={{
+                  title: 'Take-profit (%)',
+                  description: 'Alvo principal de saída com lucro. Precisa fazer sentido para o regime da estratégia.',
+                  example: '0,8% é mais realista para micro trade do que 10% em ciclos curtos.',
+                }}
+              />
+            </div>
             <Input
               id="takeProfit"
               type="number"
@@ -66,18 +79,23 @@ export function RiskManagementCard({ data, onChange }: RiskManagementCardProps) 
               value={data.takeProfitPercent}
               onChange={(e) => handleChange('takeProfitPercent', parseFloat(e.target.value))}
             />
-            <p className="text-xs text-gray-500">
-              Percentual de lucro alvo. Encerra quando identificada queda prevista
-            </p>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <div className="space-y-2">
-            <Label htmlFor="leverage" className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
               <Gauge className="w-4 h-4 text-warning" />
-              Alavancagem
-            </Label>
+              <FieldLabel
+                htmlFor="leverage"
+                label="Alavancagem"
+                help={{
+                  title: 'Alavancagem',
+                  description: 'Está travada porque o runtime atual só opera no mercado spot.',
+                  example: 'Enquanto não houver suporte real a futuros ou margem, ela permanece em 1x.',
+                }}
+              />
+            </div>
             <Input
               id="leverage"
               type="number"
@@ -88,16 +106,21 @@ export function RiskManagementCard({ data, onChange }: RiskManagementCardProps) 
               readOnly
               disabled
             />
-            <p className="text-xs text-gray-500">
-              O runtime atual executa apenas operações spot. Por isso a alavancagem fica travada em 1x até existir suporte real para outro mercado.
-            </p>
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="maxTrade" className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
               <DollarSign className="w-4 h-4 text-primary-500" />
-              Quantidade máxima por trade
-            </Label>
+              <FieldLabel
+                htmlFor="maxTrade"
+                label="Máx. por trade"
+                help={{
+                  title: 'Quantidade máxima por trade',
+                  description: 'Teto absoluto de capital por operação. O bot não passa desse valor, mesmo com saldo e sinal forte.',
+                  example: '150 USDT por trade mantém o paper mais controlado do que expor 500 USDT em cada tentativa.',
+                }}
+              />
+            </div>
             <div className="flex gap-2">
               <Input
                 id="maxTrade"
@@ -118,9 +141,6 @@ export function RiskManagementCard({ data, onChange }: RiskManagementCardProps) 
                 </SelectContent>
               </Select>
             </div>
-            <p className="text-xs text-gray-500">
-              Montante máximo por operação
-            </p>
           </div>
         </div>
       </CardContent>

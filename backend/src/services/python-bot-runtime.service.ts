@@ -81,7 +81,7 @@ export interface PythonBotCyclePlanItem {
   action?: BotRuntimeAction
   confidence?: number
   decisionPrice?: number
-  quantity?: number
+  quantity?: number | null
   isRiskOverride?: boolean
   rank?: number
   source?: 'analysis' | 'risk_override'
@@ -92,7 +92,7 @@ export interface PythonBotCyclePlanItem {
     slippagePercent: number
     simulatedLatencyMs: number
     simulatedFillPercent: number
-  }
+  } | null
 }
 
 function resolvePythonExecutable(): string {

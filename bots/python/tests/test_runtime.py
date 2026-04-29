@@ -66,6 +66,96 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual("skipped", limited[3]["status"])
         self.assertEqual("Limite de 2 oportunidades por ciclo atingido", limited[3]["reason"])
 
+    def test_prioritize_candidates_for_portfolio_prefers_buy_candidates_when_flat(self) -> None:
+        candidates = [
+            ({"pair": "BTC/USDT", "action": "sell", "confidence": 82}, False, "analysis"),
+            ({"pair": "ETH/USDT", "action": "buy", "confidence": 61}, False, "analysis"),
+            ({"pair": "SOL/USDT", "action": "buy", "confidence": 74}, False, "analysis"),
+        ]
+
+        ordered = runtime.prioritize_candidates_for_portfolio(candidates, open_positions=[])
+
+        self.assertEqual("SOL/USDT", ordered[0][0]["pair"])
+        self.assertEqual("ETH/USDT", ordered[1][0]["pair"])
+        self.assertEqual("BTC/USDT", ordered[2][0]["pair"])
+
+    def test_analyze_scalper_accepts_supportive_microstructure_without_requiring_perfection(self) -> None:
+        snapshot = {
+            "currentPrice": 101.25,
+            "volume24h": 150000.0,
+            "candlesByPeriod": {
+                "1m": make_candles([100.0, 100.2, 100.35, 100.55, 100.8, 101.25]),
+            },
+            "orderbook": {
+                "bids": [(101.23, 9.0), (101.22, 7.0), (101.2, 4.0)],
+                "asks": [(101.27, 5.0), (101.29, 4.0), (101.3, 3.0)],
+            },
+        }
+
+        insight = runtime.analyze_scalper(snapshot, {
+            "minVolume": 120000,
+            "maxSpreadPercent": 0.08,
+            "microMomentumThresholdPercent": 0.03,
+            "orderImbalanceThreshold": 0.54,
+        })
+
+        self.assertEqual("buy", insight["action"])
+        self.assertGreaterEqual(insight["confidence"], 55)
+
+    def test_merge_scalper_runtime_analyses_promotes_heuristic_signal_when_model_is_neutral(self) -> None:
+        model_analysis = {
+            "primarySpecialist": "python_model",
+            "opportunities": [{
+                "pair": "BTC/USDT",
+                "action": "hold",
+                "confidence": 61,
+                "price": 100.0,
+                "reason": "Model stayed neutral",
+                "specialists": [],
+            }],
+            "bestOpportunity": None,
+            "summary": {
+                "analyzedPairs": 1,
+                "actionablePairs": 0,
+                "buySignals": 0,
+                "sellSignals": 0,
+                "holdSignals": 1,
+            },
+        }
+        heuristic_analysis = {
+            "primarySpecialist": "scalper",
+            "opportunities": [{
+                "pair": "BTC/USDT",
+                "action": "buy",
+                "confidence": 63,
+                "price": 100.0,
+                "reason": "Bid pressure supported a quick scalp",
+                "specialists": [],
+            }],
+            "bestOpportunity": {
+                "pair": "BTC/USDT",
+                "action": "buy",
+                "confidence": 63,
+                "price": 100.0,
+                "reason": "Bid pressure supported a quick scalp",
+                "specialists": [],
+            },
+            "summary": {
+                "analyzedPairs": 1,
+                "actionablePairs": 1,
+                "buySignals": 1,
+                "sellSignals": 0,
+                "holdSignals": 0,
+            },
+        }
+
+        merged = runtime.merge_scalper_runtime_analyses(model_analysis, heuristic_analysis)
+
+        self.assertEqual("scalper_hybrid", merged["primarySpecialist"])
+        self.assertIsNotNone(merged["bestOpportunity"])
+        self.assertEqual("buy", merged["bestOpportunity"]["action"])
+        self.assertGreaterEqual(merged["bestOpportunity"]["confidence"], 56)
+
     def test_build_trade_plan_creates_buy_quantity_for_paper_mode(self) -> None:
         cycle = {
             "executionMode": "paper",

@@ -82,11 +82,11 @@ const runtimePlanSchema = z.object({
   action: botRuntimeActionSchema.optional(),
   confidence: z.number().optional(),
   decisionPrice: z.number().optional(),
-  quantity: z.number().optional(),
+  quantity: z.number().nullable().optional(),
   isRiskOverride: z.boolean().optional(),
   rank: z.number().int().optional(),
   source: z.enum(['analysis', 'risk_override']).optional(),
-  paperSimulation: runtimePaperSimulationSchema.optional(),
+  paperSimulation: runtimePaperSimulationSchema.nullable().optional(),
 })
 
 const runtimeCycleResultSchema = z.object({

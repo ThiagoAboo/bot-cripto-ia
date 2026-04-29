@@ -2,6 +2,7 @@ import type { TraceAnalysisExportPack } from '../../logs/types/logs.types'
 
 export type BotExecutionMode = 'paper' | 'semi_auto' | 'full_auto'
 export type BotOperationalStatus = 'online' | 'offline'
+export type StrategyProfile = 'aggressive' | 'balanced' | 'conservative'
 
 export interface BotListItem {
   id: string

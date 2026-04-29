@@ -62,9 +62,11 @@ const {
     specialization: 'micro_scalping',
     description: 'Preset de micro trades',
     defaultParameters: {
+      strategyProfile: 'balanced',
+      useAdvancedSettings: false,
       timeframe: '1m',
-      allowedPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
-      maxPairsToAnalyze: 3,
+      minConfidence: 58,
+      maxPairsToAnalyze: 6,
       maxExecutableOpportunitiesPerCycle: 1,
     },
     source: 'template',
@@ -728,12 +730,16 @@ describe('BotsPage', () => {
         description: 'Preset de micro trades',
         executionMode: 'paper',
         status: 'offline',
-        parameters: {
-          useGlobalAllowedPairs: false,
-          allowedPairs: ['BTC/USDT', 'ETH/USDT', 'SOL/USDT'],
-          maxPairsToAnalyze: 3,
+        parameters: expect.objectContaining({
+          timeframe: '1m',
+          strategyProfile: 'balanced',
+          useAdvancedSettings: false,
+          useGlobalAllowedPairs: true,
+          allowedPairs: [],
+          minConfidence: 58,
+          maxPairsToAnalyze: 6,
           maxExecutableOpportunitiesPerCycle: 1,
-        },
+        }),
       })
     })
   })

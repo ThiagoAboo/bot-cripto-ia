@@ -421,7 +421,11 @@ export async function startServer(port: number = PORT): Promise<typeof httpServe
           ? address.port
           : port
 
-      setInternalApiBaseUrl(`http://127.0.0.1:${resolvedPort}`)
+      const configuredInternalApiBaseUrl = process.env.INTERNAL_API_BASE_URL
+        || process.env.BOT_RUNTIME_BACKEND_BASE_URL
+        || `http://127.0.0.1:${resolvedPort}`
+
+      setInternalApiBaseUrl(configuredInternalApiBaseUrl)
       void syncBotTemplateCatalog().catch((error) => {
         logger.warn('[app] Falha ao sincronizar catalogo de templates de bots na inicializacao', {
           module: 'app',

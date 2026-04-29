@@ -1,5 +1,5 @@
 import { prisma } from '../config/database'
-import { analyzeBotInstance, type BotAnalysisResponse } from './bot-analysis.service'
+import { analyzeBotInstance, type BotAnalysisResponse, type RuntimeOpportunity } from './bot-analysis.service'
 import {
   executeOrderForUser,
   getAssetPriceInQuote,
@@ -26,7 +26,7 @@ import {
   autoPromoteRecommendedBotModel,
   resolveBotFullAutoEligibility,
 } from './bot-governance-policy.service'
-import { buildStrategyId } from './bot-registry.service'
+import { buildStrategyId, ensureAdaptiveOrchestratorBot } from './bot-registry.service'
 import { signUserAccessToken } from './auth-token.service'
 import { getInternalApiBaseUrl } from './internal-api-base-url.service'
 import { getCurrencyRateToBrl } from './market-valuation.service'
@@ -42,8 +42,9 @@ import {
   type PythonBotRuntimeResult,
 } from './python-bot-runtime.service'
 import { emitDashboardUpdate } from './socket.service'
+import type { SocialSignal } from './pair-discovery.service'
 import { logger } from '../utils/logger'
-import { endTrace, startTrace, trace } from '../utils/tracer'
+import { endTrace, parseTraceSnapshot, startTrace, trace } from '../utils/tracer'
 
 type BotExecutionMode = 'paper' | 'semi_auto' | 'full_auto'
 
@@ -147,6 +148,66 @@ interface PortfolioExposureSnapshot {
   pairExposureBrl: Map<string, number>
 }
 
+type BotRole = 'standard' | 'specialist' | 'orchestrator'
+
+interface AdaptiveSpecialistProfile {
+  botId: string
+  botName: string
+  strategyType: string
+  specialization?: string
+  overallWeight: number
+  evaluatedCount: number
+  accuracyPercent: number
+  averageStrategyReturnPercent: number
+  averageEdgePercent: number
+  actionWeights: Record<'buy' | 'sell' | 'hold', number>
+}
+
+interface AdaptiveSpecialistVote {
+  specialistBotId: string
+  specialistName: string
+  strategyType: string
+  specialization?: string
+  pair: string
+  action: 'buy' | 'sell' | 'hold'
+  confidence: number
+  price: number
+  reason: string
+  indicators: Record<string, number | null>
+  learnedWeight: number
+  weightedConfidence: number
+}
+
+interface AdaptiveActionPrior {
+  source: 'pair' | 'indecision' | 'global' | 'none'
+  sampleCount: number
+  weightedScore: number
+  accuracyPercent: number
+  averageStrategyReturnPercent: number
+}
+
+interface AdaptiveOpportunityCandidate {
+  pair: string
+  action: 'buy' | 'sell' | 'hold'
+  confidence: number
+  price: number
+  supportScore: number
+  agreementRatio: number
+  indecisionScore: number
+  expectedScore: number
+  prior: AdaptiveActionPrior
+  votes: AdaptiveSpecialistVote[]
+  reason: string
+}
+
+interface AdaptiveOrchestratorMemory {
+  pairActionPrior: Map<string, AdaptiveActionPrior>
+  globalActionPrior: Map<'buy' | 'sell' | 'hold', AdaptiveActionPrior>
+  indecisionActionPrior: Map<string, AdaptiveActionPrior>
+}
+
+type StrategyProfile = 'aggressive' | 'balanced' | 'conservative'
+
 const BOT_WORKER_POLL_MS = Math.max(1000, Number(process.env.BOT_WORKER_POLL_MS || 15000))
 const BOT_TRADE_COOLDOWN_MS = Math.max(1000, Number(process.env.BOT_TRADE_COOLDOWN_MS || 300000))
 const DEFAULT_MIN_CONFIDENCE = Number(process.env.BOT_MIN_CONFIDENCE || 68)
@@ -155,6 +216,10 @@ const DEFAULT_TARGET_ATR_PERCENT = 0.025
 const DEFAULT_MIN_ATR_POSITION_FACTOR = 0.35
 const DEFAULT_CORRELATION_THRESHOLD = 0.85
 const DEFAULT_CORRELATION_LOOKBACK_CANDLES = 48
+const AGGRESSIVE_SCALPER_TRADE_COOLDOWN_MS = 45000
+const AGGRESSIVE_DEFAULT_TRADE_COOLDOWN_MS = 90000
+const BALANCED_SCALPER_TRADE_COOLDOWN_MS = 120000
+const BALANCED_DEFAULT_TRADE_COOLDOWN_MS = 180000
 const QUANTITY_EPSILON = 1e-8
 const DEFAULT_PAPER_SLIPPAGE_PERCENT = Math.max(0, Number(process.env.BOT_PAPER_SLIPPAGE_PERCENT || 0.12))
 const DEFAULT_PAPER_LATENCY_MS = Math.max(0, Number(process.env.BOT_PAPER_LATENCY_MS || 350))
@@ -438,6 +503,210 @@ function resolveRiskConfig(parameters: Record<string, unknown>, configuration?: 
       12,
       Math.round(safeNumber(parameters.correlationLookbackCandles, DEFAULT_CORRELATION_LOOKBACK_CANDLES)),
     ),
+  }
+}
+
+function resolveTradeCooldownMs(
+  parameters: Record<string, unknown>,
+  strategyType?: string | null,
+): number {
+  const explicitCooldown = safeNumber(parameters.tradeCooldownMs, NaN)
+  if (Number.isFinite(explicitCooldown) && explicitCooldown > 0) {
+    return Math.max(1000, Math.round(explicitCooldown))
+  }
+
+  const profile = typeof parameters.strategyProfile === 'string'
+    ? parameters.strategyProfile.toLowerCase()
+    : null
+  const isScalper = typeof strategyType === 'string'
+    && strategyType.toLowerCase().includes('scalp')
+
+  if (profile === 'aggressive') {
+    return Math.min(
+      BOT_TRADE_COOLDOWN_MS,
+      isScalper ? AGGRESSIVE_SCALPER_TRADE_COOLDOWN_MS : AGGRESSIVE_DEFAULT_TRADE_COOLDOWN_MS,
+    )
+  }
+
+  if (profile === 'balanced') {
+    return Math.min(
+      BOT_TRADE_COOLDOWN_MS,
+      isScalper ? BALANCED_SCALPER_TRADE_COOLDOWN_MS : BALANCED_DEFAULT_TRADE_COOLDOWN_MS,
+    )
+  }
+
+  return BOT_TRADE_COOLDOWN_MS
+}
+
+function resolveBotRole(parameters: Record<string, unknown>): BotRole {
+  const role = typeof parameters.botRole === 'string'
+    ? parameters.botRole.trim().toLowerCase()
+    : ''
+
+  if (role === 'specialist') {
+    return 'specialist'
+  }
+
+  if (role === 'orchestrator') {
+    return 'orchestrator'
+  }
+
+  return 'standard'
+}
+
+function isAnalysisOnlyBot(parameters: Record<string, unknown>): boolean {
+  return parameters.analysisOnly === true && resolveBotRole(parameters) === 'specialist'
+}
+
+function mergeBotParameters(bot: {
+  parameters: string
+  template?: { defaultParameters?: string | null } | null
+}): Record<string, unknown> {
+  const templateParameters = safeJsonParse<Record<string, unknown>>(bot.template?.defaultParameters, {})
+  const instanceParameters = safeJsonParse<Record<string, unknown>>(bot.parameters, {})
+
+  return {
+    ...templateParameters,
+    ...instanceParameters,
+  }
+}
+
+async function resolveBotOperationalReadinessForCycle(bot: {
+  modelUrl?: string | null
+  modelVersion?: string | null
+  strategyType?: string | null
+  template?: {
+    defaultParameters?: string | null
+    strategyType?: string | null
+  } | null
+  parameters: string
+}): Promise<Awaited<ReturnType<typeof resolveBotOperationalReadiness>>> {
+  const parameters = mergeBotParameters(bot)
+  const botRole = resolveBotRole(parameters)
+  if (botRole !== 'orchestrator') {
+    return resolveBotOperationalReadiness(bot.modelUrl)
+  }
+
+  return {
+    hasModel: true,
+    modelReady: true,
+    modelVersion: typeof bot.modelVersion === 'string' && bot.modelVersion.trim().length > 0
+      ? bot.modelVersion
+      : 'adaptive-orchestrator-v1',
+    modelUrl: bot.modelUrl ?? undefined,
+    modelArchitecture: 'adaptive_meta_policy',
+    validationStrategy: 'online_learning',
+    forecastHorizonCandles: 5,
+    buyThresholdPercent: 0.3,
+    sellThresholdPercent: -0.3,
+    hasEnginePackage: true,
+  }
+}
+
+async function ensureAdaptiveOrchestratorsForUsers(userIds: string[]): Promise<void> {
+  await Promise.all(
+    Array.from(new Set(userIds.filter((userId) => typeof userId === 'string' && userId.length > 0)))
+      .map(async (userId) => {
+        try {
+          await ensureAdaptiveOrchestratorBot(userId)
+        } catch (error) {
+          logger.warn('[bot] Falha ao garantir o orquestrador adaptativo do usuario antes do ciclo', {
+            module: 'bot',
+            event: 'adaptive_orchestrator_ensure_failed',
+            userId,
+            error,
+            skipPersistence: true,
+          })
+        }
+      }),
+  )
+}
+
+function resolveStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return value
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+}
+
+function clampAdaptiveWeight(value: number, fallback: number = 1): number {
+  if (!Number.isFinite(value)) {
+    return fallback
+  }
+
+  return clampNumber(value, 0.15, 2.5)
+}
+
+function buildAdaptiveWeight(params: {
+  evaluatedCount: number
+  correctCount: number
+  averageStrategyReturnPercent: number
+  averageEdgePercent: number
+}): number {
+  if (params.evaluatedCount <= 0) {
+    return 1
+  }
+
+  const successProbability = (params.correctCount + 1) / (params.evaluatedCount + 2)
+  const sampleConfidence = 1 - Math.exp(-Math.max(params.evaluatedCount, 1) / 14)
+  const strategyFactor = 1 + Math.tanh(params.averageStrategyReturnPercent / 2.4)
+  const edgeFactor = 1 + Math.tanh(params.averageEdgePercent / 2.4)
+
+  return clampAdaptiveWeight(
+    (0.55 + successProbability) * (0.55 + sampleConfidence) * strategyFactor * edgeFactor,
+    1,
+  )
+}
+
+function toIndecisionBucket(indecisionScore: number): 'low' | 'medium' | 'high' {
+  if (indecisionScore >= 0.72) {
+    return 'high'
+  }
+
+  if (indecisionScore >= 0.4) {
+    return 'medium'
+  }
+
+  return 'low'
+}
+
+function buildAdaptivePriorFromDecisions(decisions: Array<{
+  action: string
+  isCorrect: boolean | null
+  strategyReturnPercent: number | null
+}>): AdaptiveActionPrior {
+  if (decisions.length === 0) {
+    return {
+      source: 'none',
+      sampleCount: 0,
+      weightedScore: 0,
+      accuracyPercent: 0,
+      averageStrategyReturnPercent: 0,
+    }
+  }
+
+  const correctCount = decisions.filter((decision) => decision.isCorrect).length
+  const accuracyPercent = (correctCount / decisions.length) * 100
+  const averageStrategyReturnPercent = decisions.reduce(
+    (sum, decision) => sum + (decision.strategyReturnPercent ?? 0),
+    0,
+  ) / decisions.length
+
+  return {
+    source: 'global',
+    sampleCount: decisions.length,
+    weightedScore: buildAdaptiveWeight({
+      evaluatedCount: decisions.length,
+      correctCount,
+      averageStrategyReturnPercent,
+      averageEdgePercent: averageStrategyReturnPercent,
+    }),
+    accuracyPercent: Number(accuracyPercent.toFixed(2)),
+    averageStrategyReturnPercent: Number(averageStrategyReturnPercent.toFixed(4)),
   }
 }
 
@@ -913,8 +1182,14 @@ async function hasActiveTrainingSession(userId: string, botId: string): Promise<
   return Boolean(activeSession)
 }
 
-async function isInCooldown(userId: string, botId: string, pair: string, type: 'buy' | 'sell'): Promise<boolean> {
-  const threshold = new Date(Date.now() - BOT_TRADE_COOLDOWN_MS)
+async function isInCooldown(
+  userId: string,
+  botId: string,
+  pair: string,
+  type: 'buy' | 'sell',
+  cooldownMs: number = BOT_TRADE_COOLDOWN_MS,
+): Promise<boolean> {
+  const threshold = new Date(Date.now() - cooldownMs)
   const recentTransaction = await prisma.transaction.findFirst({
     where: {
       userId,
@@ -1047,6 +1322,1043 @@ async function loadBotForCycle(botId: string, userId: string) {
   })
 }
 
+async function loadAdaptiveSpecialistProfiles(params: {
+  userId: string
+  specialists: Array<Awaited<ReturnType<typeof loadBotForCycle>>>
+}): Promise<Map<string, AdaptiveSpecialistProfile>> {
+  const specialistBots = params.specialists.filter((bot): bot is NonNullable<typeof bot> => Boolean(bot))
+  const specialistIds = specialistBots.map((bot) => bot.id)
+  if (specialistIds.length === 0) {
+    return new Map()
+  }
+
+  const decisions = await prisma.botDecision.findMany({
+    where: {
+      userId: params.userId,
+      botId: { in: specialistIds },
+      evaluationStatus: 'evaluated',
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 1200,
+    select: {
+      botId: true,
+      action: true,
+      isCorrect: true,
+      strategyReturnPercent: true,
+      realizedEdgePercent: true,
+    },
+  })
+
+  const grouped = new Map<string, typeof decisions>()
+  for (const decision of decisions) {
+    const bucket = grouped.get(decision.botId) ?? []
+    if (bucket.length >= 240) {
+      continue
+    }
+    bucket.push(decision)
+    grouped.set(decision.botId, bucket)
+  }
+
+  return new Map(specialistBots.map((bot) => {
+    const specialistDecisions = grouped.get(bot.id) ?? []
+    const correctCount = specialistDecisions.filter((decision) => decision.isCorrect).length
+    const avgStrategyReturn = specialistDecisions.length > 0
+      ? specialistDecisions.reduce((sum, decision) => sum + (decision.strategyReturnPercent ?? 0), 0) / specialistDecisions.length
+      : 0
+    const avgEdge = specialistDecisions.length > 0
+      ? specialistDecisions.reduce((sum, decision) => sum + (decision.realizedEdgePercent ?? 0), 0) / specialistDecisions.length
+      : 0
+    const actionWeights = {
+      buy: 1,
+      sell: 1,
+      hold: 1,
+    } as Record<'buy' | 'sell' | 'hold', number>
+
+    for (const action of ['buy', 'sell', 'hold'] as const) {
+      const actionDecisions = specialistDecisions.filter((decision) => decision.action === action)
+      if (actionDecisions.length === 0) {
+        continue
+      }
+
+      const actionCorrect = actionDecisions.filter((decision) => decision.isCorrect).length
+      const actionAvgReturn = actionDecisions.reduce((sum, decision) => sum + (decision.strategyReturnPercent ?? 0), 0) / actionDecisions.length
+      const actionAvgEdge = actionDecisions.reduce((sum, decision) => sum + (decision.realizedEdgePercent ?? 0), 0) / actionDecisions.length
+      actionWeights[action] = buildAdaptiveWeight({
+        evaluatedCount: actionDecisions.length,
+        correctCount: actionCorrect,
+        averageStrategyReturnPercent: actionAvgReturn,
+        averageEdgePercent: actionAvgEdge,
+      })
+    }
+
+    const evaluatedCount = specialistDecisions.length
+    const overallWeight = buildAdaptiveWeight({
+      evaluatedCount,
+      correctCount,
+      averageStrategyReturnPercent: avgStrategyReturn,
+      averageEdgePercent: avgEdge,
+    })
+
+    return [bot.id, {
+      botId: bot.id,
+      botName: bot.name,
+      strategyType: bot.template?.strategyType ?? bot.strategyType,
+      specialization: bot.template?.specialization ?? undefined,
+      overallWeight,
+      evaluatedCount,
+      accuracyPercent: evaluatedCount > 0 ? Number(((correctCount / evaluatedCount) * 100).toFixed(2)) : 0,
+      averageStrategyReturnPercent: Number(avgStrategyReturn.toFixed(4)),
+      averageEdgePercent: Number(avgEdge.toFixed(4)),
+      actionWeights,
+    } satisfies AdaptiveSpecialistProfile] as const
+  }))
+}
+
+async function loadAdaptiveOrchestratorMemory(params: {
+  userId: string
+  orchestratorBotId: string
+  learningWindowSize: number
+  indecisionMemoryWindowSize: number
+}): Promise<AdaptiveOrchestratorMemory> {
+  const [decisions, policyTraces] = await Promise.all([
+    prisma.botDecision.findMany({
+      where: {
+        userId: params.userId,
+        botId: params.orchestratorBotId,
+        evaluationStatus: 'evaluated',
+      },
+      orderBy: { createdAt: 'desc' },
+      take: Math.max(30, params.learningWindowSize),
+      select: {
+        id: true,
+        pair: true,
+        action: true,
+        isCorrect: true,
+        strategyReturnPercent: true,
+      },
+    }),
+    prisma.trace.findMany({
+      where: {
+        userId: params.userId,
+        botId: params.orchestratorBotId,
+        stage: 'orchestrator_policy_snapshot',
+      },
+      orderBy: { timestamp: 'desc' },
+      take: Math.max(20, params.indecisionMemoryWindowSize),
+      select: {
+        snapshot: true,
+      },
+    }),
+  ])
+
+  const decisionById = new Map(decisions.map((decision) => [decision.id, decision]))
+  const byPairAction = new Map<string, Array<typeof decisions[number]>>()
+  const byAction = new Map<'buy' | 'sell' | 'hold', Array<typeof decisions[number]>>([
+    ['buy', []],
+    ['sell', []],
+    ['hold', []],
+  ])
+  const byIndecisionAction = new Map<string, Array<typeof decisions[number]>>()
+
+  for (const decision of decisions) {
+    const action = ['buy', 'sell', 'hold'].includes(decision.action)
+      ? decision.action as 'buy' | 'sell' | 'hold'
+      : 'hold'
+
+    const pairKey = `${decision.pair}::${action}`
+    const pairBucket = byPairAction.get(pairKey) ?? []
+    pairBucket.push(decision)
+    byPairAction.set(pairKey, pairBucket)
+
+    const actionBucket = byAction.get(action) ?? []
+    actionBucket.push(decision)
+    byAction.set(action, actionBucket)
+  }
+
+  for (const traceEntry of policyTraces) {
+    const snapshot = parseTraceSnapshot(traceEntry.snapshot) as Record<string, unknown> | undefined
+    if (!snapshot || typeof snapshot !== 'object') {
+      continue
+    }
+
+    const decisionId = typeof snapshot.decisionId === 'string' ? snapshot.decisionId : ''
+    const action = typeof snapshot.selectedAction === 'string' ? snapshot.selectedAction : ''
+    const indecisionBucket = typeof snapshot.indecisionBucket === 'string' ? snapshot.indecisionBucket : ''
+    if (!decisionId || !['buy', 'sell', 'hold'].includes(action) || !indecisionBucket) {
+      continue
+    }
+
+    const decision = decisionById.get(decisionId)
+    if (!decision) {
+      continue
+    }
+
+    const bucketKey = `${indecisionBucket}::${action}`
+    const bucket = byIndecisionAction.get(bucketKey) ?? []
+    bucket.push(decision)
+    byIndecisionAction.set(bucketKey, bucket)
+  }
+
+  const pairActionPrior = new Map<string, AdaptiveActionPrior>()
+  for (const [key, bucket] of byPairAction.entries()) {
+    pairActionPrior.set(key, {
+      ...buildAdaptivePriorFromDecisions(bucket),
+      source: 'pair',
+    })
+  }
+
+  const globalActionPrior = new Map<'buy' | 'sell' | 'hold', AdaptiveActionPrior>([
+    ['buy', { source: 'none', sampleCount: 0, weightedScore: 0, accuracyPercent: 0, averageStrategyReturnPercent: 0 }],
+    ['sell', { source: 'none', sampleCount: 0, weightedScore: 0, accuracyPercent: 0, averageStrategyReturnPercent: 0 }],
+    ['hold', { source: 'none', sampleCount: 0, weightedScore: 0, accuracyPercent: 0, averageStrategyReturnPercent: 0 }],
+  ])
+  for (const action of ['buy', 'sell', 'hold'] as const) {
+    globalActionPrior.set(action, {
+      ...buildAdaptivePriorFromDecisions(byAction.get(action) ?? []),
+      source: 'global',
+    })
+  }
+
+  const indecisionActionPrior = new Map<string, AdaptiveActionPrior>()
+  for (const [key, bucket] of byIndecisionAction.entries()) {
+    indecisionActionPrior.set(key, {
+      ...buildAdaptivePriorFromDecisions(bucket),
+      source: 'indecision',
+    })
+  }
+
+  return {
+    pairActionPrior,
+    globalActionPrior,
+    indecisionActionPrior,
+  }
+}
+
+async function persistSpecialistAnalysisDecision(params: {
+  userId: string
+  specialist: NonNullable<Awaited<ReturnType<typeof loadBotForCycle>>>
+  analysis: BotAnalysisResponse
+  generatedAt: Date
+}): Promise<void> {
+  const selectedOpportunity = params.analysis.bestOpportunity
+    ?? params.analysis.opportunities[0]
+
+  if (
+    !selectedOpportunity
+    || typeof selectedOpportunity.pair !== 'string'
+    || typeof selectedOpportunity.action !== 'string'
+    || typeof selectedOpportunity.price !== 'number'
+    || !Number.isFinite(selectedOpportunity.price)
+    || selectedOpportunity.price <= QUANTITY_EPSILON
+    || typeof selectedOpportunity.confidence !== 'number'
+    || !Number.isFinite(selectedOpportunity.confidence)
+  ) {
+    return
+  }
+
+  const modelReadiness = await resolveBotOperationalReadiness(params.specialist.modelUrl)
+  const timeframe = params.analysis.timeframe
+
+  await recordBotDecision({
+    userId: params.userId,
+    botId: params.specialist.id,
+    pair: selectedOpportunity.pair,
+    action: selectedOpportunity.action,
+    confidence: selectedOpportunity.confidence,
+    reason: `Sinal encaminhado ao orquestrador adaptativo: ${selectedOpportunity.reason}`,
+    timeframe,
+    executionMode: params.specialist.executionMode,
+    executionStatus: 'suggested',
+    decisionPrice: selectedOpportunity.price,
+    modelVersion: modelReadiness.modelVersion ?? params.specialist.modelVersion,
+    modelUrl: modelReadiness.modelUrl ?? params.specialist.modelUrl ?? undefined,
+    modelArchitecture: modelReadiness.modelArchitecture,
+    horizonCandles: modelReadiness.forecastHorizonCandles ?? 5,
+    buyThresholdPercent: modelReadiness.buyThresholdPercent ?? 0.3,
+    sellThresholdPercent: modelReadiness.sellThresholdPercent ?? -0.3,
+    createdAt: params.generatedAt,
+  }).catch((error) => {
+    logger.warn('[bot] Falha ao persistir recomendacao do especialista para aprendizado do orquestrador', {
+      module: 'bot',
+      event: 'specialist_analysis_decision_persist_failed',
+      userId: params.userId,
+      botId: params.specialist.id,
+      error,
+      skipPersistence: true,
+    })
+  })
+}
+
+function resolveAdaptivePriorForCandidate(params: {
+  memory: AdaptiveOrchestratorMemory
+  pair: string
+  action: 'buy' | 'sell' | 'hold'
+  indecisionScore: number
+}): AdaptiveActionPrior {
+  const indecisionBucket = toIndecisionBucket(params.indecisionScore)
+  const pairPrior = params.memory.pairActionPrior.get(`${params.pair}::${params.action}`)
+  if (pairPrior && pairPrior.sampleCount >= 3) {
+    return pairPrior
+  }
+
+  const indecisionPrior = params.memory.indecisionActionPrior.get(`${indecisionBucket}::${params.action}`)
+  if (indecisionPrior && indecisionPrior.sampleCount >= 3) {
+    return indecisionPrior
+  }
+
+  return params.memory.globalActionPrior.get(params.action)
+    ?? { source: 'none', sampleCount: 0, weightedScore: 0, accuracyPercent: 0, averageStrategyReturnPercent: 0 }
+}
+
+function buildAdaptiveOpportunityCandidates(params: {
+  specialists: Array<{
+    bot: NonNullable<Awaited<ReturnType<typeof loadBotForCycle>>>
+    analysis: BotAnalysisResponse
+    profile: AdaptiveSpecialistProfile
+  }>
+  memory: AdaptiveOrchestratorMemory
+}): AdaptiveOpportunityCandidate[] {
+  const votesByPair = new Map<string, AdaptiveSpecialistVote[]>()
+
+  for (const specialist of params.specialists) {
+    for (const opportunity of specialist.analysis.opportunities.slice(0, 8)) {
+      const action = opportunity.action as 'buy' | 'sell' | 'hold'
+      const actionWeight = specialist.profile.actionWeights[action] ?? 1
+      const learnedWeight = clampAdaptiveWeight(specialist.profile.overallWeight * actionWeight)
+      const weightedConfidence = learnedWeight * clampNumber(opportunity.confidence / 100, 0.05, 1.15)
+      const vote: AdaptiveSpecialistVote = {
+        specialistBotId: specialist.bot.id,
+        specialistName: specialist.bot.name,
+        strategyType: specialist.bot.template?.strategyType ?? specialist.bot.strategyType,
+        specialization: specialist.bot.template?.specialization ?? undefined,
+        pair: opportunity.pair,
+        action,
+        confidence: opportunity.confidence,
+        price: opportunity.price,
+        reason: opportunity.reason,
+        indicators: Object.fromEntries(
+          opportunity.specialists
+            .flatMap((entry) => Object.entries(entry.indicators))
+            .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
+            .slice(0, 8),
+        ),
+        learnedWeight,
+        weightedConfidence,
+      }
+
+      const bucket = votesByPair.get(opportunity.pair) ?? []
+      bucket.push(vote)
+      votesByPair.set(opportunity.pair, bucket)
+    }
+  }
+
+  const candidates: AdaptiveOpportunityCandidate[] = []
+
+  for (const [pair, votes] of votesByPair.entries()) {
+    const actionBuckets = new Map<'buy' | 'sell' | 'hold', AdaptiveSpecialistVote[]>([
+      ['buy', []],
+      ['sell', []],
+      ['hold', []],
+    ])
+
+    for (const vote of votes) {
+      const bucket = actionBuckets.get(vote.action) ?? []
+      bucket.push(vote)
+      actionBuckets.set(vote.action, bucket)
+    }
+
+    const actionScores = (['buy', 'sell', 'hold'] as const).map((action) => {
+      const actionVotes = actionBuckets.get(action) ?? []
+      const supportScore = actionVotes.reduce((sum, vote) => sum + vote.weightedConfidence, 0)
+      const weightedPrice = actionVotes.length > 0
+        ? actionVotes.reduce((sum, vote) => sum + (vote.price * vote.weightedConfidence), 0) / Math.max(supportScore, QUANTITY_EPSILON)
+        : 0
+      const weightedConfidence = actionVotes.length > 0
+        ? (actionVotes.reduce((sum, vote) => sum + (vote.confidence * vote.learnedWeight), 0) / Math.max(actionVotes.reduce((sum, vote) => sum + vote.learnedWeight, 0), QUANTITY_EPSILON))
+        : 0
+
+      return {
+        action,
+        supportScore,
+        weightedPrice,
+        weightedConfidence,
+        votes: actionVotes.sort((left, right) => right.weightedConfidence - left.weightedConfidence),
+      }
+    }).sort((left, right) => right.supportScore - left.supportScore)
+
+    const totalSupport = actionScores.reduce((sum, entry) => sum + entry.supportScore, 0)
+    const topScore = actionScores[0]
+    const secondScore = actionScores[1] ?? { supportScore: 0 }
+    if (!topScore || topScore.supportScore <= QUANTITY_EPSILON) {
+      continue
+    }
+
+    const agreementRatio = totalSupport > QUANTITY_EPSILON
+      ? topScore.supportScore / totalSupport
+      : 0
+    const scoreMarginRatio = topScore.supportScore > QUANTITY_EPSILON
+      ? (topScore.supportScore - secondScore.supportScore) / topScore.supportScore
+      : 0
+    const indecisionScore = clampNumber(1 - scoreMarginRatio, 0, 1)
+    const prior = resolveAdaptivePriorForCandidate({
+      memory: params.memory,
+      pair,
+      action: topScore.action,
+      indecisionScore,
+    })
+    const priorInfluence = 0.2 + (indecisionScore * 0.8)
+    const expectedScore = topScore.supportScore * (0.7 + (agreementRatio * 0.6))
+      + (prior.weightedScore * priorInfluence)
+
+    candidates.push({
+      pair,
+      action: topScore.action,
+      confidence: Number(topScore.weightedConfidence.toFixed(2)),
+      price: Number(topScore.weightedPrice.toFixed(8)),
+      supportScore: Number(topScore.supportScore.toFixed(4)),
+      agreementRatio: Number(agreementRatio.toFixed(4)),
+      indecisionScore: Number(indecisionScore.toFixed(4)),
+      expectedScore: Number(expectedScore.toFixed(4)),
+      prior,
+      votes: topScore.votes.slice(0, 6),
+      reason: `Meta-sinal adaptativo ${topScore.action} em ${pair} com concordancia ${(agreementRatio * 100).toFixed(1)}% e memoria ${prior.source}`,
+    })
+  }
+
+  return candidates.sort((left, right) => {
+    if (right.expectedScore !== left.expectedScore) {
+      return right.expectedScore - left.expectedScore
+    }
+
+    return right.confidence - left.confidence
+  })
+}
+
+async function loadOrchestratorSpecialists(params: {
+  userId: string
+  orchestratorBotId: string
+  parameters: Record<string, unknown>
+}): Promise<Array<NonNullable<Awaited<ReturnType<typeof loadBotForCycle>>>>> {
+  const preferredIds = new Set(resolveStringArray(params.parameters.specialistBotIds))
+  const bots = await prisma.bot.findMany({
+    where: {
+      userId: params.userId,
+      id: { not: params.orchestratorBotId },
+      status: 'online',
+      isPaused: false,
+    },
+    include: {
+      template: true,
+    },
+    orderBy: [
+      { updatedAt: 'asc' },
+      { createdAt: 'asc' },
+    ],
+  })
+
+  const filteredBots = bots.filter((bot) => {
+    const mergedParameters = mergeBotParameters(bot)
+    if (!isAnalysisOnlyBot(mergedParameters)) {
+      return false
+    }
+
+    if (preferredIds.size > 0 && !preferredIds.has(bot.id)) {
+      return false
+    }
+
+    return true
+  })
+
+  const availability = await Promise.all(filteredBots.map(async (bot) => ({
+    bot,
+    hasActiveTraining: await hasActiveTrainingSession(params.userId, bot.id),
+  })))
+
+  return availability
+    .filter((entry) => !entry.hasActiveTraining)
+    .map((entry) => entry.bot)
+}
+
+function mergeSocialSignalsFromSpecialists(analyses: BotAnalysisResponse[]) {
+  const byPair = new Map<string, SocialSignal>()
+
+  for (const analysis of analyses) {
+    for (const signal of analysis.socialSignals) {
+      const existing = byPair.get(signal.pair)
+      if (!existing || signal.score > existing.score) {
+        byPair.set(signal.pair, signal)
+      }
+    }
+  }
+
+  return Array.from(byPair.values())
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 8)
+}
+
+async function buildAdaptivePlanCandidates(params: {
+  orchestratorBot: NonNullable<Awaited<ReturnType<typeof loadBotForCycle>>>
+  userId: string
+  executionMode: BotExecutionMode
+  timeframe: '1m' | '5m' | '15m' | '1h' | '4h' | '1d'
+  maxTradeAmount: number
+  maxTradeAmountUnit: string
+  riskConfig: BotRiskConfig
+  tradeCooldownMs: number
+  candidates: AdaptiveOpportunityCandidate[]
+  riskDecision: RiskDecision
+}): Promise<PythonBotCyclePlanItem[]> {
+  const planCandidates: PythonBotCyclePlanItem[] = []
+
+  if (params.riskDecision.overrideOpportunity) {
+    const overrideOpportunity = params.riskDecision.overrideOpportunity
+    const overrideTradePlan = await buildTradePlan({
+      userId: params.userId,
+      pair: overrideOpportunity.pair,
+      action: overrideOpportunity.action,
+      executionMode: params.executionMode,
+      price: overrideOpportunity.price,
+      maxTradeAmount: params.maxTradeAmount,
+      maxTradeAmountUnit: params.maxTradeAmountUnit,
+      riskConfig: params.riskConfig,
+      timeframe: params.timeframe,
+    })
+
+    planCandidates.push({
+      status: overrideTradePlan.shouldExecute
+        ? (params.executionMode === 'semi_auto' ? 'suggested' : 'execute')
+        : 'skipped',
+      reason: overrideTradePlan.reason || overrideOpportunity.reason,
+      pair: overrideOpportunity.pair,
+      action: overrideOpportunity.action,
+      confidence: overrideOpportunity.confidence,
+      decisionPrice: overrideOpportunity.price,
+      quantity: overrideTradePlan.quantity ?? null,
+      isRiskOverride: true,
+      rank: 0,
+      source: 'risk_override',
+    })
+
+    if (overrideTradePlan.shouldExecute) {
+      return planCandidates
+    }
+  }
+
+  let rank = 1
+  for (const candidate of params.candidates.slice(0, 10)) {
+    if (candidate.action === 'hold') {
+      planCandidates.push({
+        status: 'skipped',
+        reason: `${candidate.reason} · especialistas preferiram aguardar`,
+        pair: candidate.pair,
+        action: candidate.action,
+        confidence: candidate.confidence,
+        decisionPrice: candidate.price,
+        isRiskOverride: false,
+        rank,
+        source: 'analysis',
+      })
+      rank += 1
+      continue
+    }
+
+    const inCooldown = await isInCooldown(
+      params.userId,
+      params.orchestratorBot.id,
+      candidate.pair,
+      candidate.action,
+      params.tradeCooldownMs,
+    )
+
+    if (inCooldown) {
+      planCandidates.push({
+        status: 'skipped',
+        reason: `Cooldown ativo para ${candidate.action} em ${candidate.pair}`,
+        pair: candidate.pair,
+        action: candidate.action,
+        confidence: candidate.confidence,
+        decisionPrice: candidate.price,
+        isRiskOverride: false,
+        rank,
+        source: 'analysis',
+      })
+      rank += 1
+      continue
+    }
+
+    const tradePlan = await buildTradePlan({
+      userId: params.userId,
+      pair: candidate.pair,
+      action: candidate.action,
+      executionMode: params.executionMode,
+      price: candidate.price,
+      maxTradeAmount: params.maxTradeAmount,
+      maxTradeAmountUnit: params.maxTradeAmountUnit,
+      riskConfig: params.riskConfig,
+      timeframe: params.timeframe,
+    })
+
+    if (!tradePlan.shouldExecute || typeof tradePlan.quantity !== 'number' || tradePlan.quantity <= QUANTITY_EPSILON) {
+      planCandidates.push({
+        status: 'skipped',
+        reason: tradePlan.reason,
+        pair: candidate.pair,
+        action: candidate.action,
+        confidence: candidate.confidence,
+        decisionPrice: candidate.price,
+        quantity: tradePlan.quantity ?? null,
+        isRiskOverride: false,
+        rank,
+        source: 'analysis',
+      })
+      rank += 1
+      continue
+    }
+
+    const portfolioRiskReason = await evaluatePortfolioRiskGuard({
+      userId: params.userId,
+      pair: candidate.pair,
+      action: candidate.action,
+      quantity: tradePlan.quantity,
+      price: candidate.price,
+      riskConfig: params.riskConfig,
+      timeframe: params.timeframe,
+    })
+
+    if (portfolioRiskReason) {
+      planCandidates.push({
+        status: 'skipped',
+        reason: portfolioRiskReason,
+        pair: candidate.pair,
+        action: candidate.action,
+        confidence: candidate.confidence,
+        decisionPrice: candidate.price,
+        quantity: tradePlan.quantity,
+        isRiskOverride: false,
+        rank,
+        source: 'analysis',
+      })
+      rank += 1
+      continue
+    }
+
+    planCandidates.push({
+      status: params.executionMode === 'semi_auto' ? 'suggested' : 'execute',
+      reason: `${candidate.reason} · ${tradePlan.reason}`,
+      pair: candidate.pair,
+      action: candidate.action,
+      confidence: candidate.confidence,
+      decisionPrice: candidate.price,
+      quantity: tradePlan.quantity,
+      isRiskOverride: false,
+      rank,
+      source: 'analysis',
+    })
+    break
+  }
+
+  if (planCandidates.length === 0) {
+    planCandidates.push({
+      status: 'skipped',
+      reason: params.riskDecision.skipReason ?? 'Nenhum especialista encontrou oportunidade forte o suficiente para execucao',
+      action: 'hold',
+      isRiskOverride: false,
+      source: 'analysis',
+    })
+  }
+
+  return planCandidates
+}
+
+function buildSyntheticOrchestratorCycleResult(params: {
+  timeframe: string
+  candidates: AdaptiveOpportunityCandidate[]
+  selectedPlan: PythonBotCyclePlanItem
+  plans: PythonBotCyclePlanItem[]
+  socialSignals: SocialSignal[]
+}): PythonBotCyclePlanResult {
+  const opportunities: PythonBotRuntimeOpportunity[] = params.candidates.slice(0, 12).map((candidate) => ({
+    pair: candidate.pair,
+    action: candidate.action,
+    confidence: candidate.confidence,
+    price: candidate.price,
+    reason: candidate.reason,
+    specialists: candidate.votes.slice(0, 6).map((vote) => ({
+      specialist: vote.specialistName,
+      action: vote.action,
+      confidence: Number(vote.confidence.toFixed(2)),
+      reason: vote.reason,
+      indicators: vote.indicators,
+    })),
+  }))
+
+  const pairBestActions = new Map<string, 'buy' | 'sell' | 'hold'>()
+  for (const candidate of params.candidates) {
+    if (!pairBestActions.has(candidate.pair)) {
+      pairBestActions.set(candidate.pair, candidate.action)
+    }
+  }
+
+  const actionCounts = {
+    buySignals: Array.from(pairBestActions.values()).filter((action) => action === 'buy').length,
+    sellSignals: Array.from(pairBestActions.values()).filter((action) => action === 'sell').length,
+    holdSignals: Array.from(pairBestActions.values()).filter((action) => action === 'hold').length,
+  }
+
+  const selectedOpportunity = params.selectedPlan.pair && params.selectedPlan.action
+    ? opportunities.find((entry) => entry.pair === params.selectedPlan.pair && entry.action === params.selectedPlan.action)
+      ?? null
+    : null
+
+  return {
+    analysis: {
+      timeframe: params.timeframe,
+      analyzedPairs: Array.from(pairBestActions.keys()),
+      primarySpecialist: 'adaptive_orchestrator',
+      summary: {
+        analyzedPairs: pairBestActions.size,
+        actionablePairs: Array.from(pairBestActions.values()).filter((action) => action !== 'hold').length,
+        buySignals: actionCounts.buySignals,
+        sellSignals: actionCounts.sellSignals,
+        holdSignals: actionCounts.holdSignals,
+      },
+      bestOpportunity: selectedOpportunity,
+      opportunities,
+      socialSignals: params.socialSignals,
+    },
+    plan: params.selectedPlan,
+    plans: params.plans,
+  }
+}
+
+async function runAnalysisOnlyBotCycle(
+  bot: NonNullable<Awaited<ReturnType<typeof loadBotForCycle>>>,
+  userId: string,
+): Promise<BotCycleResult | null> {
+  const analysis = await analyzeBotInstance(userId, bot.id)
+  if (!analysis) {
+    return null
+  }
+
+  await persistSpecialistAnalysisDecision({
+    userId,
+    specialist: bot,
+    analysis,
+    generatedAt: new Date(analysis.generatedAt),
+  })
+
+  trace('INFO', 'bot', 'runAnalysisOnlyBotCycle', 'Especialista executou somente analise e encaminhou o sinal ao orquestrador', 0, {
+    userId,
+    botId: bot.id,
+    currentPair: analysis.bestOpportunity?.pair ?? null,
+    recommendedAction: analysis.bestOpportunity?.action ?? 'hold',
+    confidence: analysis.bestOpportunity?.confidence ?? 0,
+    stage: 'specialist_analysis_only',
+    snapshot: {
+      botRole: 'specialist',
+      analysisOnly: true,
+      bestOpportunity: summarizeOpportunityForTrace(analysis.bestOpportunity),
+      analyzedPairs: analysis.analyzedPairs.slice(0, 10),
+      summary: analysis.summary,
+    },
+  })
+
+  return {
+    botId: bot.id,
+    botName: bot.name,
+    generatedAt: analysis.generatedAt,
+    analysis,
+    execution: {
+      mode: (bot.executionMode || 'paper') as BotExecutionMode,
+      status: 'skipped',
+      reason: 'Especialista em modo analise; decisao encaminhada ao orquestrador adaptativo',
+      pair: analysis.bestOpportunity?.pair,
+      action: analysis.bestOpportunity?.action,
+    },
+  }
+}
+
+async function traceAdaptiveOrchestratorSnapshot(params: {
+  userId: string
+  orchestratorBotId: string
+  orchestratorBotName: string
+  decisionId?: string
+  selectedPlan: PythonBotCyclePlanItem
+  selectedCandidate?: AdaptiveOpportunityCandidate
+  candidates: AdaptiveOpportunityCandidate[]
+  specialistProfiles: AdaptiveSpecialistProfile[]
+  specialistAnalyses: Array<{
+    botId: string
+    botName: string
+    bestOpportunity?: RuntimeOpportunity
+    summary: BotAnalysisResponse['summary']
+  }>
+}): Promise<void> {
+  const indecisionScore = params.selectedCandidate?.indecisionScore ?? 0
+  trace('INFO', 'bot', 'runAdaptiveOrchestratorCycle', 'Snapshot da politica adaptativa do orquestrador registrado', 0, {
+    userId: params.userId,
+    botId: params.orchestratorBotId,
+    currentPair: params.selectedPlan.pair ?? params.selectedCandidate?.pair ?? null,
+    recommendedAction: params.selectedPlan.action ?? params.selectedCandidate?.action ?? 'hold',
+    confidence: params.selectedPlan.confidence ?? params.selectedCandidate?.confidence ?? 0,
+    stage: 'orchestrator_policy_snapshot',
+    snapshot: {
+      decisionId: params.decisionId,
+      orchestratorBotName: params.orchestratorBotName,
+      selectedPair: params.selectedPlan.pair ?? params.selectedCandidate?.pair ?? null,
+      selectedAction: params.selectedPlan.action ?? params.selectedCandidate?.action ?? 'hold',
+      indecisionScore,
+      indecisionBucket: toIndecisionBucket(indecisionScore),
+      selectedPlan: summarizePlanForTrace(params.selectedPlan),
+      selectedCandidate: params.selectedCandidate
+        ? {
+            pair: params.selectedCandidate.pair,
+            action: params.selectedCandidate.action,
+            confidence: params.selectedCandidate.confidence,
+            expectedScore: params.selectedCandidate.expectedScore,
+            supportScore: params.selectedCandidate.supportScore,
+            agreementRatio: params.selectedCandidate.agreementRatio,
+            indecisionScore: params.selectedCandidate.indecisionScore,
+            prior: params.selectedCandidate.prior,
+          }
+        : null,
+      topCandidates: params.candidates.slice(0, 5).map((candidate) => ({
+        pair: candidate.pair,
+        action: candidate.action,
+        confidence: candidate.confidence,
+        expectedScore: candidate.expectedScore,
+        agreementRatio: candidate.agreementRatio,
+        indecisionScore: candidate.indecisionScore,
+        prior: candidate.prior,
+        topVotes: candidate.votes.slice(0, 4).map((vote) => ({
+          specialistBotId: vote.specialistBotId,
+          specialistName: vote.specialistName,
+          action: vote.action,
+          confidence: vote.confidence,
+          learnedWeight: vote.learnedWeight,
+        })),
+      })),
+      specialistProfiles: params.specialistProfiles.map((profile) => ({
+        botId: profile.botId,
+        botName: profile.botName,
+        strategyType: profile.strategyType,
+        specialization: profile.specialization,
+        overallWeight: profile.overallWeight,
+        evaluatedCount: profile.evaluatedCount,
+        accuracyPercent: profile.accuracyPercent,
+        averageStrategyReturnPercent: profile.averageStrategyReturnPercent,
+        averageEdgePercent: profile.averageEdgePercent,
+        actionWeights: profile.actionWeights,
+      })),
+      specialistAnalyses: params.specialistAnalyses,
+    },
+  })
+}
+
+async function runAdaptiveOrchestratorCycle(
+  bot: NonNullable<Awaited<ReturnType<typeof loadBotForCycle>>>,
+  userId: string,
+): Promise<BotCycleResult | null> {
+  const executionMode = ((bot.executionMode || 'paper') as BotExecutionMode)
+  const parameters = mergeBotParameters(bot)
+  const timeframe = resolveTimeframe(parameters)
+  const tradeCooldownMs = resolveTradeCooldownMs(parameters, bot.template?.strategyType ?? bot.strategyType)
+  const pairLimit = resolveMaxPairsToAnalyze(parameters)
+  const learningWindowSize = Math.max(60, Math.round(safeNumber(parameters.learningWindowSize, 240)))
+  const indecisionMemoryWindowSize = Math.max(40, Math.round(safeNumber(parameters.indecisionMemoryWindowSize, 160)))
+
+  const configuration = await prisma.configuration.findUnique({
+    where: { userId },
+    select: {
+      maxTradeAmount: true,
+      maxTradeAmountUnit: true,
+      allowedPairs: true,
+      stopLossPercent: true,
+      takeProfitPercent: true,
+    },
+  })
+
+  const configuredAllowedPairs = normalizePairs(safeJsonParse(configuration?.allowedPairs, []))
+  const effectiveAllowedPairs = resolveEffectiveAllowedPairs(parameters, configuredAllowedPairs)
+  const riskConfig = resolveRiskConfig(parameters, configuration)
+  const specialists = await loadOrchestratorSpecialists({
+    userId,
+    orchestratorBotId: bot.id,
+    parameters,
+  })
+
+  if (specialists.length === 0) {
+    const analysis: BotAnalysisResponse = {
+      botId: bot.id,
+      botName: bot.name,
+      strategyId: bot.template?.id ?? buildStrategyId(bot.strategyType),
+      templateId: bot.template?.id ?? undefined,
+      templateName: bot.template?.name ?? undefined,
+      primarySpecialist: 'adaptive_orchestrator',
+      timeframe,
+      generatedAt: new Date().toISOString(),
+      analyzedPairs: [],
+      summary: {
+        analyzedPairs: 0,
+        actionablePairs: 0,
+        buySignals: 0,
+        sellSignals: 0,
+        holdSignals: 0,
+      },
+      opportunities: [],
+      socialSignals: [],
+    }
+
+    return {
+      botId: bot.id,
+      botName: bot.name,
+      generatedAt: analysis.generatedAt,
+      analysis,
+      execution: {
+        mode: executionMode,
+        status: 'skipped',
+        reason: 'Nenhum especialista elegivel encontrado para o orquestrador neste ciclo',
+      },
+    }
+  }
+
+  const specialistProfiles = await loadAdaptiveSpecialistProfiles({
+    userId,
+    specialists,
+  })
+  const orchestratorMemory = await loadAdaptiveOrchestratorMemory({
+    userId,
+    orchestratorBotId: bot.id,
+    learningWindowSize,
+    indecisionMemoryWindowSize,
+  })
+
+  const specialistAnalyses = (await Promise.all(specialists.map(async (specialist) => {
+    try {
+      const analysis = await analyzeBotInstance(userId, specialist.id, { pairLimit })
+      if (!analysis) {
+        return null
+      }
+
+      await persistSpecialistAnalysisDecision({
+        userId,
+        specialist,
+        analysis,
+        generatedAt: new Date(analysis.generatedAt),
+      })
+
+      return {
+        bot: specialist,
+        analysis,
+        profile: specialistProfiles.get(specialist.id) ?? {
+          botId: specialist.id,
+          botName: specialist.name,
+          strategyType: specialist.template?.strategyType ?? specialist.strategyType,
+          specialization: specialist.template?.specialization ?? undefined,
+          overallWeight: 1,
+          evaluatedCount: 0,
+          accuracyPercent: 0,
+          averageStrategyReturnPercent: 0,
+          averageEdgePercent: 0,
+          actionWeights: { buy: 1, sell: 1, hold: 1 },
+        },
+      }
+    } catch (error) {
+      logger.warn('[bot] Especialista falhou durante o ciclo do orquestrador', {
+        module: 'bot',
+        event: 'adaptive_orchestrator_specialist_analysis_failed',
+        userId,
+        botId: specialist.id,
+        orchestratorBotId: bot.id,
+        error,
+        skipPersistence: true,
+      })
+      return null
+    }
+  }))).filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+
+  const candidates = buildAdaptiveOpportunityCandidates({
+    specialists: specialistAnalyses,
+    memory: orchestratorMemory,
+  })
+  const riskDecision = await evaluateRiskDecision({
+    userId,
+    botId: bot.id,
+    allowedPairs: effectiveAllowedPairs.length > 0 ? effectiveAllowedPairs : configuredAllowedPairs,
+    riskConfig,
+  })
+  const planCandidates = await buildAdaptivePlanCandidates({
+    orchestratorBot: bot,
+    userId,
+    executionMode,
+    timeframe,
+    maxTradeAmount: configuration?.maxTradeAmount ?? 1000,
+    maxTradeAmountUnit: configuration?.maxTradeAmountUnit ?? 'USDT',
+    riskConfig,
+    tradeCooldownMs,
+    candidates,
+    riskDecision,
+  })
+  const selectedPlan = planCandidates[0] ?? {
+    status: 'skipped',
+    reason: riskDecision.skipReason ?? 'Nenhuma oportunidade agregada disponivel para o orquestrador',
+    action: 'hold' as const,
+    source: 'analysis' as const,
+  }
+  const socialSignals = mergeSocialSignalsFromSpecialists(specialistAnalyses.map((entry) => entry.analysis))
+  const cycleGeneratedAt = new Date().toISOString()
+  const cycleResult = buildSyntheticOrchestratorCycleResult({
+    timeframe,
+    candidates,
+    selectedPlan,
+    plans: planCandidates,
+    socialSignals,
+  })
+  const result = await applyBotRuntimeCycleResult({
+    botId: bot.id,
+    userId,
+    cycleResult,
+    cycleGeneratedAt,
+  })
+
+  if (!result) {
+    return null
+  }
+
+  const latestDecision = await prisma.botDecision.findFirst({
+    where: {
+      userId,
+      botId: bot.id,
+      createdAt: {
+        gte: new Date(new Date(cycleGeneratedAt).getTime() - 60_000),
+      },
+    },
+    orderBy: { createdAt: 'desc' },
+    select: {
+      id: true,
+    },
+  })
+
+  await traceAdaptiveOrchestratorSnapshot({
+    userId,
+    orchestratorBotId: bot.id,
+    orchestratorBotName: bot.name,
+    decisionId: latestDecision?.id,
+    selectedPlan,
+    selectedCandidate: candidates.find((candidate) => candidate.pair === selectedPlan.pair && candidate.action === selectedPlan.action),
+    candidates,
+    specialistProfiles: specialistAnalyses.map((entry) => entry.profile),
+    specialistAnalyses: specialistAnalyses.map((entry) => ({
+      botId: entry.bot.id,
+      botName: entry.bot.name,
+      bestOpportunity: entry.analysis.bestOpportunity,
+      summary: entry.analysis.summary,
+    })),
+  })
+
+  return result
+}
+
 function buildBotAnalysisFromCycleResult(params: {
   bot: Awaited<ReturnType<typeof loadBotForCycle>>
   strategyId: string
@@ -1111,7 +2423,7 @@ function buildBotCyclePlans(
     reason: plan.reason,
     pair: plan.pair,
     action: plan.action as 'buy' | 'sell' | 'hold' | undefined,
-    quantity: plan.quantity,
+    quantity: typeof plan.quantity === 'number' ? plan.quantity : undefined,
     rank: plan.rank,
     source: plan.source,
   }))
@@ -1222,29 +2534,82 @@ function summarizeRuntimeAnalysisForTrace(analysis: PythonBotRuntimeResult) {
   }
 }
 
-export async function listBotRuntimeQueue(): Promise<BotRuntimeQueueItem[]> {
-  const bots = await prisma.bot.findMany({
+async function loadBotsEligibleForRuntimeScheduling() {
+  const seedBots = await prisma.bot.findMany({
     where: {
       userId: { not: null },
       status: 'online',
       isPaused: false,
     },
+    include: {
+      template: true,
+    },
     orderBy: [
       { updatedAt: 'asc' },
       { createdAt: 'asc' },
     ],
+  })
+
+  const activeUserIds = seedBots
+    .map((bot) => bot.userId)
+    .filter((userId): userId is string => typeof userId === 'string' && userId.length > 0)
+
+  if (activeUserIds.length > 0) {
+    await ensureAdaptiveOrchestratorsForUsers(activeUserIds)
+  }
+
+  return prisma.bot.findMany({
+    where: {
+      userId: { not: null },
+      status: 'online',
+      isPaused: false,
+    },
+    include: {
+      template: true,
+    },
+    orderBy: [
+      { updatedAt: 'asc' },
+      { createdAt: 'asc' },
+    ],
+  })
+}
+
+async function loadBotsWithActiveTrainingSet(botIds: string[]): Promise<Set<string>> {
+  if (botIds.length === 0) {
+    return new Set()
+  }
+
+  const activeTrainingSessions = await prisma.trainingSession.findMany({
+    where: {
+      status: { in: ['pending', 'running', 'paused'] },
+      botId: {
+        in: botIds,
+      },
+    },
     select: {
-      id: true,
-      userId: true,
-      name: true,
-      executionMode: true,
-      status: true,
-      isPaused: true,
+      botId: true,
     },
   })
 
+  return new Set(
+    activeTrainingSessions
+      .map((session) => session.botId)
+      .filter((botId): botId is string => typeof botId === 'string' && botId.length > 0),
+  )
+}
+
+export async function listBotRuntimeQueue(): Promise<BotRuntimeQueueItem[]> {
+  const bots = await loadBotsEligibleForRuntimeScheduling()
+  const botsWithActiveTraining = await loadBotsWithActiveTrainingSet(bots.map((bot) => bot.id))
+
   return bots
     .filter((bot): bot is typeof bot & { userId: string } => Boolean(bot.userId))
+    .filter((bot) => {
+      const mergedParameters = mergeBotParameters(bot)
+      const botRole = resolveBotRole(mergedParameters)
+      return !isAnalysisOnlyBot(mergedParameters) && botRole !== 'orchestrator'
+    })
+    .filter((bot) => !botsWithActiveTraining.has(bot.id))
     .map((bot) => ({
       botId: bot.id,
       botName: bot.name,
@@ -1270,6 +2635,13 @@ export async function buildBotRuntimeCycleContext(
   })
 
   if (!bot?.userId) {
+    return null
+  }
+
+  const parameters = mergeBotParameters(bot)
+  const botRole = resolveBotRole(parameters)
+
+  if (isAnalysisOnlyBot(parameters) || botRole === 'orchestrator') {
     return null
   }
 
@@ -1303,18 +2675,12 @@ export async function buildBotRuntimeCycleContext(
     })
   }
 
-  const modelReadiness = await resolveBotOperationalReadiness(bot.modelUrl)
+  const modelReadiness = await resolveBotOperationalReadinessForCycle(bot)
   if (!modelReadiness.modelReady) {
     return null
   }
 
   const executionMode = ((bot.executionMode || 'paper') as BotExecutionMode)
-  const templateParameters = safeJsonParse<Record<string, unknown>>(bot.template?.defaultParameters, {})
-  const instanceParameters = safeJsonParse<Record<string, unknown>>(bot.parameters, {})
-  const parameters = {
-    ...templateParameters,
-    ...instanceParameters,
-  }
   const timeframe = resolveTimeframe(parameters)
   const configuration = await prisma.configuration.findUnique({
     where: { userId: bot.userId },
@@ -1329,10 +2695,12 @@ export async function buildBotRuntimeCycleContext(
   const configuredAllowedPairs = normalizePairs(safeJsonParse(configuration?.allowedPairs, []))
   const allowedPairs = resolveEffectiveAllowedPairs(parameters, configuredAllowedPairs)
   const effectiveAllowedPairs = allowedPairs.length > 0 ? allowedPairs : configuredAllowedPairs
+  const strategyType = bot.template?.strategyType ?? bot.strategyType
   const riskConfig = resolveRiskConfig(parameters, configuration)
   const minimumConfidence = typeof parameters.minConfidence === 'number'
     ? parameters.minConfidence
     : DEFAULT_MIN_CONFIDENCE
+  const tradeCooldownMs = resolveTradeCooldownMs(parameters, strategyType)
   let exchangeCredentials: Awaited<ReturnType<typeof getUserExchangeCredentials>> = null
   let fullAutoBuyBlockReason: string | undefined
   let openExchangeOrder: {
@@ -1458,7 +2826,6 @@ export async function buildBotRuntimeCycleContext(
       exposureBrl: exposureSnapshot.pairExposureBrl.get(position.pair) ?? 0,
     }))
 
-  const strategyType = bot.template?.strategyType ?? bot.strategyType
   const strategyId = bot.template?.id ?? buildStrategyId(strategyType)
   const cycleGeneratedAt = new Date().toISOString()
   const pairLimit = resolveMaxPairsToAnalyze(parameters)
@@ -1514,7 +2881,7 @@ export async function buildBotRuntimeCycleContext(
           action: transaction.type as 'buy' | 'sell',
           executedAt: transaction.date.toISOString(),
         })),
-      tradeCooldownMs: BOT_TRADE_COOLDOWN_MS,
+      tradeCooldownMs,
       fullAutoBuyBlockReason,
       exchangeCredentialsReady: Boolean(exchangeCredentials),
       openExchangeOrder: openExchangeOrder
@@ -1557,6 +2924,7 @@ export async function buildBotRuntimeCycleContext(
       openPositions: summarizePositionsForTrace(openPositions),
       recentExecutionsCount: payload.cycle.recentExecutions.length,
       recentSellTransactionsCount: payload.cycle.recentSellTransactions.length,
+      tradeCooldownMs,
       exchangeCredentialsReady: payload.cycle.exchangeCredentialsReady,
       fullAutoBuyBlockReason: payload.cycle.fullAutoBuyBlockReason,
       openExchangeOrder: payload.cycle.openExchangeOrder,
@@ -1584,13 +2952,8 @@ export async function applyBotRuntimeCycleResult(params: {
   }
 
   const executionMode = ((bot.executionMode || 'paper') as BotExecutionMode)
-  const modelReadiness = await resolveBotOperationalReadiness(bot.modelUrl)
-  const templateParameters = safeJsonParse<Record<string, unknown>>(bot.template?.defaultParameters, {})
-  const instanceParameters = safeJsonParse<Record<string, unknown>>(bot.parameters, {})
-  const parameters = {
-    ...templateParameters,
-    ...instanceParameters,
-  }
+  const modelReadiness = await resolveBotOperationalReadinessForCycle(bot)
+  const parameters = mergeBotParameters(bot)
   const timeframe = resolveTimeframe(parameters)
   const cycleGeneratedAt = params.cycleGeneratedAt ?? new Date().toISOString()
 
@@ -1772,7 +3135,9 @@ export async function applyBotRuntimeCycleResult(params: {
     price: params.cycleResult.plan.decisionPrice,
     reason: params.cycleResult.plan.reason,
   } : analysis.bestOpportunity
-  const plannedQuantity = params.cycleResult.plan.quantity
+  const plannedQuantity = typeof params.cycleResult.plan.quantity === 'number'
+    ? params.cycleResult.plan.quantity
+    : undefined
   const isRiskOverride = Boolean(params.cycleResult.plan.isRiskOverride)
   const decisionTimestamp = new Date()
   const approvedPlansCount = cyclePlans.filter((plan) => plan.status !== 'skipped').length
@@ -2419,6 +3784,35 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
       return null
     }
 
+    const parameters = mergeBotParameters(bot)
+    const botRole = resolveBotRole(parameters)
+
+    if (isAnalysisOnlyBot(parameters)) {
+      const result = await runAnalysisOnlyBotCycle(bot, userId)
+      endTrace('runBotCycle', {
+        userId,
+        botId,
+        currentPair: result?.execution.pair,
+        recommendedAction: result?.execution.action,
+        confidence: result?.analysis.bestOpportunity?.confidence,
+        errorFlag: result ? false : true,
+      })
+      return result
+    }
+
+    if (botRole === 'orchestrator') {
+      const result = await runAdaptiveOrchestratorCycle(bot, userId)
+      endTrace('runBotCycle', {
+        userId,
+        botId,
+        currentPair: result?.execution.pair,
+        recommendedAction: result?.execution.action,
+        confidence: result?.analysis.bestOpportunity?.confidence,
+        errorFlag: result ? false : true,
+      })
+      return result
+    }
+
     const executionMode = ((bot.executionMode || 'paper') as BotExecutionMode)
     const cycleContext = await buildBotRuntimeCycleContext(botId, userId)
 
@@ -2429,7 +3823,7 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
         return null
       }
 
-      const modelReadiness = await resolveBotOperationalReadiness(bot.modelUrl)
+      const modelReadiness = await resolveBotOperationalReadinessForCycle(bot)
       const skipReason = bot.isPaused
         ? 'Bot pausado; ciclo ignorado'
         : bot.status !== 'online'
@@ -2507,6 +3901,27 @@ export async function runBotCycle(botId: string, userId: string): Promise<BotCyc
   }
 }
 
+async function processAdaptiveOrchestratorQueueCycle(): Promise<void> {
+  const bots = await loadBotsEligibleForRuntimeScheduling()
+  const orchestrators = bots
+    .filter((bot): bot is typeof bot & { userId: string } => Boolean(bot.userId))
+    .filter((bot) => resolveBotRole(mergeBotParameters(bot)) === 'orchestrator')
+
+  const botsWithActiveTraining = await loadBotsWithActiveTrainingSet(orchestrators.map((bot) => bot.id))
+
+  for (const bot of orchestrators) {
+    if (processingBots.has(bot.id) || botsWithActiveTraining.has(bot.id)) {
+      continue
+    }
+
+    try {
+      await runBotCycle(bot.id, bot.userId)
+    } catch {
+      // O erro já é logado dentro de runBotCycle.
+    }
+  }
+}
+
 export async function processBotRuntimeMaintenanceCycle(): Promise<void> {
   await processOpenExchangeOrdersCycle()
   await evaluatePendingBotDecisions().catch((evaluationError) => {
@@ -2514,6 +3929,14 @@ export async function processBotRuntimeMaintenanceCycle(): Promise<void> {
       module: 'bot',
       event: 'bot_runtime_decision_evaluation_failed',
       error: evaluationError,
+      skipPersistence: true,
+    })
+  })
+  await processAdaptiveOrchestratorQueueCycle().catch((error) => {
+    logger.warn('[bot] Falha ao processar a fila do orquestrador adaptativo durante a manutenção do runtime', {
+      module: 'bot',
+      event: 'adaptive_orchestrator_maintenance_cycle_failed',
+      error,
       skipPersistence: true,
     })
   })
@@ -2533,6 +3956,15 @@ export async function processBotQueueCycle(): Promise<void> {
       // O erro já é logado dentro de runBotCycle.
     }
   }
+
+  await processAdaptiveOrchestratorQueueCycle().catch((error) => {
+    logger.warn('[bot] Falha ao processar a fila do orquestrador adaptativo no worker local', {
+      module: 'bot',
+      event: 'adaptive_orchestrator_local_worker_cycle_failed',
+      error,
+      skipPersistence: true,
+    })
+  })
 }
 
 export async function processOpenExchangeOrdersCycle(): Promise<void> {

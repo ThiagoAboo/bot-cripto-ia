@@ -36,6 +36,9 @@ type BotRecordWithTemplate = {
   template?: TemplateRecord | null
 }
 
+const ADAPTIVE_ORCHESTRATOR_TEMPLATE_ID = 'template_adaptive_ai_orchestrator'
+const ADAPTIVE_ORCHESTRATOR_DEFAULT_NAME = 'Adaptive AI Orchestrator'
+
 export interface BotTemplateSummary {
   id: string
   slug: string
@@ -87,6 +90,56 @@ function safeJsonParse<T>(value: string | null | undefined, fallback: T): T {
 
 export function buildStrategyId(strategyType: string): string {
   return strategyType.startsWith('strategy_') ? strategyType : `strategy_${strategyType}`
+}
+
+export async function ensureAdaptiveOrchestratorBot(userId: string): Promise<void> {
+  try {
+    await syncBotTemplateCatalog().catch(() => undefined)
+
+    const existingOrchestrator = await prisma.bot.findFirst({
+      where: {
+        userId,
+        templateId: ADAPTIVE_ORCHESTRATOR_TEMPLATE_ID,
+      },
+      select: { id: true },
+    })
+
+    if (existingOrchestrator) {
+      return
+    }
+
+    const template = await prisma.botTemplate.findUnique({
+      where: { id: ADAPTIVE_ORCHESTRATOR_TEMPLATE_ID },
+    })
+
+    if (!template) {
+      return
+    }
+
+    await prisma.bot.create({
+      data: {
+        userId,
+        templateId: template.id,
+        name: template.name || ADAPTIVE_ORCHESTRATOR_DEFAULT_NAME,
+        strategyType: template.strategyType,
+        description: template.description,
+        executionMode: 'paper',
+        isSystemManaged: true,
+        status: 'online',
+        isPaused: false,
+        modelVersion: 'adaptive-orchestrator-v1',
+        parameters: template.defaultParameters,
+      },
+    })
+  } catch (error) {
+    logger.warn('[bot] Nao foi possivel materializar automaticamente o Adaptive AI Orchestrator', {
+      module: 'bot',
+      event: 'adaptive_orchestrator_autocreate_failed',
+      userId,
+      error,
+      skipPersistence: true,
+    })
+  }
 }
 
 function normalizeTemplate(template: TemplateRecord): BotTemplateSummary {
@@ -214,6 +267,8 @@ export async function listBotTemplates(): Promise<BotTemplateSummary[]> {
 }
 
 export async function listBotInstances(userId: string): Promise<BotInstanceSummary[]> {
+  await ensureAdaptiveOrchestratorBot(userId)
+
   const bots = await prisma.bot.findMany({
     where: {
       OR: [
@@ -262,6 +317,8 @@ export async function listBotInstances(userId: string): Promise<BotInstanceSumma
 }
 
 export async function getBotInstanceById(userId: string, botId: string) {
+  await ensureAdaptiveOrchestratorBot(userId)
+
   return prisma.bot.findFirst({
     where: {
       id: botId,
@@ -277,6 +334,8 @@ export async function getBotInstanceById(userId: string, botId: string) {
 }
 
 export async function materializeEditableBotForUser(userId: string, botId: string) {
+  await ensureAdaptiveOrchestratorBot(userId)
+
   const sourceBot = await getBotInstanceById(userId, botId)
   if (!sourceBot) {
     return null

@@ -578,6 +578,137 @@ function Get-TrainingCandidates {
     )
 }
 
+function Test-IsScalperBot {
+    param([pscustomobject]$Bot)
+
+    $parts = @()
+    if ($null -ne $Bot.strategyType) {
+        $parts += [string]$Bot.strategyType
+    }
+    if ($null -ne $Bot.template -and $null -ne $Bot.template.specialization) {
+        $parts += [string]$Bot.template.specialization
+    }
+    if ($null -ne $Bot.template -and $null -ne $Bot.template.indicatorType) {
+        $parts += [string]$Bot.template.indicatorType
+    }
+
+    $fingerprint = ($parts -join ' ').ToLowerInvariant()
+    return $fingerprint.Contains('scalp')
+}
+
+function Test-IsOrchestratorBot {
+    param([pscustomobject]$Bot)
+
+    if ($null -eq $Bot -or $null -eq $Bot.effectiveParameters) {
+        return $false
+    }
+
+    $role = [string]$Bot.effectiveParameters.botRole
+    return $role.Trim().ToLowerInvariant() -eq 'orchestrator'
+}
+
+function Test-IsAnalysisOnlyBot {
+    param([pscustomobject]$Bot)
+
+    if ($null -eq $Bot -or $null -eq $Bot.effectiveParameters) {
+        return $false
+    }
+
+    return ($Bot.effectiveParameters.analysisOnly -eq $true) -and -not (Test-IsOrchestratorBot -Bot $Bot)
+}
+
+function Get-AggressiveBotParameters {
+    param([pscustomobject]$Bot)
+
+    $timeframe = if ($null -ne $Bot.effectiveParameters -and $null -ne $Bot.effectiveParameters.timeframe -and [string]$Bot.effectiveParameters.timeframe) {
+        [string]$Bot.effectiveParameters.timeframe
+    } elseif (Test-IsScalperBot -Bot $Bot) {
+        '1m'
+    } else {
+        '1h'
+    }
+
+    if (Test-IsOrchestratorBot -Bot $Bot) {
+        return @{
+            timeframe = '5m'
+            strategyProfile = 'aggressive'
+            useAdvancedSettings = $false
+            useGlobalAllowedPairs = $true
+            allowedPairs = @()
+            minConfidence = 50
+            maxPairsToAnalyze = 12
+            maxExecutableOpportunitiesPerCycle = 1
+            stopLossPercent = 1.6
+            takeProfitPercent = 2.6
+            circuitBreakerDailyLossPercent = 2.5
+            circuitBreakerCooldownMinutes = 12
+            maxConsecutiveLosses = 5
+            maxPositionSize = 220
+            maxExposurePerCoin = 0.24
+            maxTotalExposure = 0.42
+            maxConcurrentTrades = 2
+            minCorrelationThreshold = 0.88
+            atrPeriod = 14
+            targetAtrPercent = 0.008
+            minAtrPositionFactor = 0.16
+        }
+    }
+
+    if (Test-IsScalperBot -Bot $Bot) {
+        return @{
+            timeframe = $timeframe
+            strategyProfile = 'aggressive'
+            useAdvancedSettings = $false
+            useGlobalAllowedPairs = $true
+            allowedPairs = @()
+            minConfidence = 52
+            maxPairsToAnalyze = 10
+            maxExecutableOpportunitiesPerCycle = 2
+            minVolume = 100000
+            maxSpreadPercent = 0.1
+            microMomentumThresholdPercent = 0.02
+            orderImbalanceThreshold = 0.52
+            stopLossPercent = 0.7
+            takeProfitPercent = 0.9
+            circuitBreakerDailyLossPercent = 2
+            circuitBreakerCooldownMinutes = 10
+            maxConsecutiveLosses = 5
+            maxPositionSize = 180
+            maxExposurePerCoin = 0.22
+            maxTotalExposure = 0.38
+            maxConcurrentTrades = 2
+            minCorrelationThreshold = 0.9
+            atrPeriod = 14
+            targetAtrPercent = 0.007
+            minAtrPositionFactor = 0.18
+        }
+    }
+
+    return @{
+        timeframe = $timeframe
+        strategyProfile = 'aggressive'
+        useAdvancedSettings = $false
+        useGlobalAllowedPairs = $true
+        allowedPairs = @()
+        minConfidence = 60
+        maxPairsToAnalyze = 16
+        maxExecutableOpportunitiesPerCycle = 2
+        stopLossPercent = 4
+        takeProfitPercent = 8
+        circuitBreakerDailyLossPercent = 8
+        circuitBreakerCooldownMinutes = 30
+        maxConsecutiveLosses = 5
+        maxPositionSize = 650
+        maxExposurePerCoin = 0.28
+        maxTotalExposure = 0.9
+        maxConcurrentTrades = 6
+        minCorrelationThreshold = 0.82
+        atrPeriod = 14
+        targetAtrPercent = 0.03
+        minAtrPositionFactor = 0.3
+    }
+}
+
 function Wait-TrainingSessionCompletion {
     param(
         [Parameter(Mandatory = $true)]
@@ -864,14 +995,17 @@ Write-Ok ("Paper reiniciado com {0} {1}" -f $resetResult.paperBalance.amount, $r
 Write-Step '5/6' 'Garantindo bots online em modo paper'
 $bots = @((Invoke-BackendRequest -Method GET -Path '/api/dashboard/bots' -Token $token))
 foreach ($bot in $bots) {
+    $botDetail = Invoke-BackendRequest -Method GET -Path "/api/dashboard/bots/$($bot.id)" -Token $token
+    $aggressiveParameters = Get-AggressiveBotParameters -Bot $botDetail
     Invoke-BackendRequest -Method PUT -Path "/api/dashboard/bots/$($bot.id)" -Body @{
         executionMode = 'paper'
         status = 'online'
         isPaused = $false
+        parameters = $aggressiveParameters
     } -Token $token | Out-Null
-    Write-Info "$($bot.name) alinhado para paper/online"
+    Write-Info "$($bot.name) alinhado para paper/online com perfil agressivo"
 }
-Write-Ok 'Frota principal alinhada'
+Write-Ok 'Frota principal alinhada com perfil agressivo'
 
 $bootstrapSummary = [ordered]@{
     generatedAt = (Get-Date).ToString('o')
@@ -900,85 +1034,106 @@ if (-not $SkipTraining) {
 
         $successfulAttempts = @()
 
-        foreach ($candidate in $candidates) {
-            $sourcesToTry = @($TrainingDataSource)
-            if ($TrainingFallbackDataSource -ne $TrainingDataSource) {
-                $sourcesToTry += $TrainingFallbackDataSource
+        if (Test-IsOrchestratorBot -Bot $botDetail) {
+            $botSummary.selectedModel = [ordered]@{
+                sessionId = $null
+                architecture = 'adaptive_meta_policy'
+                dataSource = 'online_learning'
+                modelUrl = $null
+                governanceRole = 'orchestrator'
+                autoPromoted = $false
+                totalProfit = $null
+                winRate = $null
+                maxDrawdown = $null
+                profitFactor = $null
             }
+            Write-Info "Treino tradicional pulado para $($botDetail.name); o aprendizado acontece online pelo orquestrador adaptativo"
+        } else {
 
-            $attemptSucceeded = $false
+            foreach ($candidate in $candidates) {
+                $sourcesToTry = @($TrainingDataSource)
+                if ($TrainingFallbackDataSource -ne $TrainingDataSource) {
+                    $sourcesToTry += $TrainingFallbackDataSource
+                }
 
-            foreach ($source in $sourcesToTry) {
-                try {
-                    $attempt = Start-TrainingAttempt -Bot $botDetail -Candidate $candidate -DataSource $source -Token $token
-                    $successfulAttempts += $attempt
-                    $botSummary.attempts += [ordered]@{
-                        candidate = $attempt.candidate
-                        architecture = $attempt.architecture
-                        dataSource = $attempt.dataSource
-                        sessionId = $attempt.session.id
-                        winRate = $attempt.backtest.winRate
-                        totalProfit = $attempt.backtest.totalProfit
-                        maxDrawdown = $attempt.backtest.maxDrawdown
-                        profitFactor = $attempt.backtest.profitFactor
-                        status = 'completed'
+                $attemptSucceeded = $false
+
+                foreach ($source in $sourcesToTry) {
+                    try {
+                        $attempt = Start-TrainingAttempt -Bot $botDetail -Candidate $candidate -DataSource $source -Token $token
+                        $successfulAttempts += $attempt
+                        $botSummary.attempts += [ordered]@{
+                            candidate = $attempt.candidate
+                            architecture = $attempt.architecture
+                            dataSource = $attempt.dataSource
+                            sessionId = $attempt.session.id
+                            winRate = $attempt.backtest.winRate
+                            totalProfit = $attempt.backtest.totalProfit
+                            maxDrawdown = $attempt.backtest.maxDrawdown
+                            profitFactor = $attempt.backtest.profitFactor
+                            status = 'completed'
+                        }
+                        $attemptSucceeded = $true
+                        Write-Ok ("Treino {0} de {1} concluido com winRate {2}%" -f $candidate.architecture, $botDetail.name, [Math]::Round([double]$attempt.backtest.winRate, 2))
+                        break
+                    } catch {
+                        $botSummary.attempts += [ordered]@{
+                            candidate = $candidate.label
+                            architecture = $candidate.architecture
+                            dataSource = $source
+                            status = 'failed'
+                            error = $_.Exception.Message
+                        }
+                        Write-WarnLine ("Treino {0} de {1} falhou com {2}: {3}" -f $candidate.architecture, $botDetail.name, $source, $_.Exception.Message)
                     }
-                    $attemptSucceeded = $true
-                    Write-Ok ("Treino {0} de {1} concluido com winRate {2}%" -f $candidate.architecture, $botDetail.name, [Math]::Round([double]$attempt.backtest.winRate, 2))
-                    break
-                } catch {
-                    $botSummary.attempts += [ordered]@{
-                        candidate = $candidate.label
-                        architecture = $candidate.architecture
-                        dataSource = $source
-                        status = 'failed'
-                        error = $_.Exception.Message
-                    }
-                    Write-WarnLine ("Treino {0} de {1} falhou com {2}: {3}" -f $candidate.architecture, $botDetail.name, $source, $_.Exception.Message)
+                }
+
+                if (-not $attemptSucceeded) {
+                    Write-WarnLine "Nenhuma origem de dados concluiu o candidato $($candidate.architecture) para $($botDetail.name)"
                 }
             }
 
-            if (-not $attemptSucceeded) {
-                Write-WarnLine "Nenhuma origem de dados concluiu o candidato $($candidate.architecture) para $($botDetail.name)"
+            $activeTrainingSession = Get-ActiveTrainingSessionForBot -BotId $botDetail.id -Token $token
+            if ($null -ne $activeTrainingSession) {
+                Write-WarnLine "Sessao ativa remanescente para $($botDetail.name): $($activeTrainingSession.id) em status $($activeTrainingSession.status). Solicitando cancelamento antes do encerramento do bootstrap."
+                Cancel-TrainingSessionBestEffort -SessionId $activeTrainingSession.id -Token $token
             }
-        }
 
-        $activeTrainingSession = Get-ActiveTrainingSessionForBot -BotId $botDetail.id -Token $token
-        if ($null -ne $activeTrainingSession) {
-            Write-WarnLine "Sessao ativa remanescente para $($botDetail.name): $($activeTrainingSession.id) em status $($activeTrainingSession.status). Solicitando cancelamento antes do encerramento do bootstrap."
-            Cancel-TrainingSessionBestEffort -SessionId $activeTrainingSession.id -Token $token
-        }
+            if ($successfulAttempts.Count -gt 0) {
+                $saveableResult = Resolve-SaveableTrainingResult -Results $successfulAttempts -Token $token
 
-        if ($successfulAttempts.Count -gt 0) {
-            $saveableResult = Resolve-SaveableTrainingResult -Results $successfulAttempts -Token $token
-
-            if ($null -ne $saveableResult) {
-                $saved = Invoke-BackendRequest -Method POST -Path "/api/training/sessions/$($saveableResult.session.id)/save" -Body @{} -Token $token
-                $botSummary.selectedModel = [ordered]@{
-                    sessionId = $saveableResult.session.id
-                    architecture = $saveableResult.architecture
-                    dataSource = $saveableResult.dataSource
-                    modelUrl = $saved.modelUrl
-                    governanceRole = $saved.governanceRole
-                    autoPromoted = $saved.autoPromoted
-                    totalProfit = $saveableResult.backtest.totalProfit
-                    winRate = $saveableResult.backtest.winRate
-                    maxDrawdown = $saveableResult.backtest.maxDrawdown
-                    profitFactor = $saveableResult.backtest.profitFactor
+                if ($null -ne $saveableResult) {
+                    $saved = Invoke-BackendRequest -Method POST -Path "/api/training/sessions/$($saveableResult.session.id)/save" -Body @{} -Token $token
+                    $botSummary.selectedModel = [ordered]@{
+                        sessionId = $saveableResult.session.id
+                        architecture = $saveableResult.architecture
+                        dataSource = $saveableResult.dataSource
+                        modelUrl = $saved.modelUrl
+                        governanceRole = $saved.governanceRole
+                        autoPromoted = $saved.autoPromoted
+                        totalProfit = $saveableResult.backtest.totalProfit
+                        winRate = $saveableResult.backtest.winRate
+                        maxDrawdown = $saveableResult.backtest.maxDrawdown
+                        profitFactor = $saveableResult.backtest.profitFactor
+                    }
+                    Write-Ok ("Melhor candidato salvo para {0}: {1} via {2}" -f $botDetail.name, $saveableResult.architecture, $saveableResult.dataSource)
+                } else {
+                    Write-WarnLine "Os candidatos concluidos de $($botDetail.name) nao estavam mais aptos para save ao final da rodada. Mantendo champion atual."
                 }
-                Write-Ok ("Melhor candidato salvo para {0}: {1} via {2}" -f $botDetail.name, $saveableResult.architecture, $saveableResult.dataSource)
             } else {
-                Write-WarnLine "Os candidatos concluidos de $($botDetail.name) nao estavam mais aptos para save ao final da rodada. Mantendo champion atual."
+                Write-WarnLine "Nenhum treino concluido para $($botDetail.name); o bot permanece com o champion bootstrap do seed."
+            }
+        }
+
+        if (-not (Test-IsAnalysisOnlyBot -Bot $botDetail)) {
+            try {
+                Invoke-BackendRequest -Method POST -Path "/api/dashboard/bots/$($botDetail.id)/run" -Body @{} -Token $token -TimeoutSec 180 | Out-Null
+                Write-Info "Ciclo manual disparado para $($botDetail.name) ao final do bootstrap"
+            } catch {
+                Write-WarnLine "Ciclo manual de $($botDetail.name) nao concluiu dentro do bootstrap: $($_.Exception.Message)"
             }
         } else {
-            Write-WarnLine "Nenhum treino concluido para $($botDetail.name); o bot permanece com o champion bootstrap do seed."
-        }
-
-        try {
-            Invoke-BackendRequest -Method POST -Path "/api/dashboard/bots/$($botDetail.id)/run" -Body @{} -Token $token -TimeoutSec 180 | Out-Null
-            Write-Info "Ciclo manual disparado para $($botDetail.name) ao final do bootstrap"
-        } catch {
-            Write-WarnLine "Ciclo manual de $($botDetail.name) nao concluiu dentro do bootstrap: $($_.Exception.Message)"
+            Write-Info "Ciclo manual individual pulado para $($botDetail.name); o especialista sera acionado pelo orquestrador"
         }
 
         $bootstrapSummary.bots += $botSummary
@@ -987,6 +1142,18 @@ if (-not $SkipTraining) {
     Write-Step '6/6' 'Treino inicial pulado por parametro'
     Write-Info 'Os bots permanecem com os champions bootstrap sem nova rodada de treino.'
 }
+
+Write-Step '6/6' 'Verificando sessoes de treino remanescentes'
+foreach ($bot in $bots) {
+    $activeTrainingSession = Get-ActiveTrainingSessionForBot -BotId $bot.id -Token $token
+    if ($null -eq $activeTrainingSession) {
+        continue
+    }
+
+    Write-WarnLine "Sessao ativa remanescente apos bootstrap para $($bot.name): $($activeTrainingSession.id) em status $($activeTrainingSession.status). Cancelando para liberar a fila operacional."
+    Cancel-TrainingSessionBestEffort -SessionId $activeTrainingSession.id -Token $token
+}
+Write-Ok 'Fila de treino verificada antes do encerramento'
 
 $bootstrapSummary | ConvertTo-Json -Depth 12 | Out-File -FilePath $reportPath -Encoding utf8
 

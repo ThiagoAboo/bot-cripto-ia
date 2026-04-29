@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '../../../shared/components/ui/Card'
-import { Button } from '../../../shared/components/ui/Button'
-import { Badge } from '../../../shared/components/ui/Badge'
 import { Search, X, Plus, Coins, ChevronDown } from 'lucide-react'
+import { Badge } from '../../../shared/components/ui/Badge'
+import { Button } from '../../../shared/components/ui/Button'
+import { Card, CardContent, CardHeader, CardTitle } from '../../../shared/components/ui/Card'
+import { FieldLabel } from '../../../shared/components/ui/FieldLabel'
 import { useAvailablePairs } from '../hooks/useConfigurations'
 import { cn } from '../../../shared/utils/formatters'
 
@@ -37,7 +38,7 @@ export function AllowedPairsCard({ data, onChange }: AllowedPairsCardProps) {
   const filteredPairs = availablePairs?.filter(
     (pair) =>
       !data.includes(pair) &&
-      pair.toLowerCase().includes(searchTerm.toLowerCase())
+      pair.toLowerCase().includes(searchTerm.toLowerCase()),
   ) || []
 
   return (
@@ -47,77 +48,84 @@ export function AllowedPairsCard({ data, onChange }: AllowedPairsCardProps) {
           <Coins className="w-5 h-5 text-primary-500" />
           Moedas Permitidas
         </CardTitle>
-        <p className="text-xs text-gray-500 mt-1">
-          Selecione as moedas que os bots podem analisar e negociar
-        </p>
       </CardHeader>
-      
+
       <CardContent className="space-y-4">
-        {/* Moedas selecionadas */}
         <div className="space-y-2">
-          <label className="text-sm font-medium text-gray-300">
-            Moedas permitidas ({data.length})
-          </label>
-          <div className="flex flex-wrap gap-2 min-h-[60px] p-3 rounded-lg bg-dark-300 border border-dark-400">
+          <FieldLabel
+            label={`Moedas permitidas (${data.length})`}
+            help={{
+              title: 'Moedas permitidas',
+              description: 'Lista-base de ativos que os bots podem analisar e negociar quando usam a configuração global.',
+              example: 'Se você deixar apenas BTC/USDT e ETH/USDT aqui, nenhum bot global vai procurar oportunidade fora dessa lista.',
+            }}
+          />
+          <div className="min-h-[60px] rounded-lg border border-dark-400 bg-dark-300 p-3">
             {data.length === 0 ? (
               <span className="text-sm text-gray-500">
                 Nenhuma moeda selecionada. Selecione abaixo.
               </span>
             ) : (
-              data.map((pair) => (
-                <Badge
-                  key={pair}
-                  variant="primary"
-                  className="flex items-center gap-1 px-2 py-1"
-                >
-                  {pair}
-                  <button
-                    onClick={() => handleRemovePair(pair)}
-                    className="ml-1 hover:text-error transition-colors"
+              <div className="flex flex-wrap gap-2">
+                {data.map((pair) => (
+                  <Badge
+                    key={pair}
+                    variant="primary"
+                    className="flex items-center gap-1 px-2 py-1"
                   >
-                    <X className="w-3 h-3" />
-                  </button>
-                </Badge>
-              ))
+                    {pair}
+                    <button
+                      onClick={() => handleRemovePair(pair)}
+                      className="ml-1 transition-colors hover:text-error"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                ))}
+              </div>
             )}
           </div>
         </div>
 
-        {/* Adicionar moeda - Select com lista */}
         <div className="space-y-2">
-          <label className="text-sm font-medium text-gray-300">
-            Adicionar moeda
-          </label>
-          
+          <FieldLabel
+            label="Adicionar moeda"
+            help={{
+              title: 'Adicionar moeda',
+              description: 'Inclui um novo par na lista global. Bots que herdam pares globais passam a enxergar esse ativo.',
+              example: 'Ao adicionar SOL/USDT aqui, um scalper global pode começar a analisar SOL automaticamente.',
+            }}
+          />
+
           <div className="flex gap-2">
             <div className="relative flex-1">
               <button
                 type="button"
                 onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                className="w-full flex items-center justify-between rounded-lg border border-dark-400 bg-dark-300 px-3 py-2 text-sm text-white hover:bg-dark-400 transition-colors"
+                className="flex w-full items-center justify-between rounded-lg border border-dark-400 bg-dark-300 px-3 py-2 text-sm text-white transition-colors hover:bg-dark-400"
               >
                 <span className={selectedPair ? 'text-white' : 'text-gray-500'}>
                   {selectedPair || 'Selecione uma moeda...'}
                 </span>
-                <ChevronDown className={cn('w-4 h-4 transition-transform', isDropdownOpen && 'rotate-180')} />
+                <ChevronDown className={cn('h-4 w-4 transition-transform', isDropdownOpen && 'rotate-180')} />
               </button>
 
               {isDropdownOpen && (
-                <div className="absolute z-50 left-0 right-0 mt-1 rounded-lg border border-dark-400 bg-dark-200 shadow-xl overflow-hidden">
-                  <div className="p-2 border-b border-dark-400">
+                <div className="absolute left-0 right-0 z-50 mt-1 overflow-hidden rounded-lg border border-dark-400 bg-dark-200 shadow-xl">
+                  <div className="border-b border-dark-400 p-2">
                     <div className="relative">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
                       <input
                         type="text"
                         placeholder="Buscar moeda..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
-                        className="w-full pl-9 pr-3 py-1.5 text-sm rounded-lg bg-dark-300 border border-dark-400 text-white placeholder:text-gray-500 focus:outline-none focus:border-primary-500"
+                        className="w-full rounded-lg border border-dark-400 bg-dark-300 py-1.5 pl-9 pr-3 text-sm text-white placeholder:text-gray-500 focus:border-primary-500 focus:outline-none"
                         autoFocus
                       />
                     </div>
                   </div>
-                  
+
                   <div className="max-h-48 overflow-y-auto">
                     {isLoading ? (
                       <div className="p-4 text-center text-gray-500">
@@ -132,10 +140,9 @@ export function AllowedPairsCard({ data, onChange }: AllowedPairsCardProps) {
                         <button
                           key={pair}
                           onClick={() => handleSelectPair(pair)}
-                          className="w-full flex items-center justify-between px-3 py-2 text-sm text-white hover:bg-dark-300 transition-colors border-b border-dark-400 last:border-0"
+                          className="w-full border-b border-dark-400 px-3 py-2 text-left text-sm text-white transition-colors last:border-0 hover:bg-dark-300"
                         >
-                          <span>{pair}</span>
-                          <Plus className="w-4 h-4 text-primary-500 opacity-0 group-hover:opacity-100" />
+                          {pair}
                         </button>
                       ))
                     )}
@@ -145,14 +152,10 @@ export function AllowedPairsCard({ data, onChange }: AllowedPairsCardProps) {
             </div>
 
             <Button onClick={handleAddPair} disabled={!selectedPair} className="shrink-0">
-              <Plus className="w-4 h-4 mr-1" />
+              <Plus className="mr-1 h-4 w-4" />
               Adicionar
             </Button>
           </div>
-          
-          <p className="text-xs text-gray-500">
-            Selecione uma moeda da lista para adicionar às permitidas
-          </p>
         </div>
 
         {availablePairs && availablePairs.length > 0 && data.length !== availablePairs.length && (

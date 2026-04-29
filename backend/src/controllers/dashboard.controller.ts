@@ -20,9 +20,12 @@ import { endTrace, parseTraceSnapshot, startTrace } from '../utils/tracer'
 const executionModeSchema = z.enum(['paper', 'semi_auto', 'full_auto'])
 const editableStatusSchema = z.enum(['online', 'offline'])
 const timeframeSchema = z.enum(['1m', '5m', '15m', '1h', '4h', '1d'])
+const strategyProfileSchema = z.enum(['aggressive', 'balanced', 'conservative'])
 
 const editableBotParametersSchema = z.object({
   timeframe: timeframeSchema.optional(),
+  strategyProfile: strategyProfileSchema.optional(),
+  useAdvancedSettings: z.boolean().optional(),
   minConfidence: z.number().min(0).max(100).optional(),
   useGlobalAllowedPairs: z.boolean().optional(),
   allowedPairs: z.array(z.string().min(3).max(24)).max(30).optional(),

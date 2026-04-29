@@ -2602,6 +2602,88 @@ describe('API contract tests', () => {
           references: [],
         },
       ])
+      stub(pythonBotRuntimeService, 'runPythonBotAnalysis', async () => ({
+        primarySpecialist: 'macd_momentum',
+        timeframe: '1h',
+        analyzedPairs: ['BTC/USDT', 'ETH/USDT'],
+        summary: {
+          analyzedPairs: 2,
+          actionablePairs: 2,
+          buySignals: 1,
+          sellSignals: 1,
+          holdSignals: 0,
+        },
+        bestOpportunity: {
+          pair: 'BTC/USDT',
+          action: 'buy',
+          confidence: 79,
+          price: 127,
+          reason: 'Consenso inclinado para compra',
+          specialists: [
+            {
+              specialist: 'macd_momentum',
+              action: 'buy',
+              confidence: 79,
+              reason: 'MACD virou para cima',
+              indicators: {
+                macd: 1.2,
+                signal: 0.9,
+              },
+            },
+          ],
+        },
+        opportunities: [
+          {
+            pair: 'BTC/USDT',
+            action: 'buy',
+            confidence: 79,
+            price: 127,
+            reason: 'Consenso inclinado para compra',
+            specialists: [
+              {
+                specialist: 'macd_momentum',
+                action: 'buy',
+                confidence: 79,
+                reason: 'MACD virou para cima',
+                indicators: {
+                  macd: 1.2,
+                  signal: 0.9,
+                },
+              },
+            ],
+          },
+          {
+            pair: 'ETH/USDT',
+            action: 'sell',
+            confidence: 71,
+            price: 75.9,
+            reason: 'Momentum perdeu força',
+            specialists: [
+              {
+                specialist: 'macd_momentum',
+                action: 'sell',
+                confidence: 71,
+                reason: 'MACD cruzou para baixo',
+                indicators: {
+                  macd: -0.8,
+                  signal: -0.5,
+                },
+              },
+            ],
+          },
+        ],
+        socialSignals: [
+          {
+            symbol: 'BTC',
+            pair: 'BTC/USDT',
+            score: 82,
+            mentions: 22,
+            sentiment: 'bullish',
+            sources: ['reddit'],
+            references: [],
+          },
+        ],
+      }))
 
       const { response, body } = await requestJson('/api/dashboard/bots/bot-macd-1/analysis', {
         headers: authHeaders(),
@@ -2704,6 +2786,39 @@ describe('API contract tests', () => {
       assert.equal(response.status, 200)
     assert.equal(body.success, true)
     assert.equal(body.data.running, true)
+  })
+
+  it('listBotRuntimeQueue excludes bots that still have active training sessions', async () => {
+    stub(prisma.bot, 'findMany', async () => ([
+      {
+        id: 'bot-queue-1',
+        userId: TEST_USER.id,
+        name: 'Bot Elegivel',
+        executionMode: 'paper',
+        status: 'online',
+        isPaused: false,
+      },
+      {
+        id: 'bot-queue-2',
+        userId: TEST_USER.id,
+        name: 'Bot Em Treinamento',
+        executionMode: 'paper',
+        status: 'online',
+        isPaused: false,
+      },
+    ]))
+    stub(prisma.trainingSession, 'findMany', async () => ([
+      {
+        botId: 'bot-queue-2',
+      },
+    ]))
+
+    const queue = await botRunnerService.listBotRuntimeQueue()
+
+    assert.equal(Array.isArray(queue), true)
+    assert.equal(queue.length, 1)
+    assert.equal(queue[0].botId, 'bot-queue-1')
+    assert.equal(queue[0].userId, TEST_USER.id)
   })
 
   it('prepareSpotOrderRequest applies Binance stepSize, tickSize and minNotional filters before execution', async () => {
@@ -4752,6 +4867,84 @@ describe('API contract tests', () => {
     assert.deepEqual(recordedSnapshotArgs, [TEST_USER.id])
   })
 
+  it('POST /api/orders keeps executed sell orders alive when BRL conversion is unavailable', async () => {
+    stubAuthenticatedUser()
+    stub(prisma.configuration, 'findUnique', async () => ({
+      useBnbForFees: false,
+      discountUsdtPercent: 0,
+      discountBnbPercent: 0,
+      minBnbBalance: 0.01,
+      reserveBnbForFeesEnabled: true,
+    }))
+    stub(prisma.balance, 'findMany', async () => ([
+      {
+        id: 'balance-btc',
+        currency: 'BTC',
+        available: 2,
+        reserved: 0,
+        total: 2,
+      },
+      {
+        id: 'balance-usdt',
+        currency: 'USDT',
+        available: 50,
+        reserved: 0,
+        total: 50,
+      },
+    ]))
+    stub(prisma.transaction, 'findMany', async ({ where }) => {
+      if (where?.pair === 'BTC/USDT' && where?.status === 'executed') {
+        return [
+          { type: 'buy', quantity: 1, total: 100, fee: 0 },
+          { type: 'buy', quantity: 1, total: 120, fee: 0 },
+        ]
+      }
+
+      return []
+    })
+    stub(binanceService, 'getTickerPrice', async () => 150)
+    stub(marketValuationService, 'getCurrencyRateToBrl', async () => {
+      throw new Error('quota exceeded')
+    })
+
+    let createdTransactionPayload
+    stub(prisma.transaction, 'create', async ({ data }) => {
+      createdTransactionPayload = data
+      return {
+        id: 'order-sell-fifo-no-brl',
+        date: new Date('2026-04-11T12:00:00.000Z'),
+        ...data,
+      }
+    })
+    stub(prisma.balance, 'update', async () => undefined)
+    stub(prisma.balance, 'create', async () => undefined)
+    stub(portfolioService, 'recordBalanceHistorySnapshot', async () => undefined)
+    stub(webhookService, 'sendWebhook', async () => undefined)
+
+    const { response, body } = await requestJson('/api/orders', {
+      method: 'POST',
+      headers: {
+        ...authHeaders(),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        pair: 'BTC/USDT',
+        type: 'sell',
+        quantity: 1.5,
+        orderType: 'market',
+      }),
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(body.success, true)
+    assert.equal(body.data.id, 'order-sell-fifo-no-brl')
+    assert.equal(body.data.type, 'sell')
+    assert.equal(body.data.profitBrl, null)
+    assert.ok(Math.abs(body.data.profitPercent - 40.484375) < 1e-9)
+    assert.equal(createdTransactionPayload.profitBrl, null)
+    assert.equal(createdTransactionPayload.profitPercent, body.data.profitPercent)
+  })
+
   it('POST /api/orders/reconcile returns reconciled external orders with lifecycle metadata', async () => {
     stubAuthenticatedUser()
 
@@ -4961,6 +5154,113 @@ describe('API contract tests', () => {
     assert.equal(updatedTransactionPayload.profitPercent, body.data[0].profitPercent)
     assert.ok(Array.isArray(recordedSnapshotArgs))
     assert.equal(recordedSnapshotArgs[0], TEST_USER.id)
+  })
+
+  it('POST /api/orders/reconcile keeps filled sell orders alive when BRL conversion is unavailable', async () => {
+    stubAuthenticatedUser()
+
+    const pendingOrder = {
+      id: 'order-external-sell-no-brl',
+      userId: TEST_USER.id,
+      botId: 'bot-live-1',
+      date: new Date('2026-04-12T19:00:00.000Z'),
+      pair: 'BTC/USDT',
+      origin: 'bot',
+      type: 'sell',
+      quantity: 0,
+      requestedQuantity: 1.5,
+      orderType: 'market',
+      price: 145,
+      total: 0,
+      fee: 0,
+      feeCurrency: 'USDT',
+      feeRateApplied: 0,
+      feeDiscountSource: null,
+      status: 'pending',
+      externalOrderId: '655',
+      externalClientOrderId: 'client-sell-no-brl',
+      externalStatus: 'NEW',
+      syncedAt: new Date('2026-04-12T19:00:01.000Z'),
+      profitBrl: null,
+      profitPercent: null,
+    }
+
+    let updatedTransactionPayload
+    stub(prisma.configuration, 'findUnique', async () => buildPersistedConfiguration({
+      apiKey: 'live-key',
+      secretKey: 'live-secret',
+    }))
+    stub(prisma.transaction, 'findMany', async ({ where }) => {
+      if (where?.externalOrderId) {
+        return [pendingOrder]
+      }
+
+      if (where?.pair === 'BTC/USDT' && where?.status === 'executed') {
+        return [
+          { type: 'buy', quantity: 1, total: 100, fee: 0 },
+          { type: 'buy', quantity: 1, total: 120, fee: 0 },
+        ]
+      }
+
+      return []
+    })
+    stub(prisma.transaction, 'findFirst', async ({ where }) => {
+      if (where?.id === 'order-external-sell-no-brl') {
+        return pendingOrder
+      }
+
+      return null
+    })
+    stub(prisma.transaction, 'update', async ({ data }) => {
+      updatedTransactionPayload = data
+      return {
+        ...pendingOrder,
+        ...data,
+      }
+    })
+    stub(prisma.balance, 'upsert', async () => undefined)
+    stub(binanceService, 'getSpotOrder', async () => ({
+      symbol: 'BTCUSDT',
+      orderId: 655,
+      clientOrderId: 'client-sell-no-brl',
+      price: '0',
+      origQty: '1.5',
+      executedQty: '1.5',
+      cummulativeQuoteQty: '225',
+      status: 'FILLED',
+      type: 'MARKET',
+      side: 'SELL',
+      updateTime: Date.now(),
+    }))
+    stub(binanceService, 'getSpotOrderTrades', async () => ([
+      {
+        commission: '0.225',
+        commissionAsset: 'USDT',
+      },
+    ]))
+    stub(binanceService, 'getAccountBalances', async () => ([
+      { currency: 'USDT', available: 500, reserved: 0, total: 500 },
+      { currency: 'BTC', available: 0.5, reserved: 0, total: 0.5 },
+    ]))
+    stub(marketValuationService, 'getCurrencyRateToBrl', async () => {
+      throw new Error('quota exceeded')
+    })
+    stub(portfolioService, 'recordBalanceHistorySnapshot', async () => undefined)
+
+    const { response, body } = await requestJson('/api/orders/reconcile', {
+      method: 'POST',
+      headers: authHeaders(),
+    })
+
+    assert.equal(response.status, 200)
+    assert.equal(body.success, true)
+    assert.equal(body.data.length, 1)
+    assert.equal(body.data[0].id, 'order-external-sell-no-brl')
+    assert.equal(body.data[0].status, 'executed')
+    assert.equal(body.data[0].profitBrl, null)
+    assert.ok(Math.abs(body.data[0].profitPercent - 40.484375) < 1e-9)
+    assert.equal(updatedTransactionPayload.profitBrl, null)
+    assert.equal(updatedTransactionPayload.profitPercent, body.data[0].profitPercent)
   })
 
   it('POST /api/training/sessions returns the pending session contract', async () => {

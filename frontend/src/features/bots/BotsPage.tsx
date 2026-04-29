@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
-import { Bot, Cpu, Play, Plus, Power, Save, ShieldCheck, Trash2 } from 'lucide-react'
+import { Bot, Cpu, Play, Plus, Power, Save, ShieldCheck, Sparkles, Trash2 } from 'lucide-react'
 import { useWebSocket } from '../../app/providers/WebSocketProvider'
 import { Badge } from '../../shared/components/ui/Badge'
 import { Button } from '../../shared/components/ui/Button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../shared/components/ui/Card'
 import { Checkbox } from '../../shared/components/ui/Checkbox'
+import { FieldLabel } from '../../shared/components/ui/FieldLabel'
 import { Input } from '../../shared/components/ui/Input'
-import { Label } from '../../shared/components/ui/Label'
+import type { InfoPopoverContent } from '../../shared/components/ui/InfoPopover'
 import { Modal } from '../../shared/components/ui/Modal'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../shared/components/ui/Select'
 import { Skeleton } from '../../shared/components/ui/Skeleton'
@@ -45,6 +46,7 @@ import type {
   BotModelGovernanceSummary,
   BotPaperReadiness,
   BotOperationalStatus,
+  StrategyProfile,
   BotTemplateSummary,
   CreateBotPayload,
 } from './types/bots.types'
@@ -54,6 +56,8 @@ interface BotEditorFormState {
   description: string
   executionMode: BotExecutionMode
   status: BotOperationalStatus
+  strategyProfile: StrategyProfile
+  useAdvancedSettings: boolean
   timeframe: string
   minConfidence: string
   useGlobalAllowedPairs: boolean
@@ -84,6 +88,8 @@ const DEFAULT_FORM_STATE: BotEditorFormState = {
   description: '',
   executionMode: 'paper',
   status: 'offline',
+  strategyProfile: 'balanced',
+  useAdvancedSettings: false,
   timeframe: '1h',
   minConfidence: '',
   useGlobalAllowedPairs: true,
@@ -107,6 +113,366 @@ const DEFAULT_FORM_STATE: BotEditorFormState = {
   atrPeriod: '',
   targetAtrPercent: '',
   minAtrPositionFactor: '',
+}
+
+type BotStrategyContext = {
+  strategyType?: string
+  specialization?: string
+}
+
+type StrategyProfilePreset = {
+  label: string
+  summary: string
+  values: Partial<BotEditorFormState>
+}
+
+const STRATEGY_PROFILE_LABELS: Record<StrategyProfile, string> = {
+  aggressive: 'Agressivo',
+  balanced: 'Equilibrado',
+  conservative: 'Conservador',
+}
+
+const BOT_FIELD_HELP: Record<string, InfoPopoverContent> = {
+  templateId: {
+    title: 'Template base',
+    description: 'Escolhe a espinha dorsal do bot. O template define especialização, faixa de risco inicial e parâmetros herdados quando você não sobrescreve manualmente.',
+    example: 'Micro Scalper Paper prioriza leitura curta de livro e spread; RSI Reversion nasce com viés de reversão em timeframes maiores.',
+  },
+  strategyProfile: {
+    title: 'Perfil da estratégia',
+    description: 'Aplica um conjunto de defaults coerentes com o estilo do bot. Use o perfil para começar rápido e só ligue o modo avançado quando realmente precisar ajustar campo por campo.',
+    example: 'Agressivo busca mais oportunidades e aceita sinais mais cedo; Conservador filtra mais e reduz exposição.',
+  },
+  useAdvancedSettings: {
+    title: 'Ajustes avançados',
+    description: 'Quando ativo, os campos finos de risco, microestrutura e sizing passam a mandar no comportamento do bot. Enquanto isso estiver ligado, o perfil vira apenas referência visual.',
+    example: 'Deixe desligado para usar o perfil Equilibrado puro. Ligue apenas se precisar customizar ATR, correlação, spread ou circuit breaker.',
+  },
+  executionMode: {
+    title: 'Modo de execução',
+    description: 'Define como o plano vira ação. Paper executa na carteira simulada, semi_auto só sugere e full_auto exige champion validado e readiness aprovado.',
+    example: 'Para homologação, use paper. Depois de estabilidade comprovada, avance para semi_auto.',
+  },
+  status: {
+    title: 'Status do bot',
+    description: 'Controla se a instância participa dos ciclos automáticos. Offline mantém o bot salvo, mas fora do loop.',
+    example: 'Use online para bot pronto para rodar e offline para deixar uma configuração preparada sem executar.',
+  },
+  timeframe: {
+    title: 'Timeframe',
+    description: 'É a janela principal de leitura do modelo. Quanto menor, mais sensível o bot fica a ruído e micro movimentos.',
+    example: 'Scalper costuma usar 1m; um especialista de tendência pode operar melhor em 1h ou 4h.',
+  },
+  minConfidence: {
+    title: 'Confiança mínima',
+    description: 'Piso de confiança exigido para um sinal seguir adiante. Valores maiores reduzem frequência e aumentam filtro; valores menores deixam o bot mais oportunista.',
+    example: '58% em paper pode destravar micro trades; 68% é mais seletivo e tende a reduzir operações.',
+  },
+  useGlobalAllowedPairs: {
+    title: 'Usar pares globais',
+    description: 'Faz o bot herdar a lista principal de ativos definida em Configurações. Ao ligar, a lista manual da instância deixa de valer.',
+    example: 'Ative para manter toda a frota alinhada com a seleção global de BTC/USDT, ETH/USDT e outros pares aprovados.',
+  },
+  allowedPairs: {
+    title: 'Pares permitidos',
+    description: 'Lista manual de ativos que esta instância pode analisar. Só vale quando os pares globais estão desligados.',
+    example: 'BTC/USDT, ETH/USDT e SOL/USDT em linhas separadas ou por vírgula.',
+  },
+  maxPairsToAnalyze: {
+    title: 'Cobertura por ciclo',
+    description: 'Limita quantos pares entram de fato na análise a cada ciclo. Quanto maior, mais cobertura; quanto menor, mais foco e menor custo de processamento.',
+    example: '6 pares é um meio-termo bom para paper em micro trade; 10 amplia busca, mas aumenta ruído.',
+  },
+  maxExecutableOpportunitiesPerCycle: {
+    title: 'Execuções por ciclo',
+    description: 'Quantidade máxima de oportunidades aprovadas que podem seguir para sugestão ou execução no mesmo ciclo.',
+    example: '1 mantém o bot disciplinado; 2 permite aproveitar dois sinais fortes sem abrir a porteira.',
+  },
+  minVolume: {
+    title: 'Volume mínimo',
+    description: 'Filtra ativos com pouca liquidez. Quanto maior, menor a chance de pegar livro raso e slippage ruim.',
+    example: '180000 a 300000 ajuda o scalper a evitar pares sem profundidade suficiente.',
+  },
+  maxSpreadPercent: {
+    title: 'Spread máximo',
+    description: 'Bloqueia trades quando a distância entre compra e venda está larga demais para o objetivo de ganho curto.',
+    example: '0,06% funciona melhor para micro trade do que 0,20%, porque sobra mais espaço para lucro líquido.',
+  },
+  microMomentumThresholdPercent: {
+    title: 'Micro momentum',
+    description: 'Exige um deslocamento mínimo no micro movimento antes de aceitar a entrada. Serve para evitar sinais inertes.',
+    example: '0,04% pede um impulso curto antes de entrar; 0,02% é mais agressivo.',
+  },
+  orderImbalanceThreshold: {
+    title: 'Imbalance do book',
+    description: 'Mede o desequilíbrio entre pressão compradora e vendedora no livro. Valores maiores exigem confirmação mais forte.',
+    example: '0,56 aceita um desequilíbrio leve; 0,60 pede um livro mais claramente inclinado.',
+  },
+  stopLossPercent: {
+    title: 'Stop loss',
+    description: 'Perda máxima tolerada antes de encerrar a posição. Em micro trade, stops curtos evitam carregar erro pequeno até ele crescer.',
+    example: '0,6% corta a perda rápido em scalping; 5% é mais comum em estratégias mais lentas.',
+  },
+  takeProfitPercent: {
+    title: 'Take profit',
+    description: 'Alvo principal de saída com lucro. Precisa ser compatível com o spread, a taxa e o tamanho do micro movimento esperado.',
+    example: '0,8% funciona melhor para um scalper do que 10%, que quase nunca será alcançado em 1m.',
+  },
+  circuitBreakerDailyLossPercent: {
+    title: 'Perda diária máxima',
+    description: 'Se a perda acumulada do dia passar deste limite, o bot para temporariamente como proteção.',
+    example: '1,5% é um breaker curto para paper de scalper; 6% é bem mais permissivo.',
+  },
+  circuitBreakerCooldownMinutes: {
+    title: 'Cooldown do breaker',
+    description: 'Tempo de descanso depois que o breaker dispara. Serve para evitar insistência em um regime de mercado ruim.',
+    example: '15 minutos deixam o scalper respirar antes de tentar de novo.',
+  },
+  maxConsecutiveLosses: {
+    title: 'Perdas consecutivas',
+    description: 'Número máximo de stops ou operações ruins seguidas antes de travar o bot por segurança.',
+    example: '3 ou 4 perdas seguidas já costumam sinalizar regime adverso para micro trades.',
+  },
+  maxPositionSize: {
+    title: 'Tamanho máximo da posição',
+    description: 'Teto absoluto de capital por entrada. Mesmo que haja saldo e sinal, o bot não passa desse valor.',
+    example: '150 USDT deixa o paper mais controlado do que expor 500 USDT em cada micro tentativa.',
+  },
+  maxExposurePerCoin: {
+    title: 'Exposição por moeda',
+    description: 'Frações maiores concentram o risco num único ativo; frações menores distribuem melhor o capital.',
+    example: '0,18 significa no máximo 18% da carteira exposta em um único ativo.',
+  },
+  maxTotalExposure: {
+    title: 'Exposição total',
+    description: 'Soma máxima de capital simultaneamente alocado. Controla o quanto da carteira pode ficar em risco ao mesmo tempo.',
+    example: '0,30 segura o bot em até 30% da carteira total; 0,80 é bem mais agressivo.',
+  },
+  maxConcurrentTrades: {
+    title: 'Trades simultâneos',
+    description: 'Quantidade de posições que podem coexistir. Em micro trade, menos concorrência costuma facilitar leitura e controle.',
+    example: '1 ou 2 trades simultâneos mantêm o monitoramento mais limpo.',
+  },
+  minCorrelationThreshold: {
+    title: 'Correlação para bloqueio',
+    description: 'Evita empilhar posições muito parecidas. Quanto mais alto, mais cedo o bot bloqueia entradas parecidas entre si.',
+    example: '0,92 reduz o risco de abrir BTC e ETH com o mesmo comportamento ao mesmo tempo.',
+  },
+  atrPeriod: {
+    title: 'Período do ATR',
+    description: 'Quantidade de candles usada para medir volatilidade média. Essa leitura ajuda o sizing adaptativo.',
+    example: '14 períodos é um padrão equilibrado; números menores reagem mais rápido, porém com mais ruído.',
+  },
+  targetAtrPercent: {
+    title: 'ATR alvo',
+    description: 'Volatilidade alvo usada para reduzir ou manter o tamanho da posição. Quanto menor, mais cedo o sizing encolhe.',
+    example: '0,006 deixa o scalper mais defensivo quando a volatilidade estoura.',
+  },
+  minAtrPositionFactor: {
+    title: 'Piso do sizing por ATR',
+    description: 'Limite mínimo de quanto a posição ainda pode manter depois do redutor por volatilidade.',
+    example: '0,20 significa que o bot nunca encolhe a posição para menos de 20% do orçamento-base.',
+  },
+}
+
+function readStrategyProfile(value: unknown): StrategyProfile {
+  return value === 'aggressive' || value === 'conservative' ? value : 'balanced'
+}
+
+function isScalperContext(context: BotStrategyContext): boolean {
+  const fingerprint = `${context.specialization ?? ''} ${context.strategyType ?? ''}`.toLowerCase()
+  return fingerprint.includes('scalp')
+}
+
+function resolveStrategyProfilePresets(context: BotStrategyContext): Record<StrategyProfile, StrategyProfilePreset> {
+  if (isScalperContext(context)) {
+    return {
+      aggressive: {
+        label: STRATEGY_PROFILE_LABELS.aggressive,
+        summary: 'Mais cobertura, confiança menor e tolerância maior para micro oscilações.',
+        values: {
+          minConfidence: '52',
+          maxPairsToAnalyze: '10',
+          maxExecutableOpportunitiesPerCycle: '2',
+          minVolume: '100000',
+          maxSpreadPercent: '0.1',
+          microMomentumThresholdPercent: '0.02',
+          orderImbalanceThreshold: '0.52',
+          stopLossPercent: '0.7',
+          takeProfitPercent: '0.9',
+          circuitBreakerDailyLossPercent: '2',
+          circuitBreakerCooldownMinutes: '10',
+          maxConsecutiveLosses: '5',
+          maxPositionSize: '180',
+          maxExposurePerCoin: '0.22',
+          maxTotalExposure: '0.38',
+          maxConcurrentTrades: '2',
+          minCorrelationThreshold: '0.9',
+          atrPeriod: '14',
+          targetAtrPercent: '0.007',
+          minAtrPositionFactor: '0.18',
+        },
+      },
+      balanced: {
+        label: STRATEGY_PROFILE_LABELS.balanced,
+        summary: 'Cobertura suficiente para achar micro oportunidades sem abrir mão da disciplina em paper.',
+        values: {
+          minConfidence: '58',
+          maxPairsToAnalyze: '6',
+          maxExecutableOpportunitiesPerCycle: '1',
+          minVolume: '180000',
+          maxSpreadPercent: '0.06',
+          microMomentumThresholdPercent: '0.04',
+          orderImbalanceThreshold: '0.56',
+          stopLossPercent: '0.6',
+          takeProfitPercent: '0.8',
+          circuitBreakerDailyLossPercent: '1.5',
+          circuitBreakerCooldownMinutes: '15',
+          maxConsecutiveLosses: '4',
+          maxPositionSize: '150',
+          maxExposurePerCoin: '0.18',
+          maxTotalExposure: '0.3',
+          maxConcurrentTrades: '1',
+          minCorrelationThreshold: '0.92',
+          atrPeriod: '14',
+          targetAtrPercent: '0.006',
+          minAtrPositionFactor: '0.2',
+        },
+      },
+      conservative: {
+        label: STRATEGY_PROFILE_LABELS.conservative,
+        summary: 'Menos ruído, liquidez maior e travas mais rígidas antes de aceitar a entrada.',
+        values: {
+          minConfidence: '64',
+          maxPairsToAnalyze: '4',
+          maxExecutableOpportunitiesPerCycle: '1',
+          minVolume: '300000',
+          maxSpreadPercent: '0.04',
+          microMomentumThresholdPercent: '0.05',
+          orderImbalanceThreshold: '0.6',
+          stopLossPercent: '0.5',
+          takeProfitPercent: '0.75',
+          circuitBreakerDailyLossPercent: '1.2',
+          circuitBreakerCooldownMinutes: '20',
+          maxConsecutiveLosses: '3',
+          maxPositionSize: '110',
+          maxExposurePerCoin: '0.15',
+          maxTotalExposure: '0.22',
+          maxConcurrentTrades: '1',
+          minCorrelationThreshold: '0.94',
+          atrPeriod: '14',
+          targetAtrPercent: '0.005',
+          minAtrPositionFactor: '0.25',
+        },
+      },
+    }
+  }
+
+  return {
+    aggressive: {
+      label: STRATEGY_PROFILE_LABELS.aggressive,
+      summary: 'Mais pares, menos filtro e mais exposição para estratégias de swing e momentum.',
+      values: {
+        minConfidence: '60',
+        maxPairsToAnalyze: '16',
+        maxExecutableOpportunitiesPerCycle: '2',
+        stopLossPercent: '4',
+        takeProfitPercent: '8',
+        circuitBreakerDailyLossPercent: '8',
+        circuitBreakerCooldownMinutes: '30',
+        maxConsecutiveLosses: '5',
+        maxPositionSize: '650',
+        maxExposurePerCoin: '0.28',
+        maxTotalExposure: '0.9',
+        maxConcurrentTrades: '6',
+        minCorrelationThreshold: '0.82',
+        atrPeriod: '14',
+        targetAtrPercent: '0.03',
+        minAtrPositionFactor: '0.3',
+      },
+    },
+    balanced: {
+      label: STRATEGY_PROFILE_LABELS.balanced,
+      summary: 'Perfil padrão para estratégias gerais, equilibrando frequência de sinais e controle de risco.',
+      values: {
+        minConfidence: '68',
+        maxPairsToAnalyze: '10',
+        maxExecutableOpportunitiesPerCycle: '1',
+        stopLossPercent: '5',
+        takeProfitPercent: '10',
+        circuitBreakerDailyLossPercent: '6',
+        circuitBreakerCooldownMinutes: '60',
+        maxConsecutiveLosses: '3',
+        maxPositionSize: '500',
+        maxExposurePerCoin: '0.2',
+        maxTotalExposure: '0.8',
+        maxConcurrentTrades: '5',
+        minCorrelationThreshold: '0.85',
+        atrPeriod: '14',
+        targetAtrPercent: '0.025',
+        minAtrPositionFactor: '0.35',
+      },
+    },
+    conservative: {
+      label: STRATEGY_PROFILE_LABELS.conservative,
+      summary: 'Mais filtro e capital menos concentrado, ideal para leitura lenta e homologação cautelosa.',
+      values: {
+        minConfidence: '74',
+        maxPairsToAnalyze: '6',
+        maxExecutableOpportunitiesPerCycle: '1',
+        stopLossPercent: '4',
+        takeProfitPercent: '7',
+        circuitBreakerDailyLossPercent: '4',
+        circuitBreakerCooldownMinutes: '90',
+        maxConsecutiveLosses: '2',
+        maxPositionSize: '350',
+        maxExposurePerCoin: '0.15',
+        maxTotalExposure: '0.55',
+        maxConcurrentTrades: '3',
+        minCorrelationThreshold: '0.9',
+        atrPeriod: '14',
+        targetAtrPercent: '0.02',
+        minAtrPositionFactor: '0.45',
+      },
+    },
+  }
+}
+
+function applyStrategyProfile(
+  formState: BotEditorFormState,
+  strategyProfile: StrategyProfile,
+  context: BotStrategyContext,
+): BotEditorFormState {
+  const preset = resolveStrategyProfilePresets(context)[strategyProfile]
+  return {
+    ...formState,
+    strategyProfile,
+    ...preset.values,
+  }
+}
+
+function resolveStrategyProfileHighlights(
+  profile: StrategyProfile,
+  context: BotStrategyContext,
+): string[] {
+  const preset = resolveStrategyProfilePresets(context)[profile]
+  const values = preset.values
+
+  if (isScalperContext(context)) {
+    return [
+      `Confiança ${values.minConfidence}%`,
+      `Até ${values.maxPairsToAnalyze} pares/ciclo`,
+      `Spread ${values.maxSpreadPercent}%`,
+      `Volume mínimo ${values.minVolume}`,
+    ]
+  }
+
+  return [
+    `Confiança ${values.minConfidence}%`,
+    `Até ${values.maxPairsToAnalyze} pares/ciclo`,
+    `Stop ${values.stopLossPercent}%`,
+    `Exposição total ${values.maxTotalExposure}`,
+  ]
 }
 
 function parsePairsInput(value: string): string[] {
@@ -142,6 +508,10 @@ function resolveTemplatePreset(template: BotTemplateSummary) {
   return {
     name: template.name,
     description: template.description,
+    timeframe: typeof template.defaultParameters.timeframe === 'string' ? template.defaultParameters.timeframe : '1h',
+    strategyProfile: readStrategyProfile(template.defaultParameters.strategyProfile),
+    useAdvancedSettings: template.defaultParameters.useAdvancedSettings === true,
+    minConfidence: toStringValue(template.defaultParameters.minConfidence),
     useGlobalAllowedPairs: templatePairs.length === 0,
     allowedPairs: templatePairs.join(', '),
     maxPairsToAnalyze: toStringValue(template.defaultParameters.maxPairsToAnalyze),
@@ -158,6 +528,8 @@ function buildFormState(detail?: BotDetail): BotEditorFormState {
     description: detail.description ?? '',
     executionMode: detail.executionMode,
     status: detail.status === 'online' ? 'online' : 'offline',
+    strategyProfile: readStrategyProfile(parameters.strategyProfile),
+    useAdvancedSettings: parameters.useAdvancedSettings === true,
     timeframe: typeof parameters.timeframe === 'string' ? parameters.timeframe : '1h',
     minConfidence: toStringValue(parameters.minConfidence),
     useGlobalAllowedPairs: detail.allowedPairsSource === 'global',
@@ -192,6 +564,8 @@ function buildUpdatePayload(formState: BotEditorFormState) {
     status: formState.status,
     parameters: {
       timeframe: formState.timeframe as '1m' | '5m' | '15m' | '1h' | '4h' | '1d',
+      strategyProfile: formState.strategyProfile,
+      useAdvancedSettings: formState.useAdvancedSettings,
       minConfidence: parseOptionalNumber(formState.minConfidence),
       useGlobalAllowedPairs: formState.useGlobalAllowedPairs,
       allowedPairs: formState.useGlobalAllowedPairs ? [] : parsePairsInput(formState.allowedPairs),
@@ -218,12 +592,21 @@ function buildUpdatePayload(formState: BotEditorFormState) {
   }
 }
 
-function SectionField({ label, children, description }: { label: string; children: React.ReactNode; description?: string }) {
+function SectionField({
+  label,
+  children,
+  help,
+  disabled = false,
+}: {
+  label: string
+  children: React.ReactNode
+  help?: InfoPopoverContent
+  disabled?: boolean
+}) {
   return (
     <div className="space-y-2">
-      <Label>{label}</Label>
+      <FieldLabel label={label} help={help} disabled={disabled} />
       {children}
-      {description && <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{description}</p>}
     </div>
   )
 }
@@ -1229,10 +1612,9 @@ function CreateBotModal({
   const [description, setDescription] = useState('')
   const [executionMode, setExecutionMode] = useState<BotExecutionMode>('paper')
   const [status, setStatus] = useState<BotOperationalStatus>('offline')
+  const [strategyProfile, setStrategyProfile] = useState<StrategyProfile>('balanced')
   const [useGlobalAllowedPairs, setUseGlobalAllowedPairs] = useState(true)
   const [allowedPairs, setAllowedPairs] = useState('')
-  const [maxPairsToAnalyze, setMaxPairsToAnalyze] = useState('')
-  const [maxExecutableOpportunitiesPerCycle, setMaxExecutableOpportunitiesPerCycle] = useState('')
 
   useEffect(() => {
     if (!isOpen || selectedTemplateId || !templates?.length) return
@@ -1240,13 +1622,18 @@ function CreateBotModal({
     setSelectedTemplateId(templates[0].id)
     setName(preset.name)
     setDescription(preset.description)
+    setStrategyProfile(preset.strategyProfile)
     setUseGlobalAllowedPairs(preset.useGlobalAllowedPairs)
     setAllowedPairs(preset.allowedPairs)
-    setMaxPairsToAnalyze(preset.maxPairsToAnalyze)
-    setMaxExecutableOpportunitiesPerCycle(preset.maxExecutableOpportunitiesPerCycle)
   }, [isOpen, selectedTemplateId, templates])
 
   const selectedTemplate = templates?.find((template) => template.id === selectedTemplateId)
+  const selectedContext: BotStrategyContext = {
+    strategyType: selectedTemplate?.strategyType,
+    specialization: selectedTemplate?.specialization,
+  }
+  const profilePreset = resolveStrategyProfilePresets(selectedContext)[strategyProfile]
+  const templatePreset = selectedTemplate ? resolveTemplatePreset(selectedTemplate) : null
 
   const resetAndClose = () => {
     setSelectedTemplateId('')
@@ -1254,10 +1641,9 @@ function CreateBotModal({
     setDescription('')
     setExecutionMode('paper')
     setStatus('offline')
+    setStrategyProfile('balanced')
     setUseGlobalAllowedPairs(true)
     setAllowedPairs('')
-    setMaxPairsToAnalyze('')
-    setMaxExecutableOpportunitiesPerCycle('')
     onClose()
   }
 
@@ -1279,10 +1665,31 @@ function CreateBotModal({
       executionMode,
       status,
       parameters: {
+        timeframe: templatePreset?.timeframe as '1m' | '5m' | '15m' | '1h' | '4h' | '1d' | undefined,
+        strategyProfile,
+        useAdvancedSettings: false,
+        minConfidence: parseOptionalNumber(profilePreset.values.minConfidence ?? ''),
+        maxPairsToAnalyze: parseOptionalNumber(profilePreset.values.maxPairsToAnalyze ?? '', true),
+        maxExecutableOpportunitiesPerCycle: parseOptionalNumber(profilePreset.values.maxExecutableOpportunitiesPerCycle ?? '', true),
+        minVolume: parseOptionalNumber(profilePreset.values.minVolume ?? ''),
+        maxSpreadPercent: parseOptionalNumber(profilePreset.values.maxSpreadPercent ?? ''),
+        microMomentumThresholdPercent: parseOptionalNumber(profilePreset.values.microMomentumThresholdPercent ?? ''),
+        orderImbalanceThreshold: parseOptionalNumber(profilePreset.values.orderImbalanceThreshold ?? ''),
+        stopLossPercent: parseOptionalNumber(profilePreset.values.stopLossPercent ?? ''),
+        takeProfitPercent: parseOptionalNumber(profilePreset.values.takeProfitPercent ?? ''),
+        circuitBreakerDailyLossPercent: parseOptionalNumber(profilePreset.values.circuitBreakerDailyLossPercent ?? ''),
+        circuitBreakerCooldownMinutes: parseOptionalNumber(profilePreset.values.circuitBreakerCooldownMinutes ?? '', true),
+        maxConsecutiveLosses: parseOptionalNumber(profilePreset.values.maxConsecutiveLosses ?? '', true),
+        maxPositionSize: parseOptionalNumber(profilePreset.values.maxPositionSize ?? ''),
+        maxExposurePerCoin: parseOptionalNumber(profilePreset.values.maxExposurePerCoin ?? ''),
+        maxTotalExposure: parseOptionalNumber(profilePreset.values.maxTotalExposure ?? ''),
+        maxConcurrentTrades: parseOptionalNumber(profilePreset.values.maxConcurrentTrades ?? '', true),
+        minCorrelationThreshold: parseOptionalNumber(profilePreset.values.minCorrelationThreshold ?? ''),
+        atrPeriod: parseOptionalNumber(profilePreset.values.atrPeriod ?? '', true),
+        targetAtrPercent: parseOptionalNumber(profilePreset.values.targetAtrPercent ?? ''),
+        minAtrPositionFactor: parseOptionalNumber(profilePreset.values.minAtrPositionFactor ?? ''),
         useGlobalAllowedPairs,
         allowedPairs: useGlobalAllowedPairs ? [] : parsePairsInput(allowedPairs),
-        maxPairsToAnalyze: parseOptionalNumber(maxPairsToAnalyze, true),
-        maxExecutableOpportunitiesPerCycle: parseOptionalNumber(maxExecutableOpportunitiesPerCycle, true),
       },
     })
 
@@ -1304,7 +1711,7 @@ function CreateBotModal({
     >
       <div className="grid gap-4 md:grid-cols-2">
         <div className="space-y-4">
-          <SectionField label="Template base">
+          <SectionField label="Template" help={BOT_FIELD_HELP.templateId}>
             {isLoading ? (
               <Skeleton className="h-11 rounded-xl" />
             ) : (
@@ -1317,10 +1724,9 @@ function CreateBotModal({
                     const preset = resolveTemplatePreset(template)
                     setName(preset.name)
                     setDescription(preset.description)
+                    setStrategyProfile(preset.strategyProfile)
                     setUseGlobalAllowedPairs(preset.useGlobalAllowedPairs)
                     setAllowedPairs(preset.allowedPairs)
-                    setMaxPairsToAnalyze(preset.maxPairsToAnalyze)
-                    setMaxExecutableOpportunitiesPerCycle(preset.maxExecutableOpportunitiesPerCycle)
                   }
                 }}
               >
@@ -1336,7 +1742,7 @@ function CreateBotModal({
             )}
           </SectionField>
 
-          <SectionField label="Nome do bot">
+          <SectionField label="Nome">
             <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="Ex: MACD Intraday Bot" />
           </SectionField>
 
@@ -1344,8 +1750,19 @@ function CreateBotModal({
             <Textarea value={description} onChange={(event) => setDescription(event.target.value)} className="min-h-[100px]" />
           </SectionField>
 
+          <SectionField label="Perfil" help={BOT_FIELD_HELP.strategyProfile}>
+            <Select value={strategyProfile} onValueChange={(value) => setStrategyProfile(value as StrategyProfile)}>
+              <SelectTrigger><SelectValue placeholder="Perfil da estratégia" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="aggressive">Agressivo</SelectItem>
+                <SelectItem value="balanced">Equilibrado</SelectItem>
+                <SelectItem value="conservative">Conservador</SelectItem>
+              </SelectContent>
+            </Select>
+          </SectionField>
+
           <div className="grid gap-4 md:grid-cols-2">
-            <SectionField label="Modo" description="Novas instâncias precisam nascer em paper ou semi_auto e só migram para full_auto depois da validação do champion.">
+            <SectionField label="Modo" help={BOT_FIELD_HELP.executionMode}>
               <Select value={executionMode} onValueChange={(value) => setExecutionMode(value as BotExecutionMode)}>
                 <SelectTrigger><SelectValue placeholder="Modo" /></SelectTrigger>
                 <SelectContent>
@@ -1356,7 +1773,7 @@ function CreateBotModal({
               </Select>
             </SectionField>
 
-            <SectionField label="Status inicial">
+            <SectionField label="Status" help={BOT_FIELD_HELP.status}>
               <Select value={status} onValueChange={(value) => setStatus(value as BotOperationalStatus)}>
                 <SelectTrigger><SelectValue placeholder="Status" /></SelectTrigger>
                 <SelectContent>
@@ -1373,7 +1790,7 @@ function CreateBotModal({
               onChange={(event) => setUseGlobalAllowedPairs(event.target.checked)}
               label="Herdar pares globais"
             />
-            <SectionField label="Pares permitidos">
+            <SectionField label="Pares permitidos" help={BOT_FIELD_HELP.allowedPairs} disabled={useGlobalAllowedPairs}>
               <Textarea
                 value={allowedPairs}
                 onChange={(event) => setAllowedPairs(event.target.value)}
@@ -1383,36 +1800,12 @@ function CreateBotModal({
               />
             </SectionField>
           </div>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <SectionField
-              label="Máx. pares por ciclo"
-              description="Deixe em branco para analisar toda a lista gerenciada."
-            >
-              <Input
-                value={maxPairsToAnalyze}
-                onChange={(event) => setMaxPairsToAnalyze(event.target.value)}
-                placeholder="Sem limite"
-              />
-            </SectionField>
-
-            <SectionField
-              label="Máx. execuções por ciclo"
-              description="Limita quantas oportunidades podem seguir para execução/sugestão no mesmo ciclo."
-            >
-              <Input
-                value={maxExecutableOpportunitiesPerCycle}
-                onChange={(event) => setMaxExecutableOpportunitiesPerCycle(event.target.value)}
-                placeholder="1"
-              />
-            </SectionField>
-          </div>
         </div>
 
         <Card variant="compact" className="h-fit">
           <CardHeader>
-            <CardTitle className="text-base">Resumo do template</CardTitle>
-            <CardDescription>Defaults herdados quando a instância não sobrescreve.</CardDescription>
+            <CardTitle className="text-base">Resumo</CardTitle>
+            <CardDescription>O bot já nasce com este preset aplicado.</CardDescription>
           </CardHeader>
           <CardContent>
             {selectedTemplate ? (
@@ -1424,11 +1817,29 @@ function CreateBotModal({
                 <div className="flex flex-wrap gap-2">
                   {selectedTemplate.indicatorType && <Badge variant="primary">{selectedTemplate.indicatorType}</Badge>}
                   {selectedTemplate.specialization && <Badge variant="default">{selectedTemplate.specialization}</Badge>}
+                  <Badge variant="default">{STRATEGY_PROFILE_LABELS[strategyProfile]}</Badge>
                   <Badge variant="default">{selectedTemplate.strategyType}</Badge>
                 </div>
-                <pre className="overflow-auto whitespace-pre-wrap rounded-2xl border p-4 text-xs" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
-                  {JSON.stringify(selectedTemplate.defaultParameters, null, 2)}
-                </pre>
+                <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                  <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+                    <Sparkles className="h-4 w-4 text-primary-400" />
+                    {profilePreset.label}
+                  </div>
+                  <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>{profilePreset.summary}</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {resolveStrategyProfileHighlights(strategyProfile, selectedContext).map((highlight) => (
+                      <Badge key={highlight} variant="default">{highlight}</Badge>
+                    ))}
+                  </div>
+                </div>
+                <details className="rounded-2xl border px-4 py-3" style={{ borderColor: 'var(--border-color)' }}>
+                  <summary className="cursor-pointer text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                    Ver defaults técnicos do template
+                  </summary>
+                  <pre className="mt-3 overflow-auto whitespace-pre-wrap rounded-2xl border p-4 text-xs" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
+                    {JSON.stringify(selectedTemplate.defaultParameters, null, 2)}
+                  </pre>
+                </details>
               </div>
             ) : (
               <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Selecione um template para ver os defaults.</p>
@@ -1532,11 +1943,57 @@ export function BotsPage() {
     return `${Math.round(Math.max(...confidences))}%`
   }, [bots])
   const fullAutoEligibility = botModels?.governance.fullAutoEligibility
+  const botStrategyContext = useMemo<BotStrategyContext>(() => ({
+    strategyType: botDetail?.template?.strategyType ?? botDetail?.strategyType,
+    specialization: botDetail?.template?.specialization,
+  }), [botDetail?.strategyType, botDetail?.template?.specialization, botDetail?.template?.strategyType])
+  const activeProfilePreset = useMemo(
+    () => resolveStrategyProfilePresets(botStrategyContext)[formState.strategyProfile],
+    [botStrategyContext, formState.strategyProfile],
+  )
+  const profileHighlights = useMemo(
+    () => resolveStrategyProfileHighlights(formState.strategyProfile, botStrategyContext),
+    [botStrategyContext, formState.strategyProfile],
+  )
+  const isScalperBot = isScalperContext(botStrategyContext)
 
   const handleCreateBot = async (payload: CreateBotPayload) => {
     const createdBot = await createBotMutation.mutateAsync(payload)
     setSelectedBotId(createdBot.id)
     setIsCreateModalOpen(false)
+  }
+
+  const handleStrategyProfileChange = (strategyProfile: StrategyProfile) => {
+    setFormState((current) => (
+      current.useAdvancedSettings
+        ? { ...current, strategyProfile }
+        : applyStrategyProfile(current, strategyProfile, botStrategyContext)
+    ))
+  }
+
+  const handleAdvancedSettingsToggle = (enabled: boolean) => {
+    setFormState((current) => {
+      if (enabled) {
+        return {
+          ...current,
+          useAdvancedSettings: true,
+        }
+      }
+
+      const restored = applyStrategyProfile(
+        {
+          ...current,
+          useAdvancedSettings: false,
+        },
+        current.strategyProfile,
+        botStrategyContext,
+      )
+
+      return {
+        ...restored,
+        useAdvancedSettings: false,
+      }
+    })
   }
 
   const handleSaveBot = async () => {
@@ -1709,22 +2166,22 @@ export function BotsPage() {
                       </p>
                     </div>
                     <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
-                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Par de foco</p>
+                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Foco</p>
                       <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{botDetail.focusPair ?? 'Dinâmico'}</p>
                       <p className="text-xs" style={{ color: 'var(--text-muted)' }}>prioridade atual de cobertura do bot</p>
                     </div>
                     <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
-                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Melhor oportunidade</p>
+                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Oportunidade</p>
                       <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{botDetail.currentPair ?? 'Nenhuma forte agora'}</p>
                       <p className="text-xs" style={{ color: 'var(--text-muted)' }}>ação sugerida: {botDetail.recommendedAction ?? 'hold'}</p>
                     </div>
                     <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
-                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Confiança atual</p>
+                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Confiança</p>
                       <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{typeof botDetail.confidence === 'number' ? `${Math.round(botDetail.confidence)}%` : 'N/A'}</p>
                       <p className="text-xs" style={{ color: 'var(--text-muted)' }}>ranking da oportunidade líder do ciclo</p>
                     </div>
                     <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
-                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Pares permitidos</p>
+                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Pares</p>
                       <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{botDetail.effectiveAllowedPairs.length}</p>
                       <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
                         origem: {botDetail.allowedPairsSource === 'global'
@@ -1735,7 +2192,7 @@ export function BotsPage() {
                       </p>
                     </div>
                     <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
-                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Modelo ativo</p>
+                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Modelo</p>
                       <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>{botDetail.modelReady ? 'Pronto para operar' : 'Pendente'}</p>
                       <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
                         {botDetail.modelArchitecture ?? 'sem arquitetura'} · {botDetail.modelVersion}
@@ -1747,7 +2204,7 @@ export function BotsPage() {
                       <p className="text-xs" style={{ color: 'var(--text-muted)' }}>horizonte: {botDetail.forecastHorizonCandles ?? 0} candle(s)</p>
                     </div>
                     <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
-                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Paper readiness</p>
+                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Paper</p>
                       <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>
                         {botDetail.paperReadiness.readyForFullAuto ? 'Liberado' : 'Em validação'}
                       </p>
@@ -1756,7 +2213,7 @@ export function BotsPage() {
                       </p>
                     </div>
                     <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
-                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Acurácia paper</p>
+                      <p className="text-xs uppercase tracking-[0.18em]" style={{ color: 'var(--text-muted)' }}>Acurácia</p>
                       <p className="mt-2 font-semibold" style={{ color: 'var(--text-primary)' }}>
                         {formatPercent(botDetail.paperReadiness.accuracyPercent)}
                       </p>
@@ -1774,28 +2231,26 @@ export function BotsPage() {
                   
                   <div className="grid gap-6 lg:grid-cols-2">
                     <div className="space-y-4 rounded-3xl border p-5" style={{ borderColor: 'var(--border-color)' }}>
-                      <div>
-                        <h3 className="font-semibold" style={{ color: 'var(--text-primary)' }}>Identidade e operação</h3>
-                        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                          Nome, modo operacional, timeframe e confiança mínima.
-                        </p>
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <h3 className="font-semibold" style={{ color: 'var(--text-primary)' }}>Essencial</h3>
+                          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                            Escolha o comportamento base do bot e deixe os detalhes finos para o modo avançado.
+                          </p>
+                        </div>
+                        <Badge variant="default">{STRATEGY_PROFILE_LABELS[formState.strategyProfile]}</Badge>
                       </div>
 
-                      <SectionField label="Nome do bot">
+                      <SectionField label="Nome">
                         <Input value={formState.name} onChange={(event) => setFormState((current) => ({ ...current, name: event.target.value }))} />
                       </SectionField>
 
                       <SectionField label="Descrição">
-                        <Textarea value={formState.description} onChange={(event) => setFormState((current) => ({ ...current, description: event.target.value }))} className="min-h-[100px]" />
+                        <Textarea value={formState.description} onChange={(event) => setFormState((current) => ({ ...current, description: event.target.value }))} className="min-h-[96px]" />
                       </SectionField>
 
                       <div className="grid gap-4 md:grid-cols-2">
-                        <SectionField
-                          label="Modo de execução"
-                          description={formState.executionMode === 'full_auto' && fullAutoEligibility && !fullAutoEligibility.eligible
-                            ? fullAutoEligibility.blockers[0]
-                            : 'paper executa na carteira local, semi_auto só sugere e full_auto exige champion validado em paper.'}
-                        >
+                        <SectionField label="Modo" help={BOT_FIELD_HELP.executionMode}>
                           <Select value={formState.executionMode} onValueChange={(value) => setFormState((current) => ({ ...current, executionMode: value as BotExecutionMode }))}>
                             <SelectTrigger><SelectValue placeholder="Modo" /></SelectTrigger>
                             <SelectContent>
@@ -1806,7 +2261,7 @@ export function BotsPage() {
                           </Select>
                         </SectionField>
 
-                        <SectionField label="Status desejado">
+                        <SectionField label="Status" help={BOT_FIELD_HELP.status}>
                           <Select value={formState.status} onValueChange={(value) => setFormState((current) => ({ ...current, status: value as BotOperationalStatus }))}>
                             <SelectTrigger><SelectValue placeholder="Status" /></SelectTrigger>
                             <SelectContent>
@@ -1818,7 +2273,7 @@ export function BotsPage() {
                       </div>
 
                       <div className="grid gap-4 md:grid-cols-2">
-                        <SectionField label="Timeframe">
+                        <SectionField label="Timeframe" help={BOT_FIELD_HELP.timeframe}>
                           <Select value={formState.timeframe} onValueChange={(value) => setFormState((current) => ({ ...current, timeframe: value }))}>
                             <SelectTrigger><SelectValue placeholder="Timeframe" /></SelectTrigger>
                             <SelectContent>
@@ -1832,44 +2287,60 @@ export function BotsPage() {
                           </Select>
                         </SectionField>
 
-                        <SectionField label="Confiança mínima (%)">
-                          <Input value={formState.minConfidence} onChange={(event) => setFormState((current) => ({ ...current, minConfidence: event.target.value }))} placeholder="60" />
+                        <SectionField label="Perfil" help={BOT_FIELD_HELP.strategyProfile} disabled={formState.useAdvancedSettings}>
+                          <div className={formState.useAdvancedSettings ? 'pointer-events-none opacity-60' : undefined}>
+                            <Select value={formState.strategyProfile} onValueChange={(value) => handleStrategyProfileChange(value as StrategyProfile)}>
+                              <SelectTrigger><SelectValue placeholder="Perfil da estratégia" /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="aggressive">Agressivo</SelectItem>
+                                <SelectItem value="balanced">Equilibrado</SelectItem>
+                                <SelectItem value="conservative">Conservador</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
                         </SectionField>
+                      </div>
+
+                      <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                          <div>
+                            <div className="flex items-center gap-2 text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+                              <Sparkles className="h-4 w-4 text-primary-400" />
+                              {activeProfilePreset.label}
+                            </div>
+                            <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>{activeProfilePreset.summary}</p>
+                          </div>
+                          <div className="min-w-[220px] rounded-2xl border px-3 py-3" style={{ borderColor: 'var(--border-color)' }}>
+                            <Checkbox
+                              checked={formState.useAdvancedSettings}
+                              onChange={(event) => handleAdvancedSettingsToggle(event.target.checked)}
+                              label="Editar ajustes avançados"
+                            />
+                          </div>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {profileHighlights.map((highlight) => (
+                            <Badge key={highlight} variant="default">{highlight}</Badge>
+                          ))}
+                        </div>
+                        {formState.useAdvancedSettings && (
+                          <p className="mt-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+                            Os campos avançados abaixo substituem o perfil. Desative esse modo para voltar ao preset puro.
+                          </p>
+                        )}
+                        {!formState.useAdvancedSettings && (
+                          <p className="mt-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+                            O perfil controla confiança, cobertura, risco e sizing. Isso deixa a tela menor e mais previsível.
+                          </p>
+                        )}
                       </div>
                     </div>
 
                     <div className="space-y-4 rounded-3xl border p-5" style={{ borderColor: 'var(--border-color)' }}>
                       <div>
-                        <h3 className="font-semibold" style={{ color: 'var(--text-primary)' }}>Microestrutura</h3>
+                        <h3 className="font-semibold" style={{ color: 'var(--text-primary)' }}>Cobertura</h3>
                         <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                          Filtros de spread, liquidez e momentum para perfis de scalping e micro trades.
-                        </p>
-                      </div>
-
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <SectionField label="Volume minimo 24h">
-                          <Input value={formState.minVolume} onChange={(event) => setFormState((current) => ({ ...current, minVolume: event.target.value }))} placeholder="250000" />
-                        </SectionField>
-                        <SectionField label="Spread maximo (%)">
-                          <Input value={formState.maxSpreadPercent} onChange={(event) => setFormState((current) => ({ ...current, maxSpreadPercent: event.target.value }))} placeholder="0.05" />
-                        </SectionField>
-                      </div>
-
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <SectionField label="Micro momentum minimo (%)">
-                          <Input value={formState.microMomentumThresholdPercent} onChange={(event) => setFormState((current) => ({ ...current, microMomentumThresholdPercent: event.target.value }))} placeholder="0.05" />
-                        </SectionField>
-                        <SectionField label="Imbalance minimo">
-                          <Input value={formState.orderImbalanceThreshold} onChange={(event) => setFormState((current) => ({ ...current, orderImbalanceThreshold: event.target.value }))} placeholder="0.58" />
-                        </SectionField>
-                      </div>
-                    </div>
-
-                    <div className="space-y-4 rounded-3xl border p-5" style={{ borderColor: 'var(--border-color)' }}>
-                      <div>
-                        <h3 className="font-semibold" style={{ color: 'var(--text-primary)' }}>Pares e cobertura</h3>
-                        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                          Controle a lista de ativos da instância sem mexer no restante da frota.
+                          Escolha de onde vêm os pares e quantos ativos o bot cobre por ciclo.
                         </p>
                       </div>
 
@@ -1881,12 +2352,12 @@ export function BotsPage() {
                         />
                       </div>
 
-                      <SectionField label="Pares permitidos" description="Separe por vírgula, ponto e vírgula ou quebra de linha.">
+                      <SectionField label="Pares permitidos" help={BOT_FIELD_HELP.allowedPairs} disabled={formState.useGlobalAllowedPairs}>
                         <Textarea
                           value={formState.allowedPairs}
                           onChange={(event) => setFormState((current) => ({ ...current, allowedPairs: event.target.value }))}
                           disabled={formState.useGlobalAllowedPairs}
-                          className="min-h-[160px]"
+                          className="min-h-[132px]"
                           placeholder="BTC/USDT, ETH/USDT, SOL/USDT"
                         />
                       </SectionField>
@@ -1898,130 +2369,163 @@ export function BotsPage() {
                         </p>
                       </div>
 
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <SectionField
-                          label="Máx. pares por ciclo"
-                          description="Em branco, o bot percorre toda a lista gerenciada."
-                        >
-                          <Input
-                            value={formState.maxPairsToAnalyze}
-                            onChange={(event) => setFormState((current) => ({ ...current, maxPairsToAnalyze: event.target.value }))}
-                            placeholder="Sem limite"
-                          />
-                        </SectionField>
-                        <SectionField
-                          label="Máx. execuções por ciclo"
-                          description="Quantidade máxima de oportunidades aprovadas por ciclo."
-                        >
-                          <Input
-                            value={formState.maxExecutableOpportunitiesPerCycle}
-                            onChange={(event) => setFormState((current) => ({ ...current, maxExecutableOpportunitiesPerCycle: event.target.value }))}
-                            placeholder="1"
-                          />
-                        </SectionField>
-                      </div>
+                      {formState.useAdvancedSettings ? (
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <SectionField label="Pares por ciclo" help={BOT_FIELD_HELP.maxPairsToAnalyze}>
+                            <Input
+                              value={formState.maxPairsToAnalyze}
+                              onChange={(event) => setFormState((current) => ({ ...current, maxPairsToAnalyze: event.target.value }))}
+                              placeholder="Sem limite"
+                            />
+                          </SectionField>
+                          <SectionField label="Execuções por ciclo" help={BOT_FIELD_HELP.maxExecutableOpportunitiesPerCycle}>
+                            <Input
+                              value={formState.maxExecutableOpportunitiesPerCycle}
+                              onChange={(event) => setFormState((current) => ({ ...current, maxExecutableOpportunitiesPerCycle: event.target.value }))}
+                              placeholder="1"
+                            />
+                          </SectionField>
+                        </div>
+                      ) : (
+                        <div className="rounded-2xl border p-4" style={{ borderColor: 'var(--border-color)' }}>
+                          <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Cobertura guiada pelo perfil</p>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Badge variant="default">{`Até ${formState.maxPairsToAnalyze || activeProfilePreset.values.maxPairsToAnalyze || 'sem limite'} pares por ciclo`}</Badge>
+                            <Badge variant="default">{`${formState.maxExecutableOpportunitiesPerCycle || activeProfilePreset.values.maxExecutableOpportunitiesPerCycle || '1'} execução(ões) por ciclo`}</Badge>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  <div className="mt-6 grid gap-6 lg:grid-cols-2">
-                    <div className="space-y-4 rounded-3xl border p-5" style={{ borderColor: 'var(--border-color)' }}>
+                  {formState.useAdvancedSettings && isScalperBot && (
+                    <div className="mt-6 rounded-3xl border p-5" style={{ borderColor: 'var(--border-color)' }}>
                       <div>
-                        <h3 className="font-semibold" style={{ color: 'var(--text-primary)' }}>Risco e circuit breaker</h3>
+                        <h3 className="font-semibold" style={{ color: 'var(--text-primary)' }}>Microestrutura</h3>
                         <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                          Limites defensivos usados antes do envio das ordens.
+                          Só aparece para estratégias de scalping porque esses filtros afinam exatamente a leitura de spread, liquidez e impulso curto.
                         </p>
                       </div>
 
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <SectionField label="Stop loss (%)">
-                          <Input value={formState.stopLossPercent} onChange={(event) => setFormState((current) => ({ ...current, stopLossPercent: event.target.value }))} placeholder="2" />
+                      <div className="mt-4 grid gap-4 md:grid-cols-2">
+                        <SectionField label="Volume mínimo" help={BOT_FIELD_HELP.minVolume}>
+                          <Input value={formState.minVolume} onChange={(event) => setFormState((current) => ({ ...current, minVolume: event.target.value }))} placeholder="180000" />
                         </SectionField>
-                        <SectionField label="Take profit (%)">
-                          <Input value={formState.takeProfitPercent} onChange={(event) => setFormState((current) => ({ ...current, takeProfitPercent: event.target.value }))} placeholder="4" />
-                        </SectionField>
-                      </div>
-
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <SectionField label="Perda diária máxima (%)">
-                          <Input value={formState.circuitBreakerDailyLossPercent} onChange={(event) => setFormState((current) => ({ ...current, circuitBreakerDailyLossPercent: event.target.value }))} placeholder="6" />
-                        </SectionField>
-                        <SectionField label="Cooldown do breaker (min)">
-                          <Input value={formState.circuitBreakerCooldownMinutes} onChange={(event) => setFormState((current) => ({ ...current, circuitBreakerCooldownMinutes: event.target.value }))} placeholder="90" />
+                        <SectionField label="Spread máximo (%)" help={BOT_FIELD_HELP.maxSpreadPercent}>
+                          <Input value={formState.maxSpreadPercent} onChange={(event) => setFormState((current) => ({ ...current, maxSpreadPercent: event.target.value }))} placeholder="0.06" />
                         </SectionField>
                       </div>
 
-                      <SectionField label="Máximo de perdas consecutivas">
-                        <Input value={formState.maxConsecutiveLosses} onChange={(event) => setFormState((current) => ({ ...current, maxConsecutiveLosses: event.target.value }))} placeholder="3" />
-                      </SectionField>
-                    </div>
-
-                    <div className="space-y-4 rounded-3xl border p-5" style={{ borderColor: 'var(--border-color)' }}>
-                      <div>
-                        <h3 className="font-semibold" style={{ color: 'var(--text-primary)' }}>Sizing e portfólio</h3>
-                        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                          Exposição, ATR e correlação para controlar a distribuição de capital.
-                        </p>
-                      </div>
-
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <SectionField label="Tamanho máximo da posição">
-                          <Input value={formState.maxPositionSize} onChange={(event) => setFormState((current) => ({ ...current, maxPositionSize: event.target.value }))} placeholder="0.15" />
+                      <div className="mt-4 grid gap-4 md:grid-cols-2">
+                        <SectionField label="Micro momentum (%)" help={BOT_FIELD_HELP.microMomentumThresholdPercent}>
+                          <Input value={formState.microMomentumThresholdPercent} onChange={(event) => setFormState((current) => ({ ...current, microMomentumThresholdPercent: event.target.value }))} placeholder="0.04" />
                         </SectionField>
-                        <SectionField label="Exposição máxima por moeda">
-                          <Input value={formState.maxExposurePerCoin} onChange={(event) => setFormState((current) => ({ ...current, maxExposurePerCoin: event.target.value }))} placeholder="0.25" />
-                        </SectionField>
-                      </div>
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <SectionField label="Exposição máxima total">
-                          <Input value={formState.maxTotalExposure} onChange={(event) => setFormState((current) => ({ ...current, maxTotalExposure: event.target.value }))} placeholder="0.7" />
-                        </SectionField>
-                        <SectionField label="Máximo de trades simultâneos">
-                          <Input value={formState.maxConcurrentTrades} onChange={(event) => setFormState((current) => ({ ...current, maxConcurrentTrades: event.target.value }))} placeholder="4" />
-                        </SectionField>
-                      </div>
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <SectionField label="Correlação mínima para bloqueio">
-                          <Input value={formState.minCorrelationThreshold} onChange={(event) => setFormState((current) => ({ ...current, minCorrelationThreshold: event.target.value }))} placeholder="0.85" />
-                        </SectionField>
-                        <SectionField label="Período do ATR">
-                          <Input value={formState.atrPeriod} onChange={(event) => setFormState((current) => ({ ...current, atrPeriod: event.target.value }))} placeholder="14" />
-                        </SectionField>
-                      </div>
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <SectionField label="ATR alvo (%)">
-                          <Input value={formState.targetAtrPercent} onChange={(event) => setFormState((current) => ({ ...current, targetAtrPercent: event.target.value }))} placeholder="1.8" />
-                        </SectionField>
-                        <SectionField label="Fator mínimo da posição por ATR">
-                          <Input value={formState.minAtrPositionFactor} onChange={(event) => setFormState((current) => ({ ...current, minAtrPositionFactor: event.target.value }))} placeholder="0.35" />
+                        <SectionField label="Imbalance do book" help={BOT_FIELD_HELP.orderImbalanceThreshold}>
+                          <Input value={formState.orderImbalanceThreshold} onChange={(event) => setFormState((current) => ({ ...current, orderImbalanceThreshold: event.target.value }))} placeholder="0.56" />
                         </SectionField>
                       </div>
                     </div>
-                  </div>
+                  )}
 
-                  <div className="mt-6 grid gap-6 lg:grid-cols-2">
-                    <Card variant="compact">
-                      <CardHeader>
-                        <CardTitle className="text-base">Parâmetros herdados do template</CardTitle>
-                        <CardDescription>Base usada quando a instância não sobrescreve um campo.</CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        <pre className="overflow-auto whitespace-pre-wrap rounded-2xl border p-4 text-xs" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
-                          {JSON.stringify(botDetail.templateParameters, null, 2)}
-                        </pre>
-                      </CardContent>
-                    </Card>
+                  {formState.useAdvancedSettings && (
+                    <div className="mt-6 grid gap-6 lg:grid-cols-2">
+                      <div className="space-y-4 rounded-3xl border p-5" style={{ borderColor: 'var(--border-color)' }}>
+                        <div>
+                          <h3 className="font-semibold" style={{ color: 'var(--text-primary)' }}>Risco</h3>
+                          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                            Limites defensivos usados antes de qualquer envio de ordem.
+                          </p>
+                        </div>
 
-                    <Card variant="compact">
-                      <CardHeader>
-                        <CardTitle className="text-base">Parâmetros efetivos da instância</CardTitle>
-                        <CardDescription>Resultado final usado pelo runner neste momento.</CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        <pre className="overflow-auto whitespace-pre-wrap rounded-2xl border p-4 text-xs" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
-                          {JSON.stringify(botDetail.effectiveParameters, null, 2)}
-                        </pre>
-                      </CardContent>
-                    </Card>
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <SectionField label="Stop loss (%)" help={BOT_FIELD_HELP.stopLossPercent}>
+                            <Input value={formState.stopLossPercent} onChange={(event) => setFormState((current) => ({ ...current, stopLossPercent: event.target.value }))} placeholder="0.6" />
+                          </SectionField>
+                          <SectionField label="Take profit (%)" help={BOT_FIELD_HELP.takeProfitPercent}>
+                            <Input value={formState.takeProfitPercent} onChange={(event) => setFormState((current) => ({ ...current, takeProfitPercent: event.target.value }))} placeholder="0.8" />
+                          </SectionField>
+                        </div>
+
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <SectionField label="Perda diária (%)" help={BOT_FIELD_HELP.circuitBreakerDailyLossPercent}>
+                            <Input value={formState.circuitBreakerDailyLossPercent} onChange={(event) => setFormState((current) => ({ ...current, circuitBreakerDailyLossPercent: event.target.value }))} placeholder="1.5" />
+                          </SectionField>
+                          <SectionField label="Cooldown (min)" help={BOT_FIELD_HELP.circuitBreakerCooldownMinutes}>
+                            <Input value={formState.circuitBreakerCooldownMinutes} onChange={(event) => setFormState((current) => ({ ...current, circuitBreakerCooldownMinutes: event.target.value }))} placeholder="15" />
+                          </SectionField>
+                        </div>
+
+                        <SectionField label="Perdas consecutivas" help={BOT_FIELD_HELP.maxConsecutiveLosses}>
+                          <Input value={formState.maxConsecutiveLosses} onChange={(event) => setFormState((current) => ({ ...current, maxConsecutiveLosses: event.target.value }))} placeholder="4" />
+                        </SectionField>
+                      </div>
+
+                      <div className="space-y-4 rounded-3xl border p-5" style={{ borderColor: 'var(--border-color)' }}>
+                        <div>
+                          <h3 className="font-semibold" style={{ color: 'var(--text-primary)' }}>Sizing</h3>
+                          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                            Capital por posição, limite de exposição e ajustes por volatilidade/correlação.
+                          </p>
+                        </div>
+
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <SectionField label="Posição máxima" help={BOT_FIELD_HELP.maxPositionSize}>
+                            <Input value={formState.maxPositionSize} onChange={(event) => setFormState((current) => ({ ...current, maxPositionSize: event.target.value }))} placeholder="150" />
+                          </SectionField>
+                          <SectionField label="Exposição por moeda" help={BOT_FIELD_HELP.maxExposurePerCoin}>
+                            <Input value={formState.maxExposurePerCoin} onChange={(event) => setFormState((current) => ({ ...current, maxExposurePerCoin: event.target.value }))} placeholder="0.18" />
+                          </SectionField>
+                        </div>
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <SectionField label="Exposição total" help={BOT_FIELD_HELP.maxTotalExposure}>
+                            <Input value={formState.maxTotalExposure} onChange={(event) => setFormState((current) => ({ ...current, maxTotalExposure: event.target.value }))} placeholder="0.3" />
+                          </SectionField>
+                          <SectionField label="Trades simultâneos" help={BOT_FIELD_HELP.maxConcurrentTrades}>
+                            <Input value={formState.maxConcurrentTrades} onChange={(event) => setFormState((current) => ({ ...current, maxConcurrentTrades: event.target.value }))} placeholder="1" />
+                          </SectionField>
+                        </div>
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <SectionField label="Correlação" help={BOT_FIELD_HELP.minCorrelationThreshold}>
+                            <Input value={formState.minCorrelationThreshold} onChange={(event) => setFormState((current) => ({ ...current, minCorrelationThreshold: event.target.value }))} placeholder="0.92" />
+                          </SectionField>
+                          <SectionField label="ATR (período)" help={BOT_FIELD_HELP.atrPeriod}>
+                            <Input value={formState.atrPeriod} onChange={(event) => setFormState((current) => ({ ...current, atrPeriod: event.target.value }))} placeholder="14" />
+                          </SectionField>
+                        </div>
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <SectionField label="ATR alvo (%)" help={BOT_FIELD_HELP.targetAtrPercent}>
+                            <Input value={formState.targetAtrPercent} onChange={(event) => setFormState((current) => ({ ...current, targetAtrPercent: event.target.value }))} placeholder="0.006" />
+                          </SectionField>
+                          <SectionField label="Piso por ATR" help={BOT_FIELD_HELP.minAtrPositionFactor}>
+                            <Input value={formState.minAtrPositionFactor} onChange={(event) => setFormState((current) => ({ ...current, minAtrPositionFactor: event.target.value }))} placeholder="0.2" />
+                          </SectionField>
+                        </div>
+
+                        <SectionField label="Confiança mínima (%)" help={BOT_FIELD_HELP.minConfidence}>
+                          <Input value={formState.minConfidence} onChange={(event) => setFormState((current) => ({ ...current, minConfidence: event.target.value }))} placeholder="58" />
+                        </SectionField>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-6 grid gap-4">
+                    <details className="rounded-3xl border px-5 py-4" style={{ borderColor: 'var(--border-color)' }}>
+                      <summary className="cursor-pointer text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+                        Parâmetros herdados do template
+                      </summary>
+                      <pre className="mt-4 overflow-auto whitespace-pre-wrap rounded-2xl border p-4 text-xs" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
+                        {JSON.stringify(botDetail.templateParameters, null, 2)}
+                      </pre>
+                    </details>
+
+                    <details className="rounded-3xl border px-5 py-4" style={{ borderColor: 'var(--border-color)' }}>
+                      <summary className="cursor-pointer text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+                        Parâmetros efetivos da instância
+                      </summary>
+                      <pre className="mt-4 overflow-auto whitespace-pre-wrap rounded-2xl border p-4 text-xs" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
+                        {JSON.stringify(botDetail.effectiveParameters, null, 2)}
+                      </pre>
+                    </details>
                   </div>
 
                   <div className="mt-6 flex flex-wrap justify-end gap-3">
